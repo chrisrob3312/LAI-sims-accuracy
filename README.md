@@ -5,6 +5,11 @@ simulation.sh - general code for simulating admixed individuals with admix-simu 
 
 phasing-jointcall.sh - Filtering sites and phasing of the 1kg-hgdp joint call dataset.
 
+envs/shapeit5.yml - conda environment providing SHAPEIT5 (+ bcftools/htslib). Create with:
+`conda env create -f envs/shapeit5.yml` then `conda activate shapeit5`.
+Bioconda installs the binaries as `phase_common`, `phase_rare`, `ligate`, `switch`, `xcftools`
+(not the `SHAPEIT5_phase_common` naming used in the upstream static release).
+
 wgs-simulation-rfmix-jointcall.sh - code used for generating all simulated models and RFMix v1 runs, and preparing files for the accuracy calculation.
 
 accuracy.R - code for calculating true positive rates of RFMix calls of simulations, getting counts of miscalls per error mode between ancestry groups, and getting the positions with highest number of miscalls.

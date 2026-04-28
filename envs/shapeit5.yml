@@ -1,0 +1,9 @@
+name: shapeit5
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - shapeit5=5.1.1
+  - bcftools>=1.18
+  - htslib>=1.18
+  - tabix
