@@ -33,6 +33,10 @@ build-panel-keep-files.sh - composes RFMix-reference and SIMU-donor keep-files f
 comparison (Panel 1 = HGDP-NAT + IBS + YRI; Panel 4 = HGDP-NAT + MXB + IBS + YRI; SIMU donor
 tracks for HGDP-NAT-only and HGDP-NAT+MXB) from the lists in `reference_ids/`.
 
+build-pel-panels.sh - derives `pel_rfmix.txt` and `pel_eas_rfmix.txt` from
+`gnomad_meta_updated.tsv` so panels 2 (PEL) and 3 (PEL+EAS) run alongside 1 and 4.
+Pass the metadata path: `./build-pel-panels.sh /path/to/gnomad_meta_updated.tsv`.
+
 Run order:
 1. `conda env create -f envs/shapeit5.yml && conda activate shapeit5`
 2. `./make_sample_groups.sh <gnomad_meta_updated.tsv> reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv`

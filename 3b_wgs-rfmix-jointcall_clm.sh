@@ -55,8 +55,8 @@ PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"               # supply if runnin
 PEL_EAS_RFMIX="${PEL_EAS_RFMIX:-${REFS}/pel_eas_rfmix.txt}"   # supply if running panel 3
 
 # Tools
-RFMIX_DIR="${RFMIX_DIR:-/storage/atkinson/shared_resources/software/RFMix_v1.5.4}"
-ANCESTRY_PIPELINE_DIR="${ANCESTRY_PIPELINE_DIR:-/storage/atkinson/shared_resources/software/ancestry_pipeline-master}"
+RFMIX_DIR="${RFMIX_DIR:-/storage/atkinson/software/rfmix}"
+ANCESTRY_PIPELINE_DIR="${ANCESTRY_PIPELINE_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/ancestry_pipeline-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM)
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -69,8 +69,12 @@ SIM_DIR="${SIM_DIR:-simu_clm/${ADMIX_POP}/gen${GEN}}"
 NOTREF_FILE="${NOTREF_FILE:-${SIM_DIR}/${ADMIX_POP}.notref}"  # IDs of simulated admixed indivs
 
 # Which panels to run (space-separated; comment out 2/3 if you don't have PEL lists yet)
-PANELS_TO_RUN="${PANELS_TO_RUN:-NAT_HGDP NAT_HGDPMXB}"
-# Add panels 2/3 if you have the lists:  PANELS_TO_RUN="NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB"
+# If pel_rfmix.txt / pel_eas_rfmix.txt exist (built by build-pel-panels.sh),
+# auto-include panels 2 and 3 in addition to 1 and 4.
+DEFAULT_PANELS="NAT_HGDP NAT_HGDPMXB"
+[[ -s "${REFS}/pel_rfmix.txt"     ]] && DEFAULT_PANELS="NAT_HGDP NAT_PEL ${DEFAULT_PANELS#NAT_HGDP }"
+[[ -s "${REFS}/pel_eas_rfmix.txt" ]] && DEFAULT_PANELS="${DEFAULT_PANELS/NAT_PEL /NAT_PEL NAT_PEL_EAS }"
+PANELS_TO_RUN="${PANELS_TO_RUN:-$DEFAULT_PANELS}"
 
 # Sim tracks to run (space-separated)
 TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"

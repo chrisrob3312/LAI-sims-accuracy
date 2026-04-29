@@ -51,7 +51,7 @@ EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"
 AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 
 # admix-simu repo (contains insert-map.pl, simu-mix.pl, bp2anc.pl)
-ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/software/admix-simu-master}"
+ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
