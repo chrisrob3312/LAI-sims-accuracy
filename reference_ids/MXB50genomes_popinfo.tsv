@@ -1,0 +1,51 @@
+Sample_ID	Country	Sampling_location	inferred_genetic_cluster	Avg_seq_depth
+MXB_10544	Mexico	Michoacan	Nahua	41.75
+MXB_10610	Mexico	Chihuahua	Tarahumara	40.50
+MXB_11339	Mexico	Colima	Nahua	41.47
+MXB_11619	Mexico	Sonora	Tarahumara	38.91
+MXB_12529	Mexico	Colima	Nahua	45.76
+MXB_13075	Mexico	Sonora	Nahua	43.37
+MXB_13175	Mexico	Sonora	Tarahumara	38.77
+MXB_15210	Mexico	Campeche	Maya	22.00
+MXB_15727	Mexico	Campeche	Totonac	37.99
+MXB_15887	Mexico	Campeche	Totonac	32.21
+MXB_160	Mexico	Aguascalientes	Nahua	44.23
+MXB_1655	Mexico	Queretaro	Nahua	41.82
+MXB_19262	Mexico	Guerrero	Zapotec/Mazatec	40.79
+MXB_19369	Mexico	Guerrero	Zapotec/Mazatec	34.52
+MXB_20305	Mexico	Yucatan	Maya	25.49
+MXB_20306	Mexico	Yucatan	Maya	27.08
+MXB_22419	Mexico	Baja California	Maya	39.33
+MXB_22998	Mexico	Baja California	Zapotec/Mazatec	40.26
+MXB_23094	Mexico	Jalisco	Nahua	39.57
+MXB_23097	Mexico	Jalisco	Nahua	42.41
+MXB_24133	Mexico	Quintana Roo	Maya	39.67
+MXB_24186	Mexico	Quintana Roo	Maya	41.75
+MXB_24586	Mexico	Nayarit	Huichol	40.79
+MXB_2641	Mexico	Guanajuato	Nahua	41.85
+MXB_28337	Mexico	Oaxaca	Zapotec/Mazatec	39.03
+MXB_28339	Mexico	Oaxaca	Zapotec/Mazatec	40.44
+MXB_28344	Mexico	Oaxaca	Zapotec/Mazatec	40.67
+MXB_28452	Mexico	Oaxaca	Zapotec/Mazatec	41.53
+MXB_28564	Mexico	Baja California Sur	Zapotec/Mazatec	41.05
+MXB_29762	Mexico	Nuevo Leon	Nahua	43.09
+MXB_30112	Mexico	Baja California Sur	Huichol	41.90
+MXB_32325	Mexico	Tabasco	Maya	40.29
+MXB_33270	Mexico	Durango	Nahua	45.07
+MXB_35177	Mexico	Tamaulipas	Nahua	43.27
+MXB_35474	Mexico	Chiapas	Tzotzil	41.00
+MXB_35488	Mexico	Chiapas	Tzotzil	41.38
+MXB_3573	Mexico	Morelos	Nahua	44.71
+MXB_36131	Mexico	Chiapas	Tzotzil	40.82
+MXB_37448	Mexico	Sinaloa	Zapotec/Mazatec	42.28
+MXB_39462	Mexico	Hidalgo	Nahua	45.17
+MXB_3990	Mexico	Morelos	Nahua	43.43
+MXB_40340	Mexico	Veracruz	Nahua	46.23
+MXB_40376	Mexico	Veracruz	Totonac	41.15
+MXB_40870	Mexico	Mexico city	Tzotzil	39.09
+MXB_42639	Mexico	Hidalgo	Nahua	40.37
+MXB_42990	Mexico	Puebla	Totonac	39.90
+MXB_42994	Mexico	Puebla	Totonac	38.75
+MXB_5576	Mexico	San Luis Potosi	Nahua	43.10
+MXB_9395	Mexico	Tlaxcala	Totonac	38.46
+MXB_9855	Mexico	State of Mexico	Zapotec/Mazatec	44.30
