@@ -34,7 +34,7 @@
 #SBATCH --job-name=merge_mxb_hgdp1kg
 #SBATCH --output=logs/merge_mxb_hgdp1kg_chr%a_%j.out
 #SBATCH --error=logs/merge_mxb_hgdp1kg_chr%a_%j.err
-#SBATCH --partition=long            # ADJUST: cluster partition
+#SBATCH --partition=mhgcp           # unlimited time, 56-core / 232G c-nodes fit 32 cpus + 96G
 #SBATCH --time=72:00:00
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=32

@@ -20,7 +20,7 @@
 #SBATCH --job-name=prep_mxb_liftover
 #SBATCH --output=logs/prep_mxb_liftover_%j.out
 #SBATCH --error=logs/prep_mxb_liftover_%j.err
-#SBATCH --partition=medium          # ADJUST: cluster partition
+#SBATCH --partition=mhgcp           # default lab partition (unlimited time, 16 nodes)
 #SBATCH --time=24:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=8

@@ -32,7 +32,7 @@
 #SBATCH --job-name=rfmix_clm
 #SBATCH --output=logs/rfmix_clm_chr%a_%j.out
 #SBATCH --error=logs/rfmix_clm_chr%a_%j.err
-#SBATCH --partition=long             # ADJUST
+#SBATCH --partition=mhgcp            # unlimited time for the 8 RFMix runs/chr
 #SBATCH --time=72:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=12

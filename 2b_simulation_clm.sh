@@ -31,7 +31,7 @@
 #SBATCH --job-name=simu_admix_clm
 #SBATCH --output=logs/simu_admix_clm_chr%a_%j.out
 #SBATCH --error=logs/simu_admix_clm_chr%a_%j.err
-#SBATCH --partition=medium          # ADJUST
+#SBATCH --partition=short           # 8h job fits in 12h cap; short has idle d-nodes
 #SBATCH --time=08:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
