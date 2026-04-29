@@ -33,12 +33,34 @@ build-panel-keep-files.sh - composes RFMix-reference and SIMU-donor keep-files f
 comparison (Panel 1 = HGDP-NAT + IBS + YRI; Panel 4 = HGDP-NAT + MXB + IBS + YRI; SIMU donor
 tracks for HGDP-NAT-only and HGDP-NAT+MXB) from the lists in `reference_ids/`.
 
+build-pel-panels.sh - derives `pel_rfmix.txt` and `pel_eas_rfmix.txt` from
+`gnomad_meta_updated.tsv` so panels 2 (PEL) and 3 (PEL+EAS) run alongside 1 and 4.
+Pass the metadata path: `./build-pel-panels.sh /path/to/gnomad_meta_updated.tsv`.
+
+All outputs are anchored under `$PROJECT_ROOT`, default
+`/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/`.
+Override at submit time if running elsewhere: `PROJECT_ROOT=/path/to/proj sbatch ...`.
+
+Project layout:
+```
+$PROJECT_ROOT/
+  01_merged_phased_panel/   1a + 1b outputs (lifted MXB BCFs, merged + phased panel)
+  02_simulations/           2b outputs (donor .phgeno, admix-simu, sim haps); place
+                              ${ADMIX_POP}.dat and ${ADMIX_POP}.sample.txt here
+  03_rfmix/                 3b outputs (RFMix runs, Lat3 accuracy-prep)
+  04_accuracy/              accuracy.R outputs
+  panel_keep_files/         build-panel-keep-files.sh output
+  logs/                     SLURM stdout/stderr
+  sample_groups.tsv         make_sample_groups.sh output
+```
+
 Run order:
 1. `conda env create -f envs/shapeit5.yml && conda activate shapeit5`
-2. `./make_sample_groups.sh <gnomad_meta_updated.tsv> reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv`
+2. `./init-project-tree.sh` (creates the dirs above + builds sample_groups.tsv,
+   pel_rfmix.txt, pel_eas_rfmix.txt, and panel keep-files in one shot)
 3. `sbatch 1a_prep-mxb-liftover_clm.sh` (one-shot)
 4. `sbatch 1b_phasing-jointcall_clm.sh` (array 1-22)
-5. `./build-panel-keep-files.sh` (one-shot, optional)
+5. Place `${ADMIX_POP}.dat` and `${ADMIX_POP}.sample.txt` in `02_simulations/`
 6. `ADMIX_POP=Brasa GEN=12 sbatch 2b_simulation_clm.sh` (array 1-22; per (admix-pop, gen))
 7. `ADMIX_POP=Brasa GEN=12 sbatch 3b_wgs-rfmix-jointcall_clm.sh` (array 1-22)
 8. accuracy.R / accuracy_error_plots.R unchanged (consume RFMix Lat3 + truth files)

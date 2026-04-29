@@ -49,12 +49,16 @@ OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePane
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
 
+# Project root -- all outputs anchored under this so nothing collides with
+# other lab members' work.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
 # Sample -> superpop TSV produced by make_sample_groups.sh
-SAMPLE_GROUPS="${SAMPLE_GROUPS:-./sample_groups.tsv}"
+SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
 
 # Output / scratch
-OUTDIR="${OUTDIR:-merged_mxb_hgdp1kg}"
-LOGDIR="${LOGDIR:-logs}"
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
 # Filter thresholds
 LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel

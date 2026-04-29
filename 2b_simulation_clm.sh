@@ -39,8 +39,12 @@
 
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
 
+# Project root -- all outputs anchored under this so nothing collides with
+# other lab members' work.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
 # Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped version, contigs 1..22)
-PANEL_DIR="${PANEL_DIR:-merged_mxb_hgdp1kg}"
+PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
 # Sample-ID lists (in repo)
@@ -51,7 +55,7 @@ EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"
 AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 
 # admix-simu repo (contains insert-map.pl, simu-mix.pl, bp2anc.pl)
-ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/software/admix-simu-master}"
+ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -60,12 +64,12 @@ GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
 # Simulation model
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
 GEN="${GEN:-12}"                    # generations (matches .dat file)
-DAT_FILE="${DAT_FILE:-./${ADMIX_POP}.dat}"          # admix-simu config: gens + ancestry props
-SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-./${ADMIX_POP}.sample.txt}"  # IDs for the simulated indivs (one per line)
+DAT_FILE="${DAT_FILE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.dat}"          # admix-simu config: gens + ancestry props
+SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.sample.txt}"  # IDs for the simulated indivs
 
 # Output
-OUTDIR="${OUTDIR:-simu_clm}"
-LOGDIR="${LOGDIR:-logs}"
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/02_simulations}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
 # ----------------------------------------------------------------------------
 set -euo pipefail
