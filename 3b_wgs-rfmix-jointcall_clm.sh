@@ -55,7 +55,7 @@ PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"               # supply if runnin
 PEL_EAS_RFMIX="${PEL_EAS_RFMIX:-${REFS}/pel_eas_rfmix.txt}"   # supply if running panel 3
 
 # Tools
-RFMIX_DIR="${RFMIX_DIR:-/storage/atkinson/software/rfmix}"
+RFMIX_DIR="${RFMIX_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/RFMix_v1.5.4}"
 ANCESTRY_PIPELINE_DIR="${ANCESTRY_PIPELINE_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/ancestry_pipeline-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM)
