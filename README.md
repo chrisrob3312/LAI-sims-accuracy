@@ -3,12 +3,21 @@
 
 simulation.sh - general code for simulating admixed individuals with admix-simu https://github.com/williamslab/admix-simu
 
-phasing-jointcall.sh - Filtering sites and phasing of the 1kg-hgdp joint call dataset.
+phasing-jointcall.sh - Filtering sites and phasing of the 1kg-hgdp joint call dataset (legacy SHAPEIT4 pipeline).
 
-envs/shapeit5.yml - conda environment providing SHAPEIT5 (+ bcftools/htslib). Create with:
-`conda env create -f envs/shapeit5.yml` then `conda activate shapeit5`.
-Bioconda installs the binaries as `phase_common`, `phase_rare`, `ligate`, `switch`, `xcftools`
-(not the `SHAPEIT5_phase_common` naming used in the upstream static release).
+envs/shapeit5.yml - conda environment for the merge pipeline: SHAPEIT5, bcftools/htslib, Picard, plink2.
+Create with `conda env create -f envs/shapeit5.yml`, activate with `conda activate shapeit5`.
+
+prep-mxb-liftover.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
+`RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
+
+merge-mxb-hgdp1kg.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
+applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
+plink2 site QC, and SHAPEIT5 joint phasing. Run after `prep-mxb-liftover.sh` and after building
+`sample_groups.tsv` via `make_sample_groups.sh`.
+
+make_sample_groups.sh - emits the 2-column sample->superpop TSV that drives the per-superpop MAF
+filter (consumed by `bcftools +fill-tags -S`).
 
 wgs-simulation-rfmix-jointcall.sh - code used for generating all simulated models and RFMix v1 runs, and preparing files for the accuracy calculation.
 
