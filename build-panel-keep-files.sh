@@ -23,8 +23,9 @@
 
 set -euo pipefail
 
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 REFS="${REFS:-reference_ids}"
-OUTDIR="${OUTDIR:-panel_keep_files}"
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/panel_keep_files}"
 mkdir -p "$OUTDIR"
 
 # Required inputs (new on this branch + existing)

@@ -33,9 +33,13 @@ MXB_HG19="${MXB_HG19:-/storage/atkinson/shared_resources/reference/mexico_bioban
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
 
+# Project root -- all outputs anchored under this so nothing collides with
+# other lab members' work.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
 # Output / scratch
-OUTDIR="${OUTDIR:-merged_mxb_hgdp1kg}"
-LOGDIR="${LOGDIR:-logs}"
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
 
 # Picard heap size (Xmx). Bump if liftover OOMs on chr1.
