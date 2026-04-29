@@ -12,9 +12,14 @@ prep-mxb-liftover.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard wit
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
 merge-mxb-hgdp1kg.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
-applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
-plink2 site QC, and SHAPEIT5 joint phasing. Run after `prep-mxb-liftover.sh` and after building
-`sample_groups.tsv` via `make_sample_groups.sh`.
+plink2 site QC (no MAF filter), then two-stage SHAPEIT5 phasing: `phase_common` builds the
+common-variant scaffold and `phase_rare` produces the full common+rare phased panel. The
+soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN) is
+applied POST-phase to derive a LAI-ready sub-panel. Per chrom this emits both:
+(a) `merged_chr*.shapeit5_full_phased.bcf` -- general-purpose (imputation, rare-variant work);
+(b) `merged_chr*.shapeit5_full_phased.softunion_maf005.bcf` -- LAI input for RFMix.
+Run after `prep-mxb-liftover.sh` and after building `sample_groups.tsv` via `make_sample_groups.sh`.
+Set `RUN_PHASE_RARE=0` at submit time to skip phase_rare (LAI-only, faster).
 
 make_sample_groups.sh - emits the 2-column sample->superpop TSV that drives the per-superpop MAF
 filter (consumed by `bcftools +fill-tags -S`).
