@@ -12,14 +12,19 @@ prep-mxb-liftover.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard wit
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
 merge-mxb-hgdp1kg.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
-plink2 site QC (no MAF filter), then two-stage SHAPEIT5 phasing: `phase_common` builds the
-common-variant scaffold and `phase_rare` produces the full common+rare phased panel. The
-soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN) is
-applied POST-phase to derive a LAI-ready sub-panel. Per chrom this emits both:
-(a) `merged_chr*.shapeit5_full_phased.bcf` -- general-purpose (imputation, rare-variant work);
-(b) `merged_chr*.shapeit5_full_phased.softunion_maf005.bcf` -- LAI input for RFMix.
-Run after `prep-mxb-liftover.sh` and after building `sample_groups.tsv` via `make_sample_groups.sh`.
-Set `RUN_PHASE_RARE=0` at submit time to skip phase_rare (LAI-only, faster).
+applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
+plink2 site QC, and SHAPEIT5_phase_common joint phasing. Imputation will be done with
+TOPMed/All-of-Us so rare-variant phasing is OFF by default; set `RUN_PHASE_RARE=1` at submit
+time to also run `SHAPEIT5_phase_rare` and emit a full common+rare phased panel.
+
+2b_simulation_clm.sh - modernized replacement for simulation.sh. Builds admix-simu donor
+.phgeno files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB) directly
+from the merged phased panel via plink2 (no SHAPEIT2 dependency), runs admix-simu, and
+emits simulated admixed haps + truth files. SLURM array 1-22.
+
+3b_wgs-rfmix-jointcall_clm.sh - modernized replacement for wgs-simulation-rfmix-jointcall.sh.
+Builds RFMix v1 inputs and runs RFMix across the 4 reference panels x 2 sim-tracks grid:
+panels {NAT_HGDP, NAT_PEL, NAT_PEL_EAS, NAT_HGDPMXB} x tracks {NAT, NATMXB}. SLURM array 1-22.
 
 make_sample_groups.sh - emits the 2-column sample->superpop TSV that drives the per-superpop MAF
 filter (consumed by `bcftools +fill-tags -S`).
@@ -33,9 +38,10 @@ Run order:
 2. `./make_sample_groups.sh <gnomad_meta_updated.tsv> reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv`
 3. `sbatch prep-mxb-liftover.sh` (one-shot)
 4. `sbatch merge-mxb-hgdp1kg.sh` (array 1-22)
-5. `./build-panel-keep-files.sh` (one-shot)
-6. Existing `wgs-simulation-rfmix-jointcall.sh` updated to use the new merged phased
-   panel as VCF input and the panel/simu keep-files from step 5.
+5. `./build-panel-keep-files.sh` (one-shot, optional)
+6. `ADMIX_POP=Brasa GEN=12 sbatch 2b_simulation_clm.sh` (array 1-22; per (admix-pop, gen))
+7. `ADMIX_POP=Brasa GEN=12 sbatch 3b_wgs-rfmix-jointcall_clm.sh` (array 1-22)
+8. accuracy.R / accuracy_error_plots.R unchanged (consume RFMix Lat3 + truth files)
 
 wgs-simulation-rfmix-jointcall.sh - code used for generating all simulated models and RFMix v1 runs, and preparing files for the accuracy calculation.
 
