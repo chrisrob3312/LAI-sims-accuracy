@@ -8,10 +8,10 @@ phasing-jointcall.sh - Filtering sites and phasing of the 1kg-hgdp joint call da
 envs/shapeit5.yml - conda environment for the merge pipeline: SHAPEIT5, bcftools/htslib, Picard, plink2.
 Create with `conda env create -f envs/shapeit5.yml`, activate with `conda activate shapeit5`.
 
-prep-mxb-liftover.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
+1a_prep-mxb-liftover_clm.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
-merge-mxb-hgdp1kg.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
+1b_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
 applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
 plink2 site QC, and SHAPEIT5_phase_common joint phasing. Imputation will be done with
 TOPMed/All-of-Us so rare-variant phasing is OFF by default; set `RUN_PHASE_RARE=1` at submit
@@ -36,8 +36,8 @@ tracks for HGDP-NAT-only and HGDP-NAT+MXB) from the lists in `reference_ids/`.
 Run order:
 1. `conda env create -f envs/shapeit5.yml && conda activate shapeit5`
 2. `./make_sample_groups.sh <gnomad_meta_updated.tsv> reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv`
-3. `sbatch prep-mxb-liftover.sh` (one-shot)
-4. `sbatch merge-mxb-hgdp1kg.sh` (array 1-22)
+3. `sbatch 1a_prep-mxb-liftover_clm.sh` (one-shot)
+4. `sbatch 1b_phasing-jointcall_clm.sh` (array 1-22)
 5. `./build-panel-keep-files.sh` (one-shot, optional)
 6. `ADMIX_POP=Brasa GEN=12 sbatch 2b_simulation_clm.sh` (array 1-22; per (admix-pop, gen))
 7. `ADMIX_POP=Brasa GEN=12 sbatch 3b_wgs-rfmix-jointcall_clm.sh` (array 1-22)

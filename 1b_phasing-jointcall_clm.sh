@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================================
-# merge-mxb-hgdp1kg.sh
+# 1b_phasing-jointcall_clm.sh
 #
 # Per-chrom (SLURM array 1-22):
 #   1. Subset HGDP+1KG postoutlier to chr$CHR, drop kinship outliers.
-#   2. bcftools merge with the lifted MXB chunk (output of prep-mxb-liftover.sh).
+#   2. bcftools merge with the lifted MXB chunk (output of 1a_prep-mxb-liftover_clm.sh).
 #      NOTE: merge (column-wise sample join), NOT concat. Different samples,
 #      same/overlapping sites -> 4147 sample columns per site. Missing in one
 #      panel becomes ./. and is imputed by SHAPEIT5 during phasing.
@@ -19,7 +19,7 @@
 # All-of-Us so we don't need to ship a rare-variant-phased reference here.
 # Set RUN_PHASE_RARE=1 to enable phase_rare (adds ~2x wall time per chr).
 #
-# Run AFTER prep-mxb-liftover.sh AND make_sample_groups.sh.
+# Run AFTER 1a_prep-mxb-liftover_clm.sh AND make_sample_groups.sh.
 #
 # Outputs per chrom in $OUTDIR/:
 #   merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf{,.csi}
@@ -73,7 +73,7 @@ TMPDIR="${OUTDIR}/tmp/chr${CHR}"
 MXB_LIFTED="${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
 mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 
-[[ -s "$MXB_LIFTED"     ]] || { echo "ERROR: missing $MXB_LIFTED. Run prep-mxb-liftover.sh first."; exit 1; }
+[[ -s "$MXB_LIFTED"     ]] || { echo "ERROR: missing $MXB_LIFTED. Run 1a_prep-mxb-liftover_clm.sh first."; exit 1; }
 [[ -s "$SAMPLE_GROUPS"  ]] || { echo "ERROR: missing $SAMPLE_GROUPS. Run make_sample_groups.sh first."; exit 1; }
 [[ -s "$GMAP"           ]] || { echo "ERROR: missing $GMAP."; exit 1; }
 

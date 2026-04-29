@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
-# prep-mxb-liftover.sh
+# 1a_prep-mxb-liftover_clm.sh
 #
-# One-shot prep step before merge-mxb-hgdp1kg.sh:
+# One-shot prep step before 1b_phasing-jointcall_clm.sh:
 #   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
 #   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
 #      (handles strand flips AND ref/alt swaps that CrossMap silently mis-encodes)

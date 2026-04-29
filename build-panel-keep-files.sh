@@ -4,7 +4,7 @@
 #
 # Compose the RFMix-reference and SIMU-donor sample-ID lists for the 4-panel
 # comparison from the existing reference_ids/* lists. Run from repo root after
-# merge-mxb-hgdp1kg.sh has produced the joint phased panel.
+# 1b_phasing-jointcall_clm.sh has produced the joint phased panel.
 #
 # Output (in $OUTDIR, default panel_keep_files/):
 #   --- RFMix reference panels ---
