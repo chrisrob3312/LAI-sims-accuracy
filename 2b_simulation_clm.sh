@@ -1,49 +1,28 @@
 #!/usr/bin/env bash
-# ============================================================================
-# 2b_simulation_clm.sh
-#
-# Modernized replacement for simulation.sh. Builds admix-simu donor .phgeno
-# files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB)
-# directly from the new merged + jointly phased panel produced by
-# 1b_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed haps +
-# truth files per chrom.
-#
-# Differences from legacy simulation.sh:
-#   - Source panel is merged_chr*.shapeit5_phased.softunion_maf005.rechr.bcf
-#     (chr-stripped for compatibility with legacy admix-simu / RFMix tooling).
-#   - No SHAPEIT2 `shapeit -convert` -- uses plink2 --export haps directly.
-#   - Two NAT donor tracks per run: NAT (HGDP-only) and NATMXB (HGDP + MXB).
-#   - SLURM array 1-22 (parallel per-chrom). Single AdmixPOP / generation per
-#     job invocation; resubmit with different ADMIX_POP / GEN to scan models.
-#
-# Outputs per chr (under $OUTDIR/$ADMIX_POP/gen$GEN/):
-#   NAT${i}.phgeno           HGDP-NAT-simu donor haplotypes (track 1)
-#   NATMXB${i}.phgeno        HGDP-NAT-simu + MXB-simu donor haplotypes (track 2)
-#   EUR${i}.phgeno           IBS donor haplotypes
-#   AFR${i}.phgeno           YRI donor haplotypes
-#   <track>.${ADMIX_POP}${i}.bp / .hanc / .hanc2     truth ancestry per sim track
-#   <track>.${ADMIX_POP}.chr${i}.haps / .sample      simulated admixed haps
-# ============================================================================
-
 # ----------------------------------------------------------------------------
-# USER CONFIG
+# SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=simu_admix_clm
-#SBATCH --output=logs/simu_admix_clm_chr%a_%j.out
-#SBATCH --error=logs/simu_admix_clm_chr%a_%j.err
-#SBATCH --partition=short           # 8h job fits in 12h cap; short has idle d-nodes
+#SBATCH --job-name=2b_simu
+#SBATCH --partition=short
 #SBATCH --time=08:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-22
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/2b_simu_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/2b_simu_chr%a_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=Christina.magyar@bcm.edu
 
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  paths and tunables (override via env vars at submit time)
+# ----------------------------------------------------------------------------
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
 
-# Project root -- all outputs anchored under this so nothing collides with
-# other lab members' work.
+# Project root -- all outputs anchored here so nothing collides with other
+# lab members' work.
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
-# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped version, contigs 1..22)
+# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
@@ -64,14 +43,38 @@ GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
 # Simulation model
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
 GEN="${GEN:-12}"                    # generations (matches .dat file)
-DAT_FILE="${DAT_FILE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.dat}"          # admix-simu config: gens + ancestry props
-SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.sample.txt}"  # IDs for the simulated indivs
+DAT_FILE="${DAT_FILE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.dat}"
+SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.sample.txt}"
 
-# Output
+# Outputs
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/02_simulations}"
 LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
-# ----------------------------------------------------------------------------
+# ============================================================================
+# DESCRIPTION
+# ============================================================================
+# Modernized replacement for simulation.sh. Builds admix-simu donor .phgeno
+# files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB)
+# directly from the new merged + jointly phased panel produced by
+# 1b_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
+# haps + truth files per chrom.
+#
+# Differences from legacy simulation.sh:
+#   - Source panel is merged_chr*.shapeit5_phased.softunion_maf005.rechr.bcf
+#   - No SHAPEIT2 `shapeit -convert` -- uses plink2 --export haps directly.
+#   - Two NAT donor tracks per run: NAT (HGDP-only) and NATMXB (HGDP + MXB).
+#   - SLURM array 1-22 (parallel per-chrom). One (ADMIX_POP, GEN) per submit;
+#     resubmit with different env vars to scan models.
+#
+# Outputs per chr (under $OUTDIR/$ADMIX_POP/gen$GEN/):
+#   NAT${i}.phgeno           HGDP-NAT-simu donor haplotypes (track 1)
+#   NATMXB${i}.phgeno        HGDP-NAT-simu + MXB-simu donor haplotypes (track 2)
+#   EUR${i}.phgeno           IBS donor haplotypes
+#   AFR${i}.phgeno           YRI donor haplotypes
+#   <track>.${ADMIX_POP}${i}.bp / .hanc / .hanc2     truth ancestry per sim track
+#   <track>.${ADMIX_POP}.chr${i}.haps / .sample      simulated admixed haps
+# ============================================================================
+
 set -euo pipefail
 
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}

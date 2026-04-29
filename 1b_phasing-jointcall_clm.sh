@@ -1,18 +1,50 @@
 #!/usr/bin/env bash
 # ----------------------------------------------------------------------------
-# USER CONFIG  --  edit for your cluster / paths
+# SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=merge_mxb_hgdp1kg
-#SBATCH --output=logs/merge_mxb_hgdp1kg_chr%a_%j.out
-#SBATCH --error=logs/merge_mxb_hgdp1kg_chr%a_%j.err
-#SBATCH --partition=mhgcp           # unlimited time, 56-core / 232G c-nodes fit 32 cpus + 96G
+#SBATCH --job-name=1b_phase
+#SBATCH --partition=mhgcp,atkinson
 #SBATCH --time=72:00:00
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=32
 #SBATCH --array=1-22
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_phase_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_phase_chr%a_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=Christina.magyar@bcm.edu
+
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  paths and tunables (override via env vars at submit time)
+# ----------------------------------------------------------------------------
+CONDA_ENV="${CONDA_ENV:-shapeit5}"
+
+# Project root -- all outputs anchored here so nothing collides with other
+# lab members' work.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
+# Inputs
+HGDP1KG="${HGDP1KG:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/archived/TGP_HGDP_hg38/filtered/hgdp_tgp_filtered_postoutlier.vcf.gz}"
+OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
+REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
+GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
+
+# Sample -> superpop TSV produced by make_sample_groups.sh
+SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
+
+# Outputs / scratch
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
+
+# Filter thresholds
+LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
+
+# Optional: rare-variant phasing (off by default; not needed for LAI -- TOPMed
+# / All-of-Us covers imputation)
+RUN_PHASE_RARE="${RUN_PHASE_RARE:-0}"
+
 # ============================================================================
-# 1b_phasing-jointcall_clm.sh
-#
+# DESCRIPTION
+# ============================================================================
 # Per-chrom (SLURM array 1-22):
 #   1. Subset HGDP+1KG postoutlier to chr$CHR, drop kinship outliers.
 #   2. bcftools merge with the lifted MXB chunk (output of 1a_prep-mxb-liftover_clm.sh).
@@ -26,9 +58,8 @@
 #   6. SHAPEIT5_phase_common joint phase against the SHAPEIT4-format hg38 gmap.
 #   7. Rename chr$CHR -> $CHR for downstream RFMix.
 #
-# RARE VARIANT PHASING is OFF by default. Imputation will be done with TOPMed/
-# All-of-Us so we don't need to ship a rare-variant-phased reference here.
-# Set RUN_PHASE_RARE=1 to enable phase_rare (adds ~2x wall time per chr).
+# RARE VARIANT PHASING is OFF by default. Set RUN_PHASE_RARE=1 to enable
+# phase_rare (adds ~2x wall time per chr).
 #
 # Run AFTER 1a_prep-mxb-liftover_clm.sh AND make_sample_groups.sh.
 #
@@ -39,35 +70,6 @@
 #   merged_chr${CHR}.shapeit5_full_phased.bcf{,.csi}        [only if RUN_PHASE_RARE=1]
 # ============================================================================
 
-
-
-# Conda env (from envs/shapeit5.yml)
-CONDA_ENV="${CONDA_ENV:-shapeit5}"
-
-# Inputs
-HGDP1KG="${HGDP1KG:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/archived/TGP_HGDP_hg38/filtered/hgdp_tgp_filtered_postoutlier.vcf.gz}"
-OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
-REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-
-# Project root -- all outputs anchored under this so nothing collides with
-# other lab members' work.
-PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
-
-# Sample -> superpop TSV produced by make_sample_groups.sh
-SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
-
-# Output / scratch
-OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
-LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
-
-# Filter thresholds
-LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
-
-# Optional: rare-variant phasing (off by default; not needed for LAI)
-RUN_PHASE_RARE="${RUN_PHASE_RARE:-0}"
-
-# ----------------------------------------------------------------------------
 set -euo pipefail
 
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}

@@ -1,7 +1,42 @@
 #!/usr/bin/env bash
+# ----------------------------------------------------------------------------
+# SLURM directives (must precede any non-comment lines)
+# ----------------------------------------------------------------------------
+#SBATCH --job-name=1a_prep_mxb_liftover
+#SBATCH --partition=atkinson,mhgcp
+#SBATCH --time=24:00:00
+#SBATCH --mem=48G
+#SBATCH --cpus-per-task=8
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1a_prep_mxb_liftover_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1a_prep_mxb_liftover_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=Christina.magyar@bcm.edu
+
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  paths and tunables (override via env vars at submit time)
+# ----------------------------------------------------------------------------
+CONDA_ENV="${CONDA_ENV:-shapeit5}"
+
+# Project root -- all outputs anchored here so nothing collides with other
+# lab members' work. Override with PROJECT_ROOT=... at submit time.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
+# Inputs
+MXB_HG19="${MXB_HG19:-/storage/atkinson/shared_resources/reference/mexico_biobank/original_download/tosharemxb50wgs/mexican_50_autosomes.vcf.gz}"
+REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
+CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
+
+# Outputs / scratch
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
+TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
+
+# Picard heap size (Xmx). Bump if liftover OOMs on chr1.
+PICARD_XMX="${PICARD_XMX:-40g}"
+
 # ============================================================================
-# 1a_prep-mxb-liftover_clm.sh
-#
+# DESCRIPTION
+# ============================================================================
 # One-shot prep step before 1b_phasing-jointcall_clm.sh:
 #   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
 #   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
@@ -14,38 +49,6 @@
 # Reject log: $OUTDIR/mxb_lifted.rejected.vcf.gz
 # ============================================================================
 
-# ----------------------------------------------------------------------------
-# USER CONFIG  --  edit for your cluster / paths
-# ----------------------------------------------------------------------------
-#SBATCH --job-name=prep_mxb_liftover
-#SBATCH --output=logs/prep_mxb_liftover_%j.out
-#SBATCH --error=logs/prep_mxb_liftover_%j.err
-#SBATCH --partition=mhgcp           # default lab partition (unlimited time, 16 nodes)
-#SBATCH --time=24:00:00
-#SBATCH --mem=48G
-#SBATCH --cpus-per-task=8
-
-# Conda env (from envs/shapeit5.yml)
-CONDA_ENV="${CONDA_ENV:-shapeit5}"
-
-# Inputs
-MXB_HG19="${MXB_HG19:-/storage/atkinson/shared_resources/reference/mexico_biobank/original_download/tosharemxb50wgs/mexican_50_autosomes.vcf.gz}"
-REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
-CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
-
-# Project root -- all outputs anchored under this so nothing collides with
-# other lab members' work.
-PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
-
-# Output / scratch
-OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
-LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
-TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
-
-# Picard heap size (Xmx). Bump if liftover OOMs on chr1.
-PICARD_XMX="${PICARD_XMX:-40g}"
-
-# ----------------------------------------------------------------------------
 set -euo pipefail
 
 THREADS=${SLURM_CPUS_PER_TASK:-8}

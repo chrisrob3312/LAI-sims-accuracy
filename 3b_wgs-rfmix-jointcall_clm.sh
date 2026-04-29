@@ -1,43 +1,21 @@
 #!/usr/bin/env bash
-# ============================================================================
-# 3b_wgs-rfmix-jointcall_clm.sh
-#
-# Modernized replacement for wgs-simulation-rfmix-jointcall.sh. Builds RFMix
-# v1 inputs and runs RFMix across the 4 reference panels x 2 sim-tracks grid
-# from the new merged + jointly phased panel produced by 1b_phasing-jointcall_clm.sh.
-#
-# Reference panels (inner dim of comparison grid):
-#   1. NAT_HGDP            HGDP-NAT-rfmix + IBS + YRI    (legacy)
-#   2. NAT_PEL             1KG PEL + IBS + YRI            (legacy, requires PEL_1KG_RFMIX list)
-#   3. NAT_PEL_EAS         1KG PEL+EAS + IBS + YRI        (legacy, requires PEL_EAS_1KG_RFMIX list)
-#   4. NAT_HGDPMXB         HGDP-NAT-rfmix + MXB-rfmix + IBS + YRI    (NEW)
-#
-# Sim tracks (outer dim, produced by 2b_simulation_clm.sh):
-#   NAT      HGDP-NAT donors only        (legacy)
-#   NATMXB   HGDP-NAT + MXB donors       (NEW)
-#
-# SLURM array 1-22 (per-chrom). Single (ADMIX_POP, GEN) per submission;
-# loop over panels and sim tracks within each chr task. RFMix v1.5.4 is
-# single-threaded per run, so the inner loop is sequential.
-#
-# Output structure (under $RFMIX_OUTDIR/$ADMIX_POP/gen$GEN/):
-#   <track>.<panel>.gen${GEN}_chr${i}.alleles / .classes / .snp_locations / .map
-#   <track>.<panel>.gen${GEN}_chr${i}.rfmix.2.Viterbi.txt           (RFMix output)
-#   <track>.<panel>.gen${GEN}_chr${i}.Lat3                          (accuracy-prep ready)
-# ============================================================================
-
 # ----------------------------------------------------------------------------
-# USER CONFIG
+# SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=rfmix_clm
-#SBATCH --output=logs/rfmix_clm_chr%a_%j.out
-#SBATCH --error=logs/rfmix_clm_chr%a_%j.err
-#SBATCH --partition=mhgcp            # unlimited time for the 8 RFMix runs/chr
+#SBATCH --job-name=3b_rfmix
+#SBATCH --partition=mhgcp,atkinson
 #SBATCH --time=72:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=12
 #SBATCH --array=1-22
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=Christina.magyar@bcm.edu
 
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  paths and tunables (override via env vars at submit time)
+# ----------------------------------------------------------------------------
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
 
 # Project root -- all outputs anchored under this so nothing collides with
@@ -88,11 +66,37 @@ RFMIX_E="${RFMIX_E:-2}"
 RFMIX_W="${RFMIX_W:-0.2}"
 RFMIX_N="${RFMIX_N:-5}"
 
-# Output
+# Outputs
 RFMIX_OUTDIR="${RFMIX_OUTDIR:-${PROJECT_ROOT}/03_rfmix}"
 LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
-# ----------------------------------------------------------------------------
+# ============================================================================
+# DESCRIPTION
+# ============================================================================
+# Modernized replacement for wgs-simulation-rfmix-jointcall.sh. Builds RFMix
+# v1 inputs and runs RFMix across the 4 reference panels x 2 sim-tracks grid
+# from the merged + jointly phased panel produced by 1b_phasing-jointcall_clm.sh.
+#
+# Reference panels (inner dim of comparison grid):
+#   1. NAT_HGDP        HGDP-NAT-rfmix + IBS + YRI                    (legacy)
+#   2. NAT_PEL         1KG PEL + IBS + YRI                            (requires pel_rfmix.txt)
+#   3. NAT_PEL_EAS     1KG PEL+EAS + IBS + YRI                        (requires pel_eas_rfmix.txt)
+#   4. NAT_HGDPMXB     HGDP-NAT-rfmix + MXB-rfmix + IBS + YRI         (NEW)
+#
+# Sim tracks (outer dim, produced by 2b_simulation_clm.sh):
+#   NAT       HGDP-NAT donors only       (legacy)
+#   NATMXB    HGDP-NAT + MXB donors      (NEW)
+#
+# SLURM array 1-22 (per-chrom). One (ADMIX_POP, GEN) per submission; loops
+# over panels and sim tracks within each chr task. RFMix v1.5.4 is
+# single-threaded per run, so the inner loop is sequential.
+#
+# Output structure (under $RFMIX_OUTDIR/$ADMIX_POP/gen$GEN/):
+#   <track>.<panel>.gen${GEN}_chr${i}.alleles / .classes / .snp_locations / .map
+#   <track>.<panel>.gen${GEN}_chr${i}.rfmix.2.Viterbi.txt    (RFMix output)
+#   <track>.<panel>.gen${GEN}_chr${i}.Lat3                   (accuracy-prep ready)
+# ============================================================================
+
 set -euo pipefail
 
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}
