@@ -12,8 +12,23 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
+# ============================================================================
+# DESCRIPTION
+# ============================================================================
+# One-shot prep step before 1b_phasing-jointcall_clm.sh:
+#   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
+#   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
+#      (handles strand flips AND ref/alt swaps that CrossMap silently mis-encodes)
+#   3. bcftools norm -m- -f hg38.fa  (split multiallelics, left-align)
+#   4. bcftools +fixref --check-ref ws -- -m flip -d  (catch any remaining mismatches)
+#   5. bcftools sort, index, split per-chrom
+#
+# Output: $OUTDIR/mxb_lifted.chr{1..22}.bcf{,.csi}
+# Reject log: $OUTDIR/mxb_lifted.rejected.vcf.gz
+# ============================================================================
+
 # ----------------------------------------------------------------------------
-# USER CONFIG  --  paths and tunables (override via env vars at submit time)
+# Variable configuration  --  paths and tunables (override via env vars at submit time)
 # ----------------------------------------------------------------------------
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
 
@@ -33,21 +48,6 @@ TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
 
 # Picard heap size (Xmx). Bump if liftover OOMs on chr1.
 PICARD_XMX="${PICARD_XMX:-40g}"
-
-# ============================================================================
-# DESCRIPTION
-# ============================================================================
-# One-shot prep step before 1b_phasing-jointcall_clm.sh:
-#   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
-#   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
-#      (handles strand flips AND ref/alt swaps that CrossMap silently mis-encodes)
-#   3. bcftools norm -m- -f hg38.fa  (split multiallelics, left-align)
-#   4. bcftools +fixref --check-ref ws -- -m flip -d  (catch any remaining mismatches)
-#   5. bcftools sort, index, split per-chrom
-#
-# Output: $OUTDIR/mxb_lifted.chr{1..22}.bcf{,.csi}
-# Reject log: $OUTDIR/mxb_lifted.rejected.vcf.gz
-# ============================================================================
 
 set -euo pipefail
 

@@ -13,35 +13,6 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
-# ----------------------------------------------------------------------------
-# USER CONFIG  --  paths and tunables (override via env vars at submit time)
-# ----------------------------------------------------------------------------
-CONDA_ENV="${CONDA_ENV:-shapeit5}"
-
-# Project root -- all outputs anchored here so nothing collides with other
-# lab members' work.
-PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
-
-# Inputs
-HGDP1KG="${HGDP1KG:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/archived/TGP_HGDP_hg38/filtered/hgdp_tgp_filtered_postoutlier.vcf.gz}"
-OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
-REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-
-# Sample -> superpop TSV produced by make_sample_groups.sh
-SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
-
-# Outputs / scratch
-OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
-LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
-
-# Filter thresholds
-LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
-
-# Optional: rare-variant phasing (off by default; not needed for LAI -- TOPMed
-# / All-of-Us covers imputation)
-RUN_PHASE_RARE="${RUN_PHASE_RARE:-0}"
-
 # ============================================================================
 # DESCRIPTION
 # ============================================================================
@@ -69,6 +40,35 @@ RUN_PHASE_RARE="${RUN_PHASE_RARE:-0}"
 #       (chr$CHR -> $CHR for RFMix v1)
 #   merged_chr${CHR}.shapeit5_full_phased.bcf{,.csi}        [only if RUN_PHASE_RARE=1]
 # ============================================================================
+
+# ----------------------------------------------------------------------------
+# Variable configuration  --  paths and tunables (override via env vars at submit time)
+# ----------------------------------------------------------------------------
+CONDA_ENV="${CONDA_ENV:-shapeit5}"
+
+# Project root -- all outputs anchored here so nothing collides with other
+# lab members' work.
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+
+# Inputs
+HGDP1KG="${HGDP1KG:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/archived/TGP_HGDP_hg38/filtered/hgdp_tgp_filtered_postoutlier.vcf.gz}"
+OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
+REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
+GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
+
+# Sample -> superpop TSV produced by make_sample_groups.sh
+SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
+
+# Outputs / scratch
+OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
+
+# Filter thresholds
+LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
+
+# Optional: rare-variant phasing (off by default; not needed for LAI -- TOPMed
+# / All-of-Us covers imputation)
+RUN_PHASE_RARE="${RUN_PHASE_RARE:-0}"
 
 set -euo pipefail
 
