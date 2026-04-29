@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  edit for your cluster / paths
+# ----------------------------------------------------------------------------
+#SBATCH --job-name=merge_mxb_hgdp1kg
+#SBATCH --output=logs/merge_mxb_hgdp1kg_chr%a_%j.out
+#SBATCH --error=logs/merge_mxb_hgdp1kg_chr%a_%j.err
+#SBATCH --partition=mhgcp           # unlimited time, 56-core / 232G c-nodes fit 32 cpus + 96G
+#SBATCH --time=72:00:00
+#SBATCH --mem=96G
+#SBATCH --cpus-per-task=32
+#SBATCH --array=1-22
 # ============================================================================
 # 1b_phasing-jointcall_clm.sh
 #
@@ -28,17 +39,7 @@
 #   merged_chr${CHR}.shapeit5_full_phased.bcf{,.csi}        [only if RUN_PHASE_RARE=1]
 # ============================================================================
 
-# ----------------------------------------------------------------------------
-# USER CONFIG  --  edit for your cluster / paths
-# ----------------------------------------------------------------------------
-#SBATCH --job-name=merge_mxb_hgdp1kg
-#SBATCH --output=logs/merge_mxb_hgdp1kg_chr%a_%j.out
-#SBATCH --error=logs/merge_mxb_hgdp1kg_chr%a_%j.err
-#SBATCH --partition=mhgcp           # unlimited time, 56-core / 232G c-nodes fit 32 cpus + 96G
-#SBATCH --time=72:00:00
-#SBATCH --mem=96G
-#SBATCH --cpus-per-task=32
-#SBATCH --array=1-22
+
 
 # Conda env (from envs/shapeit5.yml)
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
