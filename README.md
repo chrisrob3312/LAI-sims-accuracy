@@ -19,6 +19,19 @@ plink2 site QC, and SHAPEIT5 joint phasing. Run after `prep-mxb-liftover.sh` and
 make_sample_groups.sh - emits the 2-column sample->superpop TSV that drives the per-superpop MAF
 filter (consumed by `bcftools +fill-tags -S`).
 
+build-panel-keep-files.sh - composes RFMix-reference and SIMU-donor keep-files for the 4-panel
+comparison (Panel 1 = HGDP-NAT + IBS + YRI; Panel 4 = HGDP-NAT + MXB + IBS + YRI; SIMU donor
+tracks for HGDP-NAT-only and HGDP-NAT+MXB) from the lists in `reference_ids/`.
+
+Run order:
+1. `conda env create -f envs/shapeit5.yml && conda activate shapeit5`
+2. `./make_sample_groups.sh <gnomad_meta_updated.tsv> reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv`
+3. `sbatch prep-mxb-liftover.sh` (one-shot)
+4. `sbatch merge-mxb-hgdp1kg.sh` (array 1-22)
+5. `./build-panel-keep-files.sh` (one-shot)
+6. Existing `wgs-simulation-rfmix-jointcall.sh` updated to use the new merged phased
+   panel as VCF input and the panel/simu keep-files from step 5.
+
 wgs-simulation-rfmix-jointcall.sh - code used for generating all simulated models and RFMix v1 runs, and preparing files for the accuracy calculation.
 
 accuracy.R - code for calculating true positive rates of RFMix calls of simulations, getting counts of miscalls per error mode between ancestry groups, and getting the positions with highest number of miscalls.

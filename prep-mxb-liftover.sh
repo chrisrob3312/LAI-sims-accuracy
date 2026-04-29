@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-#SBATCH --partition=medium
-#SBATCH --time=24:00:00
-#SBATCH --mem=48G
-#SBATCH --cpus-per-task=8
-#SBATCH --job-name=prep_mxb_liftover
-#SBATCH --output=logs/prep_mxb_liftover_%j.out
+# ============================================================================
+# prep-mxb-liftover.sh
 #
 # One-shot prep step before merge-mxb-hgdp1kg.sh:
 #   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
@@ -14,28 +10,47 @@
 #   4. bcftools +fixref --check-ref ws -- -m flip -d  (catch any remaining mismatches)
 #   5. bcftools sort, index, split per-chrom
 #
-# Output: merged_mxb_hgdp1kg/mxb_lifted.chr{1..22}.bcf{,.csi}
-# Reject log: merged_mxb_hgdp1kg/mxb_lifted.rejected.vcf.gz
+# Output: $OUTDIR/mxb_lifted.chr{1..22}.bcf{,.csi}
+# Reject log: $OUTDIR/mxb_lifted.rejected.vcf.gz
+# ============================================================================
 
+# ----------------------------------------------------------------------------
+# USER CONFIG  --  edit for your cluster / paths
+# ----------------------------------------------------------------------------
+#SBATCH --job-name=prep_mxb_liftover
+#SBATCH --output=logs/prep_mxb_liftover_%j.out
+#SBATCH --error=logs/prep_mxb_liftover_%j.err
+#SBATCH --partition=medium          # ADJUST: cluster partition
+#SBATCH --time=24:00:00
+#SBATCH --mem=48G
+#SBATCH --cpus-per-task=8
+
+# Conda env (from envs/shapeit5.yml)
+CONDA_ENV="${CONDA_ENV:-shapeit5}"
+
+# Inputs
+MXB_HG19="${MXB_HG19:-/storage/atkinson/shared_resources/reference/mexico_biobank/original_download/tosharemxb50wgs/mexican_50_autosomes.vcf.gz}"
+REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
+CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
+
+# Output / scratch
+OUTDIR="${OUTDIR:-merged_mxb_hgdp1kg}"
+LOGDIR="${LOGDIR:-logs}"
+TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
+
+# Picard heap size (Xmx). Bump if liftover OOMs on chr1.
+PICARD_XMX="${PICARD_XMX:-40g}"
+
+# ----------------------------------------------------------------------------
 set -euo pipefail
 
 THREADS=${SLURM_CPUS_PER_TASK:-8}
+mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 
-# --- Inputs ---
-MXB_HG19="/storage/atkinson/shared_resources/reference/mexico_biobank/original_download/tosharemxb50wgs/mexican_50_autosomes.vcf.gz"
-REF_FA="/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta"
-CHAIN="/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz"
-
-# --- Output ---
-OUTDIR="merged_mxb_hgdp1kg"
-TMPDIR="${OUTDIR}/tmp/mxb_prep"
-mkdir -p "$OUTDIR" "$TMPDIR" logs
-
-# --- Conda env ---
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate shapeit5
+conda activate "$CONDA_ENV"
 
 # 1. Detect contig naming; rename to chr-prefixed if needed
 first_contig=$(bcftools view -h "$MXB_HG19" | awk -F'[<=,]' '/^##contig=<ID=/ {print $3; exit}')
@@ -55,7 +70,7 @@ fi
 
 # 2. Picard LiftoverVcf hg19 -> hg38
 echo "[$(date +%T)] Running Picard LiftoverVcf"
-picard -Xmx40g LiftoverVcf \
+picard "-Xmx${PICARD_XMX}" LiftoverVcf \
     I="$MXB_HG19_INPUT" \
     O="${TMPDIR}/mxb.hg38.lifted.vcf.gz" \
     CHAIN="$CHAIN" \
