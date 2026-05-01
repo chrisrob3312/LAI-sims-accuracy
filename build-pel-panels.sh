@@ -34,9 +34,12 @@ fi
 
 mkdir -p "$REFS"
 
-SAMPLE_COL=$(head -1 "$META" | tr '\t' '\n' | awk '$0=="project_meta.sample_id"{print NR; exit}')
-POP_COL=$(   head -1 "$META" | tr '\t' '\n' | awk '$0=="hgdp_tgp_meta.Population"{print NR; exit}')
-REGION_COL=$(head -1 "$META" | tr '\t' '\n' | awk '$0=="hgdp_tgp_meta.Genetic.region"{print NR; exit}')
+# Read the header into a variable first to avoid SIGPIPE racing between
+# `head` and `awk ... exit` under `set -euo pipefail`.
+header=$(head -1 "$META")
+SAMPLE_COL=$(awk -F'\t' -v t="project_meta.sample_id"       '{for(i=1;i<=NF;i++) if($i==t){print i; exit}}' <<< "$header")
+POP_COL=$(   awk -F'\t' -v t="hgdp_tgp_meta.Population"     '{for(i=1;i<=NF;i++) if($i==t){print i; exit}}' <<< "$header")
+REGION_COL=$(awk -F'\t' -v t="hgdp_tgp_meta.Genetic.region" '{for(i=1;i<=NF;i++) if($i==t){print i; exit}}' <<< "$header")
 
 [[ -z "$SAMPLE_COL" ]] && { echo "ERROR: column 'project_meta.sample_id' not found"; exit 1; }
 [[ -z "$POP_COL"    ]] && { echo "ERROR: column 'hgdp_tgp_meta.Population' not found"; exit 1; }
