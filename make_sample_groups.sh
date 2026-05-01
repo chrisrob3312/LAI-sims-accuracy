@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 # Emit a 2-column sample -> superpop TSV for `bcftools +fill-tags -S`,
-# mapping gnomad_meta_updated.tsv labels to 8 superpops:
+# mapping the gnomad_meta_updated.tsv `hgdp_tgp_meta.Genetic.region` field
+# to 8 superpops:
 #   AFR, AMR, EUR, EAS, SAS, CSA, OCE, MEN
-# and appending MXB sample IDs as AMR.
+# (MEN = MID/MENA in the source file -- renamed for our convention.)
+# Then append MXB sample IDs as AMR.
 #
 # Usage:
 #   make_sample_groups.sh gnomad_meta_updated.tsv reference_ids/MXB50genomes_popinfo.tsv > sample_groups.tsv
 #
-# Input formats:
-#   gnomad_meta_updated.tsv: <sample>\t<pop>\t<subpop>
-#     1KG rows use AFR/AMR/EUR/EAS/SAS in column 2.
-#     HGDP rows use Africa/America/Europe/East_Asia/Central_South_Asia/Oceania/Middle_East.
-#   MXB popinfo: header row + Sample_ID in column 1 (rest ignored).
-#
-# Unmapped populations print a WARN to stderr and are skipped.
+# The gnomAD HGDP+1KG metadata is wide (>150 columns); we look up the column
+# index of the desired field by name in the header, so this script doesn't
+# break if column order changes.
 
 set -euo pipefail
 
@@ -25,19 +23,36 @@ if [[ -z "$META" || -z "$MXB" ]]; then
     exit 1
 fi
 
-awk -F'\t' '
+# Resolve column indices (1-based) by header name.
+SAMPLE_COL=$(head -1 "$META" | tr '\t' '\n' | awk '$0=="project_meta.sample_id"{print NR; exit}')
+POP_COL=$(   head -1 "$META" | tr '\t' '\n' | awk '$0=="hgdp_tgp_meta.Genetic.region"{print NR; exit}')
+
+if [[ -z "$SAMPLE_COL" ]]; then
+    echo "ERROR: column 'project_meta.sample_id' not found in $META header" >&2
+    exit 1
+fi
+if [[ -z "$POP_COL" ]]; then
+    echo "ERROR: column 'hgdp_tgp_meta.Genetic.region' not found in $META header" >&2
+    exit 1
+fi
+
+echo "Using sample column $SAMPLE_COL ('project_meta.sample_id')" >&2
+echo "Using pop    column $POP_COL ('hgdp_tgp_meta.Genetic.region')" >&2
+
+awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" '
+NR == 1 { next }                # skip header
 {
-    pop = $2
-    if      (pop == "AFR" || pop == "Africa")            super = "AFR"
-    else if (pop == "AMR" || pop == "America")           super = "AMR"
-    else if (pop == "EUR" || pop == "Europe")            super = "EUR"
-    else if (pop == "EAS" || pop == "East_Asia")         super = "EAS"
-    else if (pop == "SAS")                               super = "SAS"
-    else if (pop == "Central_South_Asia")                super = "CSA"
-    else if (pop == "Oceania")                           super = "OCE"
-    else if (pop == "Middle_East")                       super = "MEN"
-    else { printf("WARN: unmapped pop \"%s\" for sample %s\n", pop, $1) > "/dev/stderr"; next }
-    print $1 "\t" super
+    pop = $pc
+    if      (pop == "AFR") super = "AFR"
+    else if (pop == "AMR") super = "AMR"
+    else if (pop == "EUR") super = "EUR"
+    else if (pop == "EAS") super = "EAS"
+    else if (pop == "SAS") super = "SAS"
+    else if (pop == "CSA") super = "CSA"
+    else if (pop == "OCE") super = "OCE"
+    else if (pop == "MID") super = "MEN"
+    else { printf("WARN: unmapped pop \"%s\" for sample %s\n", pop, $sc) > "/dev/stderr"; next }
+    print $sc "\t" super
 }' "$META"
 
 awk -F'\t' 'NR > 1 { print $1 "\tAMR" }' "$MXB"
