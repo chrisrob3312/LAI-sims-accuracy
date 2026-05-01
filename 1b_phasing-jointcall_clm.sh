@@ -121,11 +121,13 @@ bcftools index --threads "$THREADS" "$TAGGED"
 
 # 4. Soft-union: keep site if MAF >= LAI_MAF in AT LEAST ONE superpop.
 #    Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL superpops.
+#    NOTE: gnomAD's HGDP+1KG metadata lumps 1KG-SAS into CSA (no separate SAS
+#    bucket), so the 7 superpops actually present are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
 echo "[$(date +%T)] [chr${CHR}] soft-union per-superpop MAF >= ${LAI_MAF}"
 HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
 bcftools view "$TAGGED" \
     --min-alleles 2 --max-alleles 2 --types snps \
-    -e "(INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && (INFO/AF_SAS<${LAI_MAF} || INFO/AF_SAS>${HI}) && (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI})" \
+    -e "(INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI})" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
 bcftools index --threads "$THREADS" "$SOFTUNION"
 

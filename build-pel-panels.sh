@@ -13,6 +13,13 @@
 #   ./build-pel-panels.sh <gnomad_meta_updated.tsv>
 #
 # 3b_wgs-rfmix-jointcall_clm.sh picks these up automatically once present.
+#
+# The gnomAD meta file is wide (>150 cols); we resolve the relevant column
+# indices by header name to be robust to column-order changes:
+#   project_meta.sample_id        -> sample ID
+#   hgdp_tgp_meta.Population      -> 1KG sub-pop (PEL, CEU, IBS, YRI, ...)
+#                                     or HGDP pop name (Brahui, Yoruba, ...)
+#   hgdp_tgp_meta.Genetic.region  -> super-pop (AFR/AMR/EUR/EAS/SAS/CSA/OCE/MID)
 # ============================================================================
 
 set -euo pipefail
@@ -27,15 +34,26 @@ fi
 
 mkdir -p "$REFS"
 
-# 1KG metadata format: <sample> <super_pop> <sub_pop>
-# PEL only
-awk -F'\t' '$2 == "AMR" && $3 == "PEL" {print $1}' "$META" > "${REFS}/pel_rfmix.txt"
+SAMPLE_COL=$(head -1 "$META" | tr '\t' '\n' | awk '$0=="project_meta.sample_id"{print NR; exit}')
+POP_COL=$(   head -1 "$META" | tr '\t' '\n' | awk '$0=="hgdp_tgp_meta.Population"{print NR; exit}')
+REGION_COL=$(head -1 "$META" | tr '\t' '\n' | awk '$0=="hgdp_tgp_meta.Genetic.region"{print NR; exit}')
 
-# PEL + EAS (the legacy "PEL+EAS" panel mixes Latino-NAT proxy with EAS as
-# an additional reference for distinguishing NAT from EAS ancestry).
+[[ -z "$SAMPLE_COL" ]] && { echo "ERROR: column 'project_meta.sample_id' not found"; exit 1; }
+[[ -z "$POP_COL"    ]] && { echo "ERROR: column 'hgdp_tgp_meta.Population' not found"; exit 1; }
+[[ -z "$REGION_COL" ]] && { echo "ERROR: column 'hgdp_tgp_meta.Genetic.region' not found"; exit 1; }
+
+echo "Using sample col $SAMPLE_COL, pop col $POP_COL, region col $REGION_COL" >&2
+
+# PEL only -- match on the 1KG sub-population label
+awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" '
+NR > 1 && $pc == "PEL" { print $sc }' "$META" > "${REFS}/pel_rfmix.txt"
+
+# PEL + EAS  (legacy panel 3 mixes Latino-NAT proxy with EAS samples)
 {
-    awk -F'\t' '$2 == "AMR" && $3 == "PEL" {print $1}' "$META"
-    awk -F'\t' '$2 == "EAS" {print $1}' "$META"
+    awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" '
+        NR > 1 && $pc == "PEL" { print $sc }' "$META"
+    awk -F'\t' -v sc="$SAMPLE_COL" -v rc="$REGION_COL" '
+        NR > 1 && $rc == "EAS" { print $sc }' "$META"
 } > "${REFS}/pel_eas_rfmix.txt"
 
 echo "PEL only        : $(wc -l < ${REFS}/pel_rfmix.txt) IDs"
