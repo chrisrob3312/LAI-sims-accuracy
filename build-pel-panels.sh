@@ -55,17 +55,26 @@ echo "Using sample col $SAMPLE_COL, pop col $POP_COL" >&2
 # Decide which unrelated-filter to use.
 if [[ -n "$RELEASE_COL" ]]; then
     UNREL_MODE="release_col"
-    echo "Unrelated filter: gnomAD 'release' column ($RELEASE_COL) == true" >&2
-    # Helper: emit IDs matching a pop regex AND release=true.
+    echo "Unrelated filter: gnomAD 'release' column ($RELEASE_COL)" >&2
+    # Diagnostic: show distribution of release values for PEL specifically
+    echo "  PEL release-value distribution:" >&2
+    awk -F'\t' -v pc="$POP_COL" -v rc="$RELEASE_COL" '
+        NR > 1 && $pc == "PEL" { print $rc }' "$META" \
+        | sort | uniq -c | sed 's/^/    /' >&2
+    # Helper: emit IDs matching a pop regex AND release flag indicating
+    # release-set membership. Accept several common encodings: true/True/TRUE/1.
     extract_unrelated () {
         local pops_regex="$1"
         awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" -v rc="$RELEASE_COL" -v re="$pops_regex" '
-            NR > 1 && $pc ~ re && tolower($rc) == "true" { print $sc }' "$META"
+            function is_true(v) { v=tolower(v); return v=="true" || v=="t" || v=="1" }
+            NR > 1 && $pc ~ re && is_true($rc) { print $sc }' "$META"
     }
 else
     UNREL_MODE="related_outliers_file"
     [[ -s "$OUTLIERS" ]] || { echo "ERROR: 'release' col missing AND no $OUTLIERS"; exit 1; }
     echo "Unrelated filter: $OUTLIERS ($(wc -l < "$OUTLIERS") IDs)" >&2
+    echo "  First 3 lines of outliers file (verify format):" >&2
+    head -3 "$OUTLIERS" | sed 's/^/    /' >&2
     extract_unrelated () {
         local pops_regex="$1"
         awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" -v re="$pops_regex" '

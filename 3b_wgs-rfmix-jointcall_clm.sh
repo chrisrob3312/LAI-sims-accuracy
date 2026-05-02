@@ -58,6 +58,9 @@ KEEP_DIR="${KEEP_DIR:-panel_keep_files}"
 REFS="${REFS:-reference_ids}"
 NAT_HGDP_RFMIX="${NAT_HGDP_RFMIX:-${REFS}/amr_rfmix.txt}"
 NAT_HGDPMXB_RFMIX="${NAT_HGDPMXB_RFMIX:-${REFS}/amr_hgdpmxb_rfmix.txt}"
+NAT_HGDPMXB_FULL_RFMIX="${NAT_HGDPMXB_FULL_RFMIX:-${PROJECT_ROOT}/panel_keep_files/panel5_HGDPMXB_FULL_IBS_YRI.keep}"
+# panel 5 keep-file is HGDP-NAT + ALL 50 MXB + IBS + YRI; the AMR portion alone
+# is amr_rfmix + mxb_rfmix + mxb_simu (built lazily below if needed).
 IBS_RFMIX="${IBS_RFMIX:-${REFS}/eur_rfmix.txt}"
 YRI_RFMIX="${YRI_RFMIX:-${REFS}/afr_rfmix.txt}"
 PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"               # supply if running panel 2
@@ -80,7 +83,7 @@ NOTREF_FILE="${NOTREF_FILE:-${SIM_DIR}/${ADMIX_POP}.notref}"  # IDs of simulated
 # Which panels to run (space-separated; comment out 2/3 if you don't have PEL lists yet)
 # If pel_rfmix.txt / pel_eas_rfmix.txt exist (built by build-pel-panels.sh),
 # auto-include panels 2 and 3 in addition to 1 and 4.
-DEFAULT_PANELS="NAT_HGDP NAT_HGDPMXB"
+DEFAULT_PANELS="NAT_HGDP NAT_HGDPMXB NAT_HGDPMXB_FULL"
 [[ -s "${REFS}/pel_rfmix.txt"     ]] && DEFAULT_PANELS="NAT_HGDP NAT_PEL ${DEFAULT_PANELS#NAT_HGDP }"
 [[ -s "${REFS}/pel_eas_rfmix.txt" ]] && DEFAULT_PANELS="${DEFAULT_PANELS/NAT_PEL /NAT_PEL NAT_PEL_EAS }"
 PANELS_TO_RUN="${PANELS_TO_RUN:-$DEFAULT_PANELS}"
@@ -151,6 +154,13 @@ extract_haps YRI_1KG         "$YRI_RFMIX"
 [[ -s "$PEL_RFMIX"     ]] && extract_haps NAT_PEL         "$PEL_RFMIX"     || true
 [[ -s "$PEL_EAS_RFMIX" ]] && extract_haps NAT_PEL_EAS     "$PEL_EAS_RFMIX" || true
 
+# Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR portion = amr_rfmix + mxb_rfmix + mxb_simu.
+# Build a temporary keep-file inline since the union isn't stored separately in REFS/.
+{
+    cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simu.txt"
+} > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
+extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
+
 # ----------------------------------------------------------------------------
 # .ref keep-files for shapeit2rfmix (sample order: NAT then EUR then AFR)
 # ----------------------------------------------------------------------------
@@ -162,8 +172,9 @@ build_ref () {
     sed '1,2d' "${WORKDIR}/YRI_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
 }
 
-build_ref NAT_HGDP    NAT_HGDP
-build_ref NAT_HGDPMXB NAT_HGDPMXB
+build_ref NAT_HGDP         NAT_HGDP
+build_ref NAT_HGDPMXB      NAT_HGDPMXB
+build_ref NAT_HGDPMXB_FULL NAT_HGDPMXB_FULL
 [[ -s "${WORKDIR}/NAT_PEL_chr${CHR}.haps"     ]] && build_ref NAT_PEL     NAT_PEL     || true
 [[ -s "${WORKDIR}/NAT_PEL_EAS_chr${CHR}.haps" ]] && build_ref NAT_PEL_EAS NAT_PEL_EAS || true
 
@@ -172,12 +183,23 @@ build_ref NAT_HGDPMXB NAT_HGDPMXB
 # ----------------------------------------------------------------------------
 run_panel_track () {
     local track="$1" panel="$2"
+
+    # Panel 5 (NAT_HGDPMXB_FULL) puts ALL 50 MXB in the reference. Pairing it
+    # with the NATMXB sim track would put the 25 MXB-simu donors in BOTH the
+    # simulated haplotypes AND the reference, biasing TPR upward. Skip that
+    # combination.
+    if [[ "$panel" == "NAT_HGDPMXB_FULL" && "$track" == "NATMXB" ]]; then
+        echo "[chr${CHR}] [$track/$panel] skipping: donor/reference overlap -- panel 5 only valid against NAT track"
+        return 0
+    fi
+
     local nat_label
     case "$panel" in
-        NAT_HGDP)     nat_label="NAT_HGDP" ;;
-        NAT_HGDPMXB)  nat_label="NAT_HGDPMXB" ;;
-        NAT_PEL)      nat_label="NAT_PEL" ;;
-        NAT_PEL_EAS)  nat_label="NAT_PEL_EAS" ;;
+        NAT_HGDP)          nat_label="NAT_HGDP" ;;
+        NAT_HGDPMXB)       nat_label="NAT_HGDPMXB" ;;
+        NAT_HGDPMXB_FULL)  nat_label="NAT_HGDPMXB_FULL" ;;
+        NAT_PEL)           nat_label="NAT_PEL" ;;
+        NAT_PEL_EAS)       nat_label="NAT_PEL_EAS" ;;
         *) echo "ERROR: unknown panel $panel"; exit 1 ;;
     esac
     local nat_haps="${WORKDIR}/${nat_label}_chr${CHR}.haps"

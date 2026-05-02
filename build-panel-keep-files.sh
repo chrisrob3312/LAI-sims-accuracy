@@ -39,17 +39,29 @@ done
 cat "${REFS}/amr_rfmix.txt" "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" \
     > "${OUTDIR}/panel1_HGDPNAT_IBS_YRI.keep"
 
-# --- Panel 4 (new) : HGDP-NAT-rfmix + MXB-rfmix + IBS + YRI ---
+# --- Panel 4 : HGDP-NAT-rfmix + MXB-rfmix (half) + IBS + YRI ---
 cat "${REFS}/amr_hgdpmxb_rfmix.txt" "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" \
     > "${OUTDIR}/panel4_HGDPMXB_IBS_YRI.keep"
+
+# --- Panel 5 (NEW) : HGDP-NAT-rfmix + ALL MXB (50) + IBS + YRI ---
+# All 50 MXB samples in the reference (mxb_rfmix + mxb_simu unioned).
+# Constraint: this panel is only valid against the NAT-only sim track --
+# pairing it with the NATMXB sim track would put the 25 MXB-simu donor
+# samples into BOTH the simulated-haplotype source and the reference,
+# inflating accuracy estimates. 3b_wgs-rfmix-jointcall_clm.sh enforces
+# this by skipping (NATMXB, NAT_HGDPMXB_FULL) combinations.
+cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simu.txt" \
+    "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" \
+    > "${OUTDIR}/panel5_HGDPMXB_FULL_IBS_YRI.keep"
 
 # --- SIMU donor lists ---
 cp "${REFS}/amr_simulation.txt"        "${OUTDIR}/simu_HGDPNAT_donors.keep"
 cp "${REFS}/amr_hgdpmxb_simu.txt"      "${OUTDIR}/simu_HGDPMXB_donors.keep"
 
 # Sanity counts
-echo "Panel 1 (HGDP-NAT + IBS + YRI):           $(wc -l < ${OUTDIR}/panel1_HGDPNAT_IBS_YRI.keep) IDs"
-echo "Panel 4 (HGDP-NAT + MXB + IBS + YRI):     $(wc -l < ${OUTDIR}/panel4_HGDPMXB_IBS_YRI.keep) IDs"
-echo "SIMU donors (HGDP-NAT only):              $(wc -l < ${OUTDIR}/simu_HGDPNAT_donors.keep) IDs"
-echo "SIMU donors (HGDP-NAT + MXB):             $(wc -l < ${OUTDIR}/simu_HGDPMXB_donors.keep) IDs"
+echo "Panel 1 (HGDP-NAT + IBS + YRI):                     $(wc -l < ${OUTDIR}/panel1_HGDPNAT_IBS_YRI.keep) IDs"
+echo "Panel 4 (HGDP-NAT + MXB-half + IBS + YRI):          $(wc -l < ${OUTDIR}/panel4_HGDPMXB_IBS_YRI.keep) IDs"
+echo "Panel 5 (HGDP-NAT + ALL MXB + IBS + YRI) [NAT-only]: $(wc -l < ${OUTDIR}/panel5_HGDPMXB_FULL_IBS_YRI.keep) IDs"
+echo "SIMU donors (HGDP-NAT only):                        $(wc -l < ${OUTDIR}/simu_HGDPNAT_donors.keep) IDs"
+echo "SIMU donors (HGDP-NAT + MXB):                       $(wc -l < ${OUTDIR}/simu_HGDPMXB_donors.keep) IDs"
 echo "Outputs in ${OUTDIR}/"
