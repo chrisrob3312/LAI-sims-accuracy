@@ -75,11 +75,12 @@ else
     echo "Unrelated filter: $OUTLIERS ($(wc -l < "$OUTLIERS") IDs)" >&2
     echo "  First 3 lines of outliers file (verify format):" >&2
     head -3 "$OUTLIERS" | sed 's/^/    /' >&2
+    # related_outliers.txt is 2-col (super-pop, sample_id) -- extract col 2 only.
     extract_unrelated () {
         local pops_regex="$1"
         awk -F'\t' -v sc="$SAMPLE_COL" -v pc="$POP_COL" -v re="$pops_regex" '
             NR > 1 && $pc ~ re { print $sc }' "$META" \
-            | grep -vxFf "$OUTLIERS" || true
+            | grep -vxFf <(awk '{print $2}' "$OUTLIERS") || true
     }
 fi
 

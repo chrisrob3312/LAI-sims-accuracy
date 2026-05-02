@@ -100,8 +100,12 @@ RECHR="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.rechr.bcf"
 FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 
 # 1. Subset HGDP+1KG to chr$CHR; drop kinship outliers
+#    related_outliers.txt is 2 cols (super-pop, sample_id) -- bcftools -S
+#    expects one ID per line, so extract col 2 to a temp file first.
 echo "[$(date +%T)] [chr${CHR}] subset HGDP+1KG, drop outliers"
-bcftools view -r "chr${CHR}" -S "^${OUTLIERS}" --force-samples \
+OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.txt"
+awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
+bcftools view -r "chr${CHR}" -S "^${OUTLIERS_IDS}" --force-samples \
     --threads "$THREADS" -Ob -o "$HGDP1KG_CHR" "$HGDP1KG"
 bcftools index --threads "$THREADS" "$HGDP1KG_CHR"
 
