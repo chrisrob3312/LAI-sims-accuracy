@@ -60,7 +60,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 # 1. Detect contig naming; rename to chr-prefixed if needed
-first_contig=$(bcftools view -h "$MXB_HG19" | awk -F'[<=,]' '/^##contig=<ID=/ {print $3; exit}')
+first_contig=$(bcftools view -h "$MXB_HG19" | awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}')
 echo "[$(date +%T)] MXB first contig: $first_contig"
 if [[ "$first_contig" != chr* ]]; then
     echo "[$(date +%T)] Renaming numeric contigs to chr-prefixed for liftover"
