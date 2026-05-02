@@ -116,28 +116,12 @@ bcftools merge --threads "$THREADS" \
     "$HGDP1KG_CHR" "$MXB_LIFTED"
 bcftools index --threads "$THREADS" "$MERGED"
 
-# 3. Per-superpop AF tags
-echo "[$(date +%T)] [chr${CHR}] +fill-tags per-superpop AF"
-bcftools +fill-tags "$MERGED" --threads "$THREADS" \
-    -Ob -o "$TAGGED" \
-    -- -S "$SAMPLE_GROUPS" -t 'AF'
-bcftools index --threads "$THREADS" "$TAGGED"
-
-# 4. Soft-union: keep site if MAF >= LAI_MAF in AT LEAST ONE superpop.
-#    Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL superpops.
-#    NOTE: gnomAD's HGDP+1KG metadata lumps 1KG-SAS into CSA (no separate SAS
-#    bucket), so the 7 superpops actually present are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
-echo "[$(date +%T)] [chr${CHR}] soft-union per-superpop MAF >= ${LAI_MAF}"
-HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
-bcftools view "$TAGGED" \
-    --min-alleles 2 --max-alleles 2 --types snps \
-    -e "(INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI})" \
-    --threads "$THREADS" -Ob -o "$SOFTUNION"
-bcftools index --threads "$THREADS" "$SOFTUNION"
-
-# 5. plink2 site QC: dedup, ACGT-only, geno<=0.1 (matches legacy filter1 chain)
-echo "[$(date +%T)] [chr${CHR}] plink2 site QC"
-plink2 --bcf "$SOFTUNION" \
+# 3. plink2 site QC EARLY -- drop sites with high missingness (MXB-private sites
+#    have ~98.6% missing for HGDP+1KG samples, so this filters them out before
+#    they confuse the per-superpop AF computation downstream). Also handles
+#    biallelic, SNP-only, ACGT, dedup, missing-var-ids in one pass.
+echo "[$(date +%T)] [chr${CHR}] plink2 site QC (early -- drops MXB-private)"
+plink2 --bcf "$MERGED" \
        --set-missing-var-ids '@:#[b38]' \
        --rm-dup exclude-all \
        --geno 0.1 \
@@ -147,10 +131,28 @@ plink2 --bcf "$SOFTUNION" \
        --out "$QCED_PREFIX"
 bcftools index --threads "$THREADS" "$QCED"
 
+# 4. Per-superpop AF tags on the QC'd merged BCF
+echo "[$(date +%T)] [chr${CHR}] +fill-tags per-superpop AF"
+bcftools +fill-tags "$QCED" --threads "$THREADS" \
+    -Ob -o "$TAGGED" \
+    -- -S "$SAMPLE_GROUPS" -t 'AF'
+bcftools index --threads "$THREADS" "$TAGGED"
+
+# 5. Soft-union: keep site if MAF >= LAI_MAF in AT LEAST ONE superpop.
+#    Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL superpops.
+#    NOTE: gnomAD's HGDP+1KG metadata lumps 1KG-SAS into CSA (no separate SAS
+#    bucket), so the 7 superpops actually present are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
+echo "[$(date +%T)] [chr${CHR}] soft-union per-superpop MAF >= ${LAI_MAF}"
+HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
+bcftools view "$TAGGED" \
+    -e "(INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI})" \
+    --threads "$THREADS" -Ob -o "$SOFTUNION"
+bcftools index --threads "$THREADS" "$SOFTUNION"
+
 # 6. SHAPEIT5 phase_common (joint re-phase: HGDP+1KG + MXB together)
 echo "[$(date +%T)] [chr${CHR}] SHAPEIT5_phase_common"
 SHAPEIT5_phase_common \
-    --input "$QCED" \
+    --input "$SOFTUNION" \
     --map "$GMAP" \
     --region "chr${CHR}" \
     --output "$PHASED" \
@@ -158,26 +160,14 @@ SHAPEIT5_phase_common \
     --filter-maf 0.001
 bcftools index --threads "$THREADS" "$PHASED"
 
-# 6b. (optional) phase_rare on the un-MAF-filtered QC'd input, conditional on the
-#     soft-union scaffold above. Off by default since imputation here uses TOPMed/AoU.
+# 6b. (optional) phase_rare on the un-MAF-filtered QC'd input, conditional on
+#     the soft-union scaffold above. Off by default since imputation here uses
+#     TOPMed/AoU. The QCED file (already biallelic-SNP/ACGT/dedup/geno<=0.1
+#     filtered) is the right input -- it contains the rare variants too.
 if [[ "$RUN_PHASE_RARE" == "1" ]]; then
-    # Need the QC'd merged file WITHOUT the soft-union MAF filter for phase_rare input
-    echo "[$(date +%T)] [chr${CHR}] building unfiltered QC'd input for phase_rare"
-    UNFILT_QCED_PREFIX="${TMPDIR}/merged_chr${CHR}.qced.unfilt"
-    UNFILT_QCED="${UNFILT_QCED_PREFIX}.bcf"
-    plink2 --bcf "$TAGGED" \
-           --set-missing-var-ids '@:#[b38]' \
-           --rm-dup exclude-all \
-           --geno 0.1 \
-           --max-alleles 2 --snps-only just-acgt \
-           --export bcf \
-           --threads "$THREADS" \
-           --out "$UNFILT_QCED_PREFIX"
-    bcftools index --threads "$THREADS" "$UNFILT_QCED"
-
     echo "[$(date +%T)] [chr${CHR}] SHAPEIT5_phase_rare"
     SHAPEIT5_phase_rare \
-        --input "$UNFILT_QCED" \
+        --input "$QCED" \
         --scaffold "$PHASED" \
         --map "$GMAP" \
         --input-region "chr${CHR}" \
