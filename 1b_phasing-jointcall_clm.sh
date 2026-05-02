@@ -25,10 +25,13 @@
 #   3. plink2 site QC: biallelic SNPs, ACGT only, dedup IDs (no --geno here;
 #      missingness is enforced per-superpop in step 4).
 #   4. Per-superpop pre-filter -- subset the QC'd BCF to each superpop in
-#      sample_groups.tsv, run `bcftools +fill-tags -t AF,F_MISSING` on the
-#      subset, keep sites with F_MISSING<=GENO_MAX and MAF>=LAI_MAF; emit each
-#      pop's passing sites to a TSV. Soft-union = sort -u of all per-pop TSVs.
-#      Groups with <MIN_SUBPOP_N samples are skipped (too noisy to constrain).
+#      sample_groups.tsv (>= MIN_SUBPOP_N samples), recompute AC,AN on the
+#      subset, keep sites where AN>0 AND MAF >= LAI_MAF; emit each pop's
+#      passing sites to a TSV. Soft-union = sort -u of all per-pop TSVs.
+#      F_MISSING is NOT filtered: the HGDP+1KG postoutlier joint call is
+#      sparse-encoded (homref dropped at MXB-private sites), which makes
+#      per-pop missingness uninformative. AN>0 already skips sites a pop
+#      has no information on, and SHAPEIT5 imputes residual missing GTs.
 #   5. Subset the full-sample QC'd BCF to the soft-union site list -- this is
 #      the input to SHAPEIT5 phase_common.
 #   6. SHAPEIT5_phase_common joint phase against the SHAPEIT4-format hg38 gmap.
@@ -70,8 +73,8 @@ LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
 # Filter thresholds
 LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
-GENO_MAX="${GENO_MAX:-0.1}"   # per-superpop max F_MISSING (10% missing)
 MIN_SUBPOP_N="${MIN_SUBPOP_N:-10}"  # skip superpops smaller than this
+                              # (MAF estimates too noisy)
 
 # Optional: rare-variant phasing (off by default; not needed for LAI -- TOPMed
 # / All-of-Us covers imputation)
@@ -139,21 +142,33 @@ plink2 --bcf "$MERGED" \
 bcftools index --threads "$THREADS" "$QCED"
 
 # 4. Per-superpop pre-filter, then soft-union of passing sites.
-#    For each superpop in $SAMPLE_GROUPS:
+#    For each superpop in $SAMPLE_GROUPS with N >= MIN_SUBPOP_N:
 #      a. subset the QC'd BCF to its samples
-#      b. recompute AF, F_MISSING on the subset (single-pop tags, no -S quirks)
-#      c. keep sites with F_MISSING<=GENO_MAX AND MAF in [LAI_MAF, 1-LAI_MAF]
+#      b. recompute AC, AN on the subset (single-pop tags, no -S quirks)
+#      c. keep sites where AN>0 AND MAF >= LAI_MAF, expressed without
+#         division as `AC>=MAF*AN AND (AN-AC)>=MAF*AN`
 #      d. emit chr/pos/ref/alt of passing sites
-#    Skip superpops with fewer than MIN_SUBPOP_N samples in the merged data
-#    (e.g. OCE/MEN are tiny in HGDP+1KG and would be too noisy to constrain).
-#    Soft-union = sort -u of all per-pop TSVs.
-echo "[$(date +%T)] [chr${CHR}] per-superpop pre-filter (geno<=${GENO_MAX}, MAF>=${LAI_MAF})"
-HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
+#    Soft-union = sort -u across per-pop TSVs.
+#
+#    NOTE: we deliberately do NOT filter on F_MISSING here. The HGDP+1KG
+#    postoutlier joint call is sparse-encoded -- samples that are homref
+#    at MXB-private sites are emitted as `.|.`, not `0|0`. So F_MISSING in
+#    a non-MXB superpop at a MXB-only site is ~100% even though the WGS
+#    coverage is fine. The AN>0 check in the MAF expression already drops
+#    sites a pop has no information on; SHAPEIT5_phase_common imputes the
+#    residual missing genotypes during phasing.
+#
+#    Tiny superpops (N < MIN_SUBPOP_N, e.g. OCE/MEN in HGDP+1KG) are
+#    skipped -- their MAF estimates are too noisy to constrain the panel.
+echo "[$(date +%T)] [chr${CHR}] per-superpop pre-filter (MAF>=${LAI_MAF}, soft-union)"
 VCF_SAMPLES="${TMPDIR}/vcf_samples.txt"
 bcftools query -l "$QCED" > "$VCF_SAMPLES"
 
 SITELIST="${TMPDIR}/softunion_sites.tsv"
 : > "$SITELIST"
+
+# MAF >= m, expressed as: AC>=m*AN AND (AN-AC)>=m*AN, with AN>0 sentinel.
+MAF_EXPR="INFO/AN>0 && INFO/AC>=${LAI_MAF}*INFO/AN && (INFO/AN-INFO/AC)>=${LAI_MAF}*INFO/AN"
 
 for GROUP in $(awk '{print $2}' "$SAMPLE_GROUPS" | sort -u); do
     GROUP_KEEP="${TMPDIR}/${GROUP}_keep.txt"
@@ -166,9 +181,8 @@ for GROUP in $(awk '{print $2}' "$SAMPLE_GROUPS" | sort -u); do
     fi
     GROUP_SITES="${TMPDIR}/${GROUP}_sites.tsv"
     bcftools view "$QCED" -S "$GROUP_KEEP" --force-samples --threads "$THREADS" -Ou \
-      | bcftools +fill-tags --threads "$THREADS" -Ou -- -t 'AF,F_MISSING' \
-      | bcftools view -e "INFO/F_MISSING > ${GENO_MAX} || INFO/AF < ${LAI_MAF} || INFO/AF > ${HI}" \
-                --threads "$THREADS" -Ou \
+      | bcftools +fill-tags --threads "$THREADS" -Ou -- -t 'AC,AN' \
+      | bcftools view -i "$MAF_EXPR" --threads "$THREADS" -Ou \
       | bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' > "$GROUP_SITES"
     NSITES=$(wc -l < "$GROUP_SITES")
     echo "[$(date +%T)] [chr${CHR}]   ${GROUP}: ${NSAMP} samples, ${NSITES} passing sites"
