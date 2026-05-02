@@ -22,10 +22,15 @@
 #      NOTE: merge (column-wise sample join), NOT concat. Different samples,
 #      same/overlapping sites -> 4147 sample columns per site. Missing in one
 #      panel becomes ./. and is imputed by SHAPEIT5 during phasing.
-#   3. bcftools +fill-tags -S sample_groups.tsv -t 'AF'  (per-superpop AF).
-#   4. Soft-union per-superpop MAF >= LAI_MAF in any of {AFR, AMR, EUR, EAS,
-#      SAS, CSA, OCE, MEN}. Replaces the global `--maf 0.005` from filter1.
-#   5. plink2 site QC: biallelic SNPs, ACGT only, geno<=0.1, dedup IDs.
+#   3. plink2 site QC: biallelic SNPs, ACGT only, dedup IDs (no --geno here;
+#      missingness is enforced per-superpop in step 4).
+#   4. Per-superpop pre-filter -- subset the QC'd BCF to each superpop in
+#      sample_groups.tsv, run `bcftools +fill-tags -t AF,F_MISSING` on the
+#      subset, keep sites with F_MISSING<=GENO_MAX and MAF>=LAI_MAF; emit each
+#      pop's passing sites to a TSV. Soft-union = sort -u of all per-pop TSVs.
+#      Groups with <MIN_SUBPOP_N samples are skipped (too noisy to constrain).
+#   5. Subset the full-sample QC'd BCF to the soft-union site list -- this is
+#      the input to SHAPEIT5 phase_common.
 #   6. SHAPEIT5_phase_common joint phase against the SHAPEIT4-format hg38 gmap.
 #   7. Rename chr$CHR -> $CHR for downstream RFMix.
 #
@@ -65,6 +70,8 @@ LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
 # Filter thresholds
 LAI_MAF="${LAI_MAF:-0.005}"   # soft-union per-superpop MAF for LAI panel
+GENO_MAX="${GENO_MAX:-0.1}"   # per-superpop max F_MISSING (10% missing)
+MIN_SUBPOP_N="${MIN_SUBPOP_N:-10}"  # skip superpops smaller than this
 
 # Optional: rare-variant phasing (off by default; not needed for LAI -- TOPMed
 # / All-of-Us covers imputation)
@@ -91,7 +98,6 @@ conda activate "$CONDA_ENV"
 
 HGDP1KG_CHR="${TMPDIR}/hgdp1kg_chr${CHR}.bcf"
 MERGED="${TMPDIR}/merged_chr${CHR}.bcf"
-TAGGED="${TMPDIR}/merged_chr${CHR}.tagged.bcf"
 SOFTUNION="${TMPDIR}/merged_chr${CHR}.softunion.bcf"
 QCED_PREFIX="${TMPDIR}/merged_chr${CHR}.qced"
 QCED="${QCED_PREFIX}.bcf"
@@ -132,39 +138,56 @@ plink2 --bcf "$MERGED" \
        --out "$QCED_PREFIX"
 bcftools index --threads "$THREADS" "$QCED"
 
-# 4. Per-superpop AF + F_MISSING tags on the QC'd merged BCF.
-echo "[$(date +%T)] [chr${CHR}] +fill-tags per-superpop AF + F_MISSING"
-bcftools +fill-tags "$QCED" --threads "$THREADS" \
-    -Ob -o "$TAGGED" \
-    -- -S "$SAMPLE_GROUPS" -t 'AF,F_MISSING'
-bcftools index --threads "$THREADS" "$TAGGED"
-
-# 5. Combined site filter:
-#    a) Drop sites with >10% missingness in any of the 7 superpops present.
-#       This produces a QC'd panel reusable for LAI in any combination of
-#       reference populations (AMR/EUR/AFR, AMR/EUR/EAS, AMR/EUR/CSA, etc.).
-#       Per-superpop is more nuanced than global --geno 0.1: a small pop
-#       (OCE, n=30) requires a tight threshold but won't be dragged down by
-#       large pops, and vice versa.
-#    b) Soft-union: keep sites with MAF >= LAI_MAF in AT LEAST ONE superpop.
-#       Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL.
-#    NOTE: gnomAD lumps 1KG-SAS into CSA, so the 7 superpops actually present
-#    are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
-#    SHAPEIT5_phase_common will impute the small remaining missingness during
-#    phasing.
-echo "[$(date +%T)] [chr${CHR}] per-superpop F_MISSING + soft-union MAF filter"
+# 4. Per-superpop pre-filter, then soft-union of passing sites.
+#    For each superpop in $SAMPLE_GROUPS:
+#      a. subset the QC'd BCF to its samples
+#      b. recompute AF, F_MISSING on the subset (single-pop tags, no -S quirks)
+#      c. keep sites with F_MISSING<=GENO_MAX AND MAF in [LAI_MAF, 1-LAI_MAF]
+#      d. emit chr/pos/ref/alt of passing sites
+#    Skip superpops with fewer than MIN_SUBPOP_N samples in the merged data
+#    (e.g. OCE/MEN are tiny in HGDP+1KG and would be too noisy to constrain).
+#    Soft-union = sort -u of all per-pop TSVs.
+echo "[$(date +%T)] [chr${CHR}] per-superpop pre-filter (geno<=${GENO_MAX}, MAF>=${LAI_MAF})"
 HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
-bcftools view "$TAGGED" \
-    -e "(INFO/F_MISSING_AFR > 0.1 || INFO/F_MISSING_AMR > 0.1 || INFO/F_MISSING_EUR > 0.1 || \
-         INFO/F_MISSING_EAS > 0.1 || INFO/F_MISSING_CSA > 0.1 || INFO/F_MISSING_OCE > 0.1 || \
-         INFO/F_MISSING_MEN > 0.1) || \
-        ((INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && \
-         (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && \
-         (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && \
-         (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && \
-         (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && \
-         (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && \
-         (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI}))" \
+VCF_SAMPLES="${TMPDIR}/vcf_samples.txt"
+bcftools query -l "$QCED" > "$VCF_SAMPLES"
+
+SITELIST="${TMPDIR}/softunion_sites.tsv"
+: > "$SITELIST"
+
+for GROUP in $(awk '{print $2}' "$SAMPLE_GROUPS" | sort -u); do
+    GROUP_KEEP="${TMPDIR}/${GROUP}_keep.txt"
+    awk -v g="$GROUP" '$2==g {print $1}' "$SAMPLE_GROUPS" \
+        | grep -xFf "$VCF_SAMPLES" > "$GROUP_KEEP" || true
+    NSAMP=$(wc -l < "$GROUP_KEEP")
+    if (( NSAMP < MIN_SUBPOP_N )); then
+        echo "[$(date +%T)] [chr${CHR}]   skip ${GROUP}: ${NSAMP} samples < MIN_SUBPOP_N=${MIN_SUBPOP_N}"
+        continue
+    fi
+    GROUP_SITES="${TMPDIR}/${GROUP}_sites.tsv"
+    bcftools view "$QCED" -S "$GROUP_KEEP" --force-samples --threads "$THREADS" -Ou \
+      | bcftools +fill-tags --threads "$THREADS" -Ou -- -t 'AF,F_MISSING' \
+      | bcftools view -e "INFO/F_MISSING > ${GENO_MAX} || INFO/AF < ${LAI_MAF} || INFO/AF > ${HI}" \
+                --threads "$THREADS" -Ou \
+      | bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' > "$GROUP_SITES"
+    NSITES=$(wc -l < "$GROUP_SITES")
+    echo "[$(date +%T)] [chr${CHR}]   ${GROUP}: ${NSAMP} samples, ${NSITES} passing sites"
+    cat "$GROUP_SITES" >> "$SITELIST"
+done
+
+SITELIST_SORTED="${TMPDIR}/softunion_sites.sorted.tsv"
+sort -k1,1 -k2,2n -k3,3 -k4,4 -u "$SITELIST" > "$SITELIST_SORTED"
+NUNION=$(wc -l < "$SITELIST_SORTED")
+echo "[$(date +%T)] [chr${CHR}] soft-union sites: ${NUNION}"
+[[ "$NUNION" -gt 0 ]] || { echo "ERROR: empty soft-union site list"; exit 1; }
+
+# bgzip + tabix the targets file so bcftools view -T can stream it efficiently.
+bgzip -f "$SITELIST_SORTED"
+tabix -s1 -b2 -e2 -f "${SITELIST_SORTED}.gz"
+
+# 5. Subset the full-sample QC'd BCF to the soft-union sites for SHAPEIT5.
+echo "[$(date +%T)] [chr${CHR}] subset full BCF to soft-union sites"
+bcftools view "$QCED" -T "${SITELIST_SORTED}.gz" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
 bcftools index --threads "$THREADS" "$SOFTUNION"
 
