@@ -140,20 +140,24 @@ bcftools +fill-tags "$QCED" --threads "$THREADS" \
 bcftools index --threads "$THREADS" "$TAGGED"
 
 # 5. Combined site filter:
-#    a) Drop sites with >10% missingness in any of the 3 LAI pops (AFR/EUR/AMR)
-#       -- these can't reliably contribute to LAI inference. Other superpops
-#       (CSA/EAS/OCE/MEN) aren't used by RFMix for the panels we run, so we
-#       don't filter on their missingness.
+#    a) Drop sites with >10% missingness in any of the 7 superpops present.
+#       This produces a QC'd panel reusable for LAI in any combination of
+#       reference populations (AMR/EUR/AFR, AMR/EUR/EAS, AMR/EUR/CSA, etc.).
+#       Per-superpop is more nuanced than global --geno 0.1: a small pop
+#       (OCE, n=30) requires a tight threshold but won't be dragged down by
+#       large pops, and vice versa.
 #    b) Soft-union: keep sites with MAF >= LAI_MAF in AT LEAST ONE superpop.
 #       Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL.
 #    NOTE: gnomAD lumps 1KG-SAS into CSA, so the 7 superpops actually present
 #    are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
 #    SHAPEIT5_phase_common will impute the small remaining missingness during
 #    phasing.
-echo "[$(date +%T)] [chr${CHR}] per-LAI-pop F_MISSING + soft-union MAF filter"
+echo "[$(date +%T)] [chr${CHR}] per-superpop F_MISSING + soft-union MAF filter"
 HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
 bcftools view "$TAGGED" \
-    -e "(INFO/F_MISSING_AFR > 0.1 || INFO/F_MISSING_EUR > 0.1 || INFO/F_MISSING_AMR > 0.1) || \
+    -e "(INFO/F_MISSING_AFR > 0.1 || INFO/F_MISSING_AMR > 0.1 || INFO/F_MISSING_EUR > 0.1 || \
+         INFO/F_MISSING_EAS > 0.1 || INFO/F_MISSING_CSA > 0.1 || INFO/F_MISSING_OCE > 0.1 || \
+         INFO/F_MISSING_MEN > 0.1) || \
         ((INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && \
          (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && \
          (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && \
