@@ -183,19 +183,23 @@ for GROUP in $(awk '{print $2}' "$SAMPLE_GROUPS" | sort -u); do
     bcftools view "$QCED" -S "$GROUP_KEEP" --force-samples --threads "$THREADS" -Ou \
       | bcftools +fill-tags --threads "$THREADS" -Ou -- -t 'AC,AN' \
       | bcftools view -i "$MAF_EXPR" --threads "$THREADS" -Ou \
-      | bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\n' > "$GROUP_SITES"
+      | bcftools query -f '%CHROM\t%POS\n' > "$GROUP_SITES"
     NSITES=$(wc -l < "$GROUP_SITES")
     echo "[$(date +%T)] [chr${CHR}]   ${GROUP}: ${NSAMP} samples, ${NSITES} passing sites"
     cat "$GROUP_SITES" >> "$SITELIST"
 done
 
 SITELIST_SORTED="${TMPDIR}/softunion_sites.sorted.tsv"
-sort -k1,1 -k2,2n -k3,3 -k4,4 -u "$SITELIST" > "$SITELIST_SORTED"
+sort -k1,1 -k2,2n -u "$SITELIST" > "$SITELIST_SORTED"
 NUNION=$(wc -l < "$SITELIST_SORTED")
 echo "[$(date +%T)] [chr${CHR}] soft-union sites: ${NUNION}"
 [[ "$NUNION" -gt 0 ]] || { echo "ERROR: empty soft-union site list"; exit 1; }
 
-# bgzip + tabix the targets file so bcftools view -T can stream it efficiently.
+# bgzip + tabix the chr/pos targets file so bcftools view -T can stream it.
+# 2-col (chr, pos) format avoids the chr/pos/ref/alt → chr/from/to mis-parse
+# that bcftools -T does when columns 3/4 are non-numeric (REF/ALT letters).
+# Plink2 --rm-dup exclude-all already made positions unique, so chr/pos is
+# sufficient to identify each site.
 bgzip -f "$SITELIST_SORTED"
 tabix -s1 -b2 -e2 -f "${SITELIST_SORTED}.gz"
 
@@ -204,6 +208,9 @@ echo "[$(date +%T)] [chr${CHR}] subset full BCF to soft-union sites"
 bcftools view "$QCED" -T "${SITELIST_SORTED}.gz" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
 bcftools index --threads "$THREADS" "$SOFTUNION"
+NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
+echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
+[[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
 
 # 6. SHAPEIT5 phase_common (joint re-phase: HGDP+1KG + MXB together)
 echo "[$(date +%T)] [chr${CHR}] SHAPEIT5_phase_common"
