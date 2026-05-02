@@ -116,36 +116,51 @@ bcftools merge --threads "$THREADS" \
     "$HGDP1KG_CHR" "$MXB_LIFTED"
 bcftools index --threads "$THREADS" "$MERGED"
 
-# 3. plink2 site QC EARLY -- drop sites with high missingness (MXB-private sites
-#    have ~98.6% missing for HGDP+1KG samples, so this filters them out before
-#    they confuse the per-superpop AF computation downstream). Also handles
-#    biallelic, SNP-only, ACGT, dedup, missing-var-ids in one pass.
-echo "[$(date +%T)] [chr${CHR}] plink2 site QC (early -- drops MXB-private)"
+# 3. plink2 site QC -- biallelic SNPs, ACGT only, dedup, missing-var-ids.
+#    NO --geno here: global call rate is the wrong filter for LAI because RFMix
+#    only uses AFR/EUR/AMR samples (not all 8 superpops). A global --geno 0.1
+#    can drop sites with adequate calls in the 3 LAI pops just because of
+#    missingness in unused pops or because MXB samples (50/3454) are missing.
+#    Per-superpop missingness filter is applied in step 4 instead.
+echo "[$(date +%T)] [chr${CHR}] plink2 site QC (biallelic SNPs, ACGT, dedup)"
 plink2 --bcf "$MERGED" \
        --set-missing-var-ids '@:#[b38]' \
        --rm-dup exclude-all \
-       --geno 0.1 \
        --max-alleles 2 --snps-only just-acgt \
        --export bcf \
        --threads "$THREADS" \
        --out "$QCED_PREFIX"
 bcftools index --threads "$THREADS" "$QCED"
 
-# 4. Per-superpop AF tags on the QC'd merged BCF
-echo "[$(date +%T)] [chr${CHR}] +fill-tags per-superpop AF"
+# 4. Per-superpop AF + F_MISSING tags on the QC'd merged BCF.
+echo "[$(date +%T)] [chr${CHR}] +fill-tags per-superpop AF + F_MISSING"
 bcftools +fill-tags "$QCED" --threads "$THREADS" \
     -Ob -o "$TAGGED" \
-    -- -S "$SAMPLE_GROUPS" -t 'AF'
+    -- -S "$SAMPLE_GROUPS" -t 'AF,F_MISSING'
 bcftools index --threads "$THREADS" "$TAGGED"
 
-# 5. Soft-union: keep site if MAF >= LAI_MAF in AT LEAST ONE superpop.
-#    Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL superpops.
-#    NOTE: gnomAD's HGDP+1KG metadata lumps 1KG-SAS into CSA (no separate SAS
-#    bucket), so the 7 superpops actually present are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
-echo "[$(date +%T)] [chr${CHR}] soft-union per-superpop MAF >= ${LAI_MAF}"
+# 5. Combined site filter:
+#    a) Drop sites with >10% missingness in any of the 3 LAI pops (AFR/EUR/AMR)
+#       -- these can't reliably contribute to LAI inference. Other superpops
+#       (CSA/EAS/OCE/MEN) aren't used by RFMix for the panels we run, so we
+#       don't filter on their missingness.
+#    b) Soft-union: keep sites with MAF >= LAI_MAF in AT LEAST ONE superpop.
+#       Equivalently, exclude sites where AF<LAI_MAF || AF>(1-LAI_MAF) in ALL.
+#    NOTE: gnomAD lumps 1KG-SAS into CSA, so the 7 superpops actually present
+#    are AFR/AMR/EUR/EAS/CSA/OCE/MEN.
+#    SHAPEIT5_phase_common will impute the small remaining missingness during
+#    phasing.
+echo "[$(date +%T)] [chr${CHR}] per-LAI-pop F_MISSING + soft-union MAF filter"
 HI=$(awk -v m="$LAI_MAF" 'BEGIN{printf "%.6f", 1-m}')
 bcftools view "$TAGGED" \
-    -e "(INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI})" \
+    -e "(INFO/F_MISSING_AFR > 0.1 || INFO/F_MISSING_EUR > 0.1 || INFO/F_MISSING_AMR > 0.1) || \
+        ((INFO/AF_AFR<${LAI_MAF} || INFO/AF_AFR>${HI}) && \
+         (INFO/AF_AMR<${LAI_MAF} || INFO/AF_AMR>${HI}) && \
+         (INFO/AF_EUR<${LAI_MAF} || INFO/AF_EUR>${HI}) && \
+         (INFO/AF_EAS<${LAI_MAF} || INFO/AF_EAS>${HI}) && \
+         (INFO/AF_CSA<${LAI_MAF} || INFO/AF_CSA>${HI}) && \
+         (INFO/AF_OCE<${LAI_MAF} || INFO/AF_OCE>${HI}) && \
+         (INFO/AF_MEN<${LAI_MAF} || INFO/AF_MEN>${HI}))" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
 bcftools index --threads "$THREADS" "$SOFTUNION"
 
