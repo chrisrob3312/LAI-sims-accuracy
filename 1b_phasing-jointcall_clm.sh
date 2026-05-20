@@ -188,10 +188,21 @@ plink2 --bcf "$MERGED" \
        --set-missing-var-ids '@:#[b38]' \
        --rm-dup exclude-all \
        --max-alleles 2 --snps-only just-acgt \
+       --output-chr chrM \
        --export bcf \
        --threads "$THREADS" \
        --out "$QCED_PREFIX"
 bcftools index --threads "$THREADS" "$QCED"
+
+# Sanity-check: plink2's default for VCF/BCF export is to strip the "chr"
+# prefix from contig names, which then makes the soft-union BCF unreadable
+# by SHAPEIT5 when invoked with `--region chr${CHR}` (#sites=0, no error).
+# `--output-chr chrM` above keeps them chr-prefixed; assert it stuck.
+if ! bcftools view -h "$QCED" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+    echo "ERROR: QCED BCF lost the chr-prefix on contigs (plink2 --output-chr failed?)"
+    bcftools view -h "$QCED" | grep "^##contig" | head -3
+    exit 1
+fi
 
 # 4. Per-superpop pre-filter, then soft-union of passing sites.
 #    For each superpop in $SAMPLE_GROUPS with N >= MIN_SUBPOP_N:
