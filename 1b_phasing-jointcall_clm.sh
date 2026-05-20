@@ -64,12 +64,12 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
 # Inputs
-# Per-chrom filter1 file pattern (use ${CHR} as the placeholder). Default
-# points at the colleague's per-chrom phased + MAF005-filtered + indexed
-# outputs -- these are chr-prefixed and have outliers already removed.
+# Per-chrom filter1 file pattern -- use the literal token __CHR__ as the
+# placeholder. Default points at the colleague's per-chrom phased +
+# MAF005-filtered + indexed outputs (chr-prefixed, outliers still present).
 # SHAPEIT5 will re-phase them jointly with MXB anyway, so the prior phase
 # information in these files isn't relied upon.
-HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr\${CHR}.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr__CHR__.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
 OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -120,17 +120,18 @@ FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 # 1. Resolve per-chrom HGDP+1KG file, drop kinship outliers, normalize contig
 #    naming to chr-prefixed (to match the lifted MXB BCF from step 1a).
 #
-#    HGDP1KG_PATTERN expands ${CHR} to the per-chrom path. The default points
-#    at the colleague's filter1 phased BCFs (already MAF005-filtered, indexed,
-#    chr-prefixed contigs). SHAPEIT5 re-phases the merge from genotypes in
-#    step 6, so any prior phasing in the input is discarded -- this gives us
-#    the joint phasing of HGDP+1KG + MXB that we need.
+#    HGDP1KG_PATTERN expands the literal token __CHR__ to the chromosome
+#    number to form the per-chrom path. Default points at the colleague's
+#    filter1 phased BCFs (already MAF005-filtered, indexed, chr-prefixed
+#    contigs). SHAPEIT5 re-phases the merge from genotypes in step 6, so
+#    any prior phasing in the input is discarded -- this gives us the
+#    joint phasing of HGDP+1KG + MXB that we need.
 #
 #    These filter1 files are pre-outlier (n=4091); we still drop the kinship
 #    outliers from related_outliers.txt. The file is 2 cols (super-pop,
 #    sample_id) -- bcftools -S expects one ID per line, so extract col 2 to
 #    a temp file first.
-HGDP1KG_CHR_SRC="$(eval echo "$HGDP1KG_PATTERN")"
+HGDP1KG_CHR_SRC="${HGDP1KG_PATTERN//__CHR__/$CHR}"
 [[ -s "$HGDP1KG_CHR_SRC" ]] || {
     echo "ERROR: missing per-chrom HGDP+1KG file $HGDP1KG_CHR_SRC"
     echo "  HGDP1KG_PATTERN=$HGDP1KG_PATTERN"
