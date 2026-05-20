@@ -111,12 +111,45 @@ FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 # 1. Subset HGDP+1KG to chr$CHR; drop kinship outliers
 #    related_outliers.txt is 2 cols (super-pop, sample_id) -- bcftools -S
 #    expects one ID per line, so extract col 2 to a temp file first.
+#    Detect HGDP+1KG contig naming -- some releases use "chr22", others use
+#    bare "22". Pick the right region string for bcftools -r so we don't
+#    silently filter to an empty file (which lets the pipeline limp along
+#    on MXB-only sites and gives "0 passing sites" in every non-MXB pop).
 echo "[$(date +%T)] [chr${CHR}] subset HGDP+1KG, drop outliers"
 OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.txt"
 awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
-bcftools view -r "chr${CHR}" -S "^${OUTLIERS_IDS}" --force-samples \
+HGDP1KG_REGION="chr${CHR}"
+if ! bcftools view -h "$HGDP1KG" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+    if bcftools view -h "$HGDP1KG" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+        HGDP1KG_REGION="${CHR}"
+        echo "[$(date +%T)] [chr${CHR}] HGDP+1KG uses bare contig names; using -r ${CHR}"
+    else
+        echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $HGDP1KG header"
+        exit 1
+    fi
+fi
+bcftools view -r "$HGDP1KG_REGION" -S "^${OUTLIERS_IDS}" --force-samples \
     --threads "$THREADS" -Ob -o "$HGDP1KG_CHR" "$HGDP1KG"
 bcftools index --threads "$THREADS" "$HGDP1KG_CHR"
+# Sanity: subset must be non-empty
+NHGDP1KG=$(bcftools view "$HGDP1KG_CHR" -H | wc -l)
+echo "[$(date +%T)] [chr${CHR}] HGDP+1KG chr${CHR} subset: ${NHGDP1KG} records"
+[[ "$NHGDP1KG" -gt 0 ]] || { echo "ERROR: HGDP+1KG chr${CHR} subset is empty"; exit 1; }
+
+# If HGDP+1KG was bare-numbered, rename its contigs to chr-prefixed so the
+# merge with the chr-prefixed MXB BCF (output of 1a) produces a chr-prefixed
+# merged file -- needed for SHAPEIT5_phase_common's --region chr${CHR}.
+if [[ "$HGDP1KG_REGION" == "${CHR}" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] rename HGDP+1KG contigs to chr-prefixed"
+    RENAME_TXT="${TMPDIR}/rename_to_chr.txt"
+    : > "$RENAME_TXT"
+    for c in {1..22} X Y MT; do echo "$c chr$c" >> "$RENAME_TXT"; done
+    HGDP1KG_CHR_RENAMED="${TMPDIR}/hgdp1kg_chr${CHR}.rechr.bcf"
+    bcftools annotate --rename-chrs "$RENAME_TXT" \
+        --threads "$THREADS" -Ob -o "$HGDP1KG_CHR_RENAMED" "$HGDP1KG_CHR"
+    bcftools index --threads "$THREADS" "$HGDP1KG_CHR_RENAMED"
+    HGDP1KG_CHR="$HGDP1KG_CHR_RENAMED"
+fi
 
 # 2. Merge HGDP+1KG (chr$CHR) with lifted MXB (chr$CHR) -- column-wise sample join
 echo "[$(date +%T)] [chr${CHR}] bcftools merge"
