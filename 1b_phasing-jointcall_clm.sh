@@ -17,7 +17,12 @@
 # DESCRIPTION
 # ============================================================================
 # Per-chrom (SLURM array 1-22):
-#   1. Subset HGDP+1KG postoutlier to chr$CHR, drop kinship outliers.
+#   1. Take per-chrom HGDP+1KG filter1 file (HGDP1KG_PATTERN, default points
+#      at the colleague's `phased_haplotypes_v2_filter1/` per-chrom outputs),
+#      drop kinship outliers from related_outliers.txt, and normalize contig
+#      naming to chr-prefixed so it lines up with the lifted MXB BCF and with
+#      SHAPEIT5's `--region chr${CHR}`. Prior phase in the filter1 input is
+#      irrelevant -- SHAPEIT5 re-phases jointly with MXB in step 6.
 #   2. bcftools merge with the lifted MXB chunk (output of 1a_prep-mxb-liftover_clm.sh).
 #      NOTE: merge (column-wise sample join), NOT concat. Different samples,
 #      same/overlapping sites -> 4147 sample columns per site. Missing in one
@@ -59,7 +64,12 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
 # Inputs
-HGDP1KG="${HGDP1KG:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/archived/TGP_HGDP_hg38/filtered/hgdp_tgp_filtered_postoutlier.vcf.gz}"
+# Per-chrom filter1 file pattern (use ${CHR} as the placeholder). Default
+# points at the colleague's per-chrom phased + MAF005-filtered + indexed
+# outputs -- these are chr-prefixed and have outliers already removed.
+# SHAPEIT5 will re-phase them jointly with MXB anyway, so the prior phase
+# information in these files isn't relied upon.
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr\${CHR}.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
 OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -99,7 +109,6 @@ module load anaconda3/2024.06
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
-HGDP1KG_CHR="${TMPDIR}/hgdp1kg_chr${CHR}.bcf"
 MERGED="${TMPDIR}/merged_chr${CHR}.bcf"
 SOFTUNION="${TMPDIR}/merged_chr${CHR}.softunion.bcf"
 QCED_PREFIX="${TMPDIR}/merged_chr${CHR}.qced"
@@ -108,47 +117,56 @@ PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
 RECHR="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.rechr.bcf"
 FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 
-# 1. Subset HGDP+1KG to chr$CHR; drop kinship outliers
-#    related_outliers.txt is 2 cols (super-pop, sample_id) -- bcftools -S
-#    expects one ID per line, so extract col 2 to a temp file first.
-#    Detect HGDP+1KG contig naming -- some releases use "chr22", others use
-#    bare "22". Pick the right region string for bcftools -r so we don't
-#    silently filter to an empty file (which lets the pipeline limp along
-#    on MXB-only sites and gives "0 passing sites" in every non-MXB pop).
-echo "[$(date +%T)] [chr${CHR}] subset HGDP+1KG, drop outliers"
+# 1. Resolve per-chrom HGDP+1KG file, drop kinship outliers, normalize contig
+#    naming to chr-prefixed (to match the lifted MXB BCF from step 1a).
+#
+#    HGDP1KG_PATTERN expands ${CHR} to the per-chrom path. The default points
+#    at the colleague's filter1 phased BCFs (already MAF005-filtered, indexed,
+#    chr-prefixed contigs). SHAPEIT5 re-phases the merge from genotypes in
+#    step 6, so any prior phasing in the input is discarded -- this gives us
+#    the joint phasing of HGDP+1KG + MXB that we need.
+#
+#    These filter1 files are pre-outlier (n=4091); we still drop the kinship
+#    outliers from related_outliers.txt. The file is 2 cols (super-pop,
+#    sample_id) -- bcftools -S expects one ID per line, so extract col 2 to
+#    a temp file first.
+HGDP1KG_CHR_SRC="$(eval echo "$HGDP1KG_PATTERN")"
+[[ -s "$HGDP1KG_CHR_SRC" ]] || {
+    echo "ERROR: missing per-chrom HGDP+1KG file $HGDP1KG_CHR_SRC"
+    echo "  HGDP1KG_PATTERN=$HGDP1KG_PATTERN"
+    exit 1
+}
+
+echo "[$(date +%T)] [chr${CHR}] drop kinship outliers from $HGDP1KG_CHR_SRC"
 OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.txt"
 awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
-HGDP1KG_REGION="chr${CHR}"
-if ! bcftools view -h "$HGDP1KG" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
-    if bcftools view -h "$HGDP1KG" | grep -q "^##contig=<ID=${CHR}[,>]"; then
-        HGDP1KG_REGION="${CHR}"
-        echo "[$(date +%T)] [chr${CHR}] HGDP+1KG uses bare contig names; using -r ${CHR}"
-    else
-        echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $HGDP1KG header"
-        exit 1
-    fi
-fi
-bcftools view -r "$HGDP1KG_REGION" -S "^${OUTLIERS_IDS}" --force-samples \
-    --threads "$THREADS" -Ob -o "$HGDP1KG_CHR" "$HGDP1KG"
-bcftools index --threads "$THREADS" "$HGDP1KG_CHR"
-# Sanity: subset must be non-empty
-NHGDP1KG=$(bcftools view "$HGDP1KG_CHR" -H | wc -l)
-echo "[$(date +%T)] [chr${CHR}] HGDP+1KG chr${CHR} subset: ${NHGDP1KG} records"
-[[ "$NHGDP1KG" -gt 0 ]] || { echo "ERROR: HGDP+1KG chr${CHR} subset is empty"; exit 1; }
+HGDP1KG_PREP="${TMPDIR}/hgdp1kg_chr${CHR}.prep.bcf"
+bcftools view -S "^${OUTLIERS_IDS}" --force-samples \
+    --threads "$THREADS" -Ob -o "$HGDP1KG_PREP" "$HGDP1KG_CHR_SRC"
+bcftools index --threads "$THREADS" "$HGDP1KG_PREP"
+NHGDP1KG=$(bcftools view "$HGDP1KG_PREP" -H | wc -l)
+NSAMP_HGDP1KG=$(bcftools query -l "$HGDP1KG_PREP" | wc -l)
+echo "[$(date +%T)] [chr${CHR}] HGDP+1KG: ${NSAMP_HGDP1KG} samples, ${NHGDP1KG} records"
+[[ "$NHGDP1KG" -gt 0 ]] || { echo "ERROR: HGDP+1KG chr${CHR} is empty"; exit 1; }
 
-# If HGDP+1KG was bare-numbered, rename its contigs to chr-prefixed so the
-# merge with the chr-prefixed MXB BCF (output of 1a) produces a chr-prefixed
-# merged file -- needed for SHAPEIT5_phase_common's --region chr${CHR}.
-if [[ "$HGDP1KG_REGION" == "${CHR}" ]]; then
+# Detect contig naming -- the non-rechr filter1 files use chr-prefixed
+# contigs, but if HGDP1KG_PATTERN is pointed at a bare-numeric source
+# (e.g. *.rechr.vcf.gz) we rename to chr-prefixed so the merge with the
+# chr-prefixed MXB BCF and SHAPEIT5's --region chr${CHR} both line up.
+if bcftools view -h "$HGDP1KG_PREP" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+    HGDP1KG_CHR="$HGDP1KG_PREP"
+elif bcftools view -h "$HGDP1KG_PREP" | grep -q "^##contig=<ID=${CHR}[,>]"; then
     echo "[$(date +%T)] [chr${CHR}] rename HGDP+1KG contigs to chr-prefixed"
     RENAME_TXT="${TMPDIR}/rename_to_chr.txt"
     : > "$RENAME_TXT"
     for c in {1..22} X Y MT; do echo "$c chr$c" >> "$RENAME_TXT"; done
-    HGDP1KG_CHR_RENAMED="${TMPDIR}/hgdp1kg_chr${CHR}.rechr.bcf"
+    HGDP1KG_CHR="${TMPDIR}/hgdp1kg_chr${CHR}.bcf"
     bcftools annotate --rename-chrs "$RENAME_TXT" \
-        --threads "$THREADS" -Ob -o "$HGDP1KG_CHR_RENAMED" "$HGDP1KG_CHR"
-    bcftools index --threads "$THREADS" "$HGDP1KG_CHR_RENAMED"
-    HGDP1KG_CHR="$HGDP1KG_CHR_RENAMED"
+        --threads "$THREADS" -Ob -o "$HGDP1KG_CHR" "$HGDP1KG_PREP"
+    bcftools index --threads "$THREADS" "$HGDP1KG_CHR"
+else
+    echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $HGDP1KG_CHR_SRC header"
+    exit 1
 fi
 
 # 2. Merge HGDP+1KG (chr$CHR) with lifted MXB (chr$CHR) -- column-wise sample join
