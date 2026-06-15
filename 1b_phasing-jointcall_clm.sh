@@ -144,7 +144,7 @@ awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
 HGDP1KG_PREP="${TMPDIR}/hgdp1kg_chr${CHR}.prep.bcf"
 bcftools view -S "^${OUTLIERS_IDS}" --force-samples \
     --threads "$THREADS" -Ob -o "$HGDP1KG_PREP" "$HGDP1KG_CHR_SRC"
-bcftools index --threads "$THREADS" "$HGDP1KG_PREP"
+bcftools index "$HGDP1KG_PREP"
 NHGDP1KG=$(bcftools view "$HGDP1KG_PREP" -H | wc -l)
 NSAMP_HGDP1KG=$(bcftools query -l "$HGDP1KG_PREP" | wc -l)
 echo "[$(date +%T)] [chr${CHR}] HGDP+1KG: ${NSAMP_HGDP1KG} samples, ${NHGDP1KG} records"
@@ -164,7 +164,7 @@ elif bcftools view -h "$HGDP1KG_PREP" | grep -q "^##contig=<ID=${CHR}[,>]"; then
     HGDP1KG_CHR="${TMPDIR}/hgdp1kg_chr${CHR}.bcf"
     bcftools annotate --rename-chrs "$RENAME_TXT" \
         --threads "$THREADS" -Ob -o "$HGDP1KG_CHR" "$HGDP1KG_PREP"
-    bcftools index --threads "$THREADS" "$HGDP1KG_CHR"
+    bcftools index "$HGDP1KG_CHR"
 else
     echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $HGDP1KG_CHR_SRC header"
     exit 1
@@ -175,7 +175,7 @@ echo "[$(date +%T)] [chr${CHR}] bcftools merge"
 bcftools merge --threads "$THREADS" \
     -Ob -o "$MERGED" \
     "$HGDP1KG_CHR" "$MXB_LIFTED"
-bcftools index --threads "$THREADS" "$MERGED"
+bcftools index "$MERGED"
 
 # 3. plink2 site QC -- biallelic SNPs, ACGT only, dedup, missing-var-ids.
 #    NO --geno here: global call rate is the wrong filter for LAI because RFMix
@@ -192,7 +192,7 @@ plink2 --bcf "$MERGED" \
        --export bcf \
        --threads "$THREADS" \
        --out "$QCED_PREFIX"
-bcftools index --threads "$THREADS" "$QCED"
+bcftools index "$QCED"
 
 # Sanity-check: plink2's default for VCF/BCF export is to strip the "chr"
 # prefix from contig names, which then makes the soft-union BCF unreadable
@@ -270,7 +270,7 @@ tabix -s1 -b2 -e2 -f "${SITELIST_SORTED}.gz"
 echo "[$(date +%T)] [chr${CHR}] subset full BCF to soft-union sites"
 bcftools view "$QCED" -T "${SITELIST_SORTED}.gz" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
-bcftools index --threads "$THREADS" "$SOFTUNION"
+bcftools index "$SOFTUNION"
 NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
 echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
@@ -311,7 +311,7 @@ echo "[$(date +%T)] [chr${CHR}] rename chr${CHR} -> ${CHR}"
 echo "chr${CHR} ${CHR}" > "${TMPDIR}/rename_chr${CHR}.txt"
 bcftools annotate --rename-chrs "${TMPDIR}/rename_chr${CHR}.txt" \
     --threads "$THREADS" -Ob -o "$RECHR" "$PHASED"
-bcftools index -f --threads "$THREADS" "$RECHR"
+bcftools index -f "$RECHR"
 rm "${TMPDIR}/rename_chr${CHR}.txt"
 
 echo "[$(date +%T)] [chr${CHR}] # Complete."
