@@ -276,6 +276,10 @@ echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
 
 # 6. SHAPEIT5 phase_common (joint re-phase: HGDP+1KG + MXB together)
+#    SHAPEIT5 writes its own .csi index after phasing, so we do NOT call
+#    `bcftools index` on $PHASED -- a second index would error
+#    `[E::main_vcfindex] the index file exists` and the script would die
+#    after the ~30 hr phase finished. Trust SHAPEIT5's index.
 echo "[$(date +%T)] [chr${CHR}] SHAPEIT5_phase_common"
 SHAPEIT5_phase_common \
     --input "$SOFTUNION" \
@@ -284,7 +288,6 @@ SHAPEIT5_phase_common \
     --output "$PHASED" \
     --thread "$THREADS" \
     --filter-maf 0.001
-bcftools index --threads "$THREADS" "$PHASED"
 
 # 6b. (optional) phase_rare on the un-MAF-filtered QC'd input, conditional on
 #     the soft-union scaffold above. Off by default since imputation here uses
@@ -300,7 +303,7 @@ if [[ "$RUN_PHASE_RARE" == "1" ]]; then
         --scaffold-region "chr${CHR}" \
         --output "$FULL_PHASED" \
         --thread "$THREADS"
-    bcftools index --threads "$THREADS" "$FULL_PHASED"
+    # SHAPEIT5 writes its own index here too -- skip a redundant bcftools index.
 fi
 
 # 7. Strip "chr" prefix on the LAI panel (RFMix v1 expects bare numeric contigs)
@@ -308,7 +311,7 @@ echo "[$(date +%T)] [chr${CHR}] rename chr${CHR} -> ${CHR}"
 echo "chr${CHR} ${CHR}" > "${TMPDIR}/rename_chr${CHR}.txt"
 bcftools annotate --rename-chrs "${TMPDIR}/rename_chr${CHR}.txt" \
     --threads "$THREADS" -Ob -o "$RECHR" "$PHASED"
-bcftools index --threads "$THREADS" "$RECHR"
+bcftools index -f --threads "$THREADS" "$RECHR"
 rm "${TMPDIR}/rename_chr${CHR}.txt"
 
 echo "[$(date +%T)] [chr${CHR}] # Complete."
