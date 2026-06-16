@@ -23,12 +23,17 @@
 # Anchor sources (reference_ids/):
 #   EUR = eur_rfmix.txt   (77 samples, 1KG IBS)
 #   AFR = afr_rfmix.txt   (77 samples, 1KG YRI)
-#   AMR = amr_rfmix.txt   (31 samples, HGDP-NAT: Karitiana/Surui/Pima/Maya/Colombian)
+#   AMR = amr_rfmix.txt   (31 samples, HGDP-NAT) + all 50 MXB samples
+#         The 50 MXB samples are ~98% Amerindigenous by curation
+#         (selected by MXB scientists from various Mexican geographic
+#         locations). Anchoring them alongside HGDP-NAT roughly triples
+#         the AMR exemplar count and stabilizes the AMR component
+#         centroid for the rest of the inference.
 #   EAS = eas_rfmix.txt   (build with build-eas-sas-anchors.sh)
 #   SAS = sas_rfmix.txt   (build with build-eas-sas-anchors.sh)
-#   Every sample NOT in one of these files (incl. MXB, 1KG-AMR PEL/MXL/CLM/PUR,
-#   ASW/ACB, OCE, MEN) gets supervised label "-" so the anchors define the K=5
-#   components without admixed samples dragging the centroids.
+#   Every sample NOT in one of these sets (1KG-AMR PEL/MXL/CLM/PUR,
+#   ASW/ACB, OCE, MEN, etc.) gets supervised label "-" so the anchors
+#   define the K=5 components without admixed samples dragging centroids.
 #
 # Super-pop assignment for the samples TSV's included-flag check:
 #   - sample_groups.tsv (from make_sample_groups.sh) gives super_pop. CSA gets
@@ -127,11 +132,18 @@ POP_FILE="${PRUNED}.pop"
 echo "[$(date +%T)] build supervised .pop file"
 python3 - "${PRUNED}.fam" "$POP_FILE" \
     "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
-    "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" <<'PYEOF'
+    "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" "$MXB_POPINFO" <<'PYEOF'
 import sys
-fam, outp, eur_f, afr_f, amr_f, eas_f, sas_f = sys.argv[1:8]
+fam, outp, eur_f, afr_f, amr_f, eas_f, sas_f, mxb_pop_f = sys.argv[1:9]
 def load(p): return set(open(p).read().split())
-anchors = {"EUR": load(eur_f), "AFR": load(afr_f), "AMR": load(amr_f),
+# 50 MXB samples (~98% Amerindigenous, curated) join the AMR anchor set.
+mxb = set()
+with open(mxb_pop_f) as f:
+    next(f)  # header
+    for line in f:
+        mxb.add(line.split("\t")[0])
+anchors = {"EUR": load(eur_f), "AFR": load(afr_f),
+           "AMR": load(amr_f) | mxb,
            "EAS": load(eas_f), "SAS": load(sas_f)}
 with open(fam) as f, open(outp, "w") as g:
     counts = {k: 0 for k in anchors}
