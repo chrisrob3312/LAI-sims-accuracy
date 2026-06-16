@@ -3,7 +3,8 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=3b_rfmix
-#SBATCH --partition=mhgcp,atkinson
+#SBATCH --partition=mhgcp
+#SBATCH --nodelist=mhgcp-a01,mhgcp-m00,mhgcp-c00,mhgcp-c01,mhgcp-c02
 #SBATCH --time=72:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=12
