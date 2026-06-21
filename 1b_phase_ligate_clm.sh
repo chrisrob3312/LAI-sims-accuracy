@@ -4,7 +4,6 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_ligate
 #SBATCH --partition=mhgcp
-#SBATCH --nodelist=mhgcp-a01,mhgcp-m00,mhgcp-c00,mhgcp-c01,mhgcp-c02
 #SBATCH --time=04:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16

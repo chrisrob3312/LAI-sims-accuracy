@@ -4,7 +4,6 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_prep
 #SBATCH --partition=mhgcp
-#SBATCH --nodelist=mhgcp-a01,mhgcp-m00,mhgcp-c00,mhgcp-c01,mhgcp-c02
 #SBATCH --time=12:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=16
