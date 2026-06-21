@@ -19,12 +19,13 @@
 
 set -euo pipefail
 
+# Resolve repo dir from this script's own location -- works from any cwd.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-RESOURCES="${RESOURCES:-${PROJECT_ROOT}/resources}"
+RESOURCES="${RESOURCES:-${REPO_DIR}/resources}"
 CHUNKS_TSV="${CHUNKS_TSV:-${RESOURCES}/b38_chunks.tsv}"
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$RESOURCES"
 
 # 0. Build chunks file if not already present.
