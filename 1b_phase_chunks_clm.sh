@@ -7,7 +7,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --time-min=04:00:00
 #SBATCH --mem=48G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_chunk_%a_%j.out
 #SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_chunk_%a_%j.err
 #SBATCH --mail-type=END,FAIL
@@ -65,7 +65,9 @@ fi
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
 
 echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] phase_common ${PHASE_REGION}"
 SHAPEIT5_phase_common \
