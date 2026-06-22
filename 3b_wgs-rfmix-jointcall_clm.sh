@@ -121,7 +121,9 @@ mkdir -p "$WORKDIR" "$LOGDIR"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
 
 # ----------------------------------------------------------------------------
 # Helper: per-pop .haps/.sample for one panel-component (NAT, IBS, YRI, etc.)

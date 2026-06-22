@@ -45,7 +45,9 @@ RECHR="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.rechr.bcf"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
 
 # Skip if already done.
 if [[ -s "$RECHR" && -s "${RECHR}.csi" ]]; then

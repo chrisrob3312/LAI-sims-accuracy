@@ -73,7 +73,9 @@ mkdir -p "$HOMOG_DIR" "$HOMOG_DIR/admixture" "$HOMOG_DIR/homog_5pop"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
 
 # Verify required inputs.
 echo "[$(date +%T)] verifying inputs"

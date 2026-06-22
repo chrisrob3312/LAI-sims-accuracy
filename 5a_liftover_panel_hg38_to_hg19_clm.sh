@@ -52,7 +52,9 @@ mkdir -p "$HG19_DIR/all_samples" "$HG19_DIR/homog_5pop" "$TMPDIR_LIFT"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
 
 # Helper to lift a single BCF.
 do_lift () {
