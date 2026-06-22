@@ -37,7 +37,7 @@ PHASED_DIR="${PHASED_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg38ToHg19.over.chain.gz}"
-HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b37/human_g1k_v37.fasta}"
+HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/hg19/hg19.fa}"
 PICARD_XMX="${PICARD_XMX:-36g}"
 
 set -euo pipefail
