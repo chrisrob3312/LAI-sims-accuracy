@@ -4,7 +4,8 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_chunk
 #SBATCH --partition=mhgcp
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
+#SBATCH --time-min=04:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_chunk_%a_%j.out
