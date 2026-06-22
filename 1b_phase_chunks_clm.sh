@@ -5,8 +5,8 @@
 #SBATCH --job-name=1b_chunk
 #SBATCH --partition=mhgcp
 #SBATCH --time=24:00:00
-#SBATCH --mem=120G
-#SBATCH --cpus-per-task=32
+#SBATCH --mem=48G
+#SBATCH --cpus-per-task=16
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_chunk_%a_%j.out
 #SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_chunk_%a_%j.err
 #SBATCH --mail-type=END,FAIL
