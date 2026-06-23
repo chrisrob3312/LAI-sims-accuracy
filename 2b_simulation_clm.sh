@@ -3,8 +3,10 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=2b_simu
-#SBATCH --partition=short
-#SBATCH --time=08:00:00
+#SBATCH --partition=mhgcp
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=00:15:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-22

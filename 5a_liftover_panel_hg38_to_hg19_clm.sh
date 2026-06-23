@@ -4,7 +4,9 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=5a_lift19
 #SBATCH --partition=mhgcp
-#SBATCH --time=24:00:00
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=00:15:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-22

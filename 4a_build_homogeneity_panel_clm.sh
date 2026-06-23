@@ -4,8 +4,10 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=4a_homog
 #SBATCH --partition=mhgcp
-#SBATCH --time=24:00:00
-#SBATCH --mem=96G
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=01:00:00
+#SBATCH --time=12:00:00
+#SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_%j.out
 #SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_%j.err

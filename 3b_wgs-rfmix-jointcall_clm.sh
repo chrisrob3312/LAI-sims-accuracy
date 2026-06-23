@@ -4,9 +4,11 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=3b_rfmix
 #SBATCH --partition=mhgcp
-#SBATCH --time=72:00:00
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=01:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=32G
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --array=1-22
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.out
 #SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.err
