@@ -64,8 +64,8 @@ AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
+GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/genetic_map/recomb-hg38}"
+GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/genetic_map_chr%s_hg38.txt}"
 
 # Simulation model
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
