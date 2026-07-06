@@ -54,7 +54,7 @@ PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
 # Sample-ID lists (in repo)
-REFS="${REFS:-reference_ids}"
+REFS="${REFS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/reference_ids}"
 NAT_HGDP_SIMU="${NAT_HGDP_SIMU:-${REFS}/amr_simulation.txt}"
 NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simu.txt}"
 EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"

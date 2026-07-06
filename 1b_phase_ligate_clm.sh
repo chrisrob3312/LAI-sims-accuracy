@@ -78,7 +78,8 @@ SHAPEIT5_ligate \
     --output "$PHASED" \
     --thread "$THREADS"
 
-# SHAPEIT5_ligate writes its own .csi -- don't re-index.
+# SHAPEIT5_ligate does NOT emit a .csi -- index the ligated BCF here.
+bcftools index -f "$PHASED"
 NRECS=$(bcftools view "$PHASED" -H | wc -l)
 echo "[$(date +%T)] [chr${CHR}] ligated: ${NRECS} records"
 
