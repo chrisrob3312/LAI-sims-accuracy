@@ -6,7 +6,7 @@
 #SBATCH --partition=mhgcp
 #SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=01:00:00
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_%j.out
@@ -44,10 +44,12 @@
 #
 # Pipeline:
 #   1. Concat all 22 phased chrs -> one BCF
-#   2. plink2 LD-prune (--indep-pairwise 50 5 0.2) -> ~500-700k SNPs
+#   2. plink2 LD-prune (--indep-pairwise 500 50 0.1) -> ~500-700k SNPs
 #   3. Build supervised .pop file from anchor lists (in .fam row order)
-#   4. admixture --supervised -j16 K=5
-#   5. Parse .Q -> lai_ref_panel_samples.tsv (cohort, pop, super_pop, Q_*, included)
+#   4. admixture --supervised -j16 K=5 (anchor-informed) AND
+#      admixture (unsupervised) K=5 (true proportions for anchors too)
+#   5. Parse both .Q -> lai_ref_panel_samples.tsv with Q_sup_*, Q_unsup_*,
+#      sup_unsup_agree, included (unsup max_Q >= 0.95 AND sup/unsup agree)
 #   6. Subset each per-chr phased BCF to included samples -> homog_5pop/
 #
 # Outputs in $HOMOG_DIR:
@@ -113,10 +115,11 @@ fi
 # ---------------------------------------------------------------------------
 PRUNED="${HOMOG_DIR}/admixture/lai_ref"
 if [[ ! -s "${PRUNED}.bed" ]]; then
-    echo "[$(date +%T)] plink2 LD-prune (50 5 0.2)"
+    echo "[$(date +%T)] plink2 LD-prune (500 50 0.1 maf 0.01)"
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' \
-           --indep-pairwise 50 5 0.2 \
+           --maf 0.01 \
+           --indep-pairwise 500 50 0.1 \
            --out "${HOMOG_DIR}/admixture/lai_ref.prune"
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' \
@@ -165,101 +168,147 @@ with open(fam) as f, open(outp, "w") as g:
 PYEOF
 
 # ---------------------------------------------------------------------------
-# 4. Run supervised ADMIXTURE K=5.
+# 4. Run supervised + unsupervised ADMIXTURE K=5.
+#    supervised: anchor labels fixed; Q informative only for "-" samples.
+#    unsupervised: no fixed labels; Q informative for ALL samples (incl. anchors),
+#    at the cost of cluster identities needing post-hoc mapping.
 # ---------------------------------------------------------------------------
 ADM_DIR="${HOMOG_DIR}/admixture"
+UNSUP_DIR="${ADM_DIR}/unsup"
+mkdir -p "$UNSUP_DIR"
+
+# 4a. Supervised run (needs .pop present in cwd next to .bed)
 if [[ ! -s "${ADM_DIR}/lai_ref.5.Q" ]]; then
-    echo "[$(date +%T)] admixture --supervised K=5 (this is the slow step)"
+    echo "[$(date +%T)] admixture --supervised K=5 (slow)"
     cd "$ADM_DIR"
     admixture --supervised -j${THREADS} lai_ref.bed 5
     cd - >/dev/null
 fi
-[[ -s "${ADM_DIR}/lai_ref.5.Q" ]] || { echo "ERROR: ADMIXTURE failed"; exit 1; }
+[[ -s "${ADM_DIR}/lai_ref.5.Q" ]] || { echo "ERROR: supervised ADMIXTURE failed"; exit 1; }
+
+# 4b. Unsupervised run — same bed, no .pop file in cwd, K=5
+if [[ ! -s "${UNSUP_DIR}/lai_ref.5.Q" ]]; then
+    echo "[$(date +%T)] admixture (unsupervised) K=5 (slow)"
+    for ext in bed bim fam; do
+        ln -sf "${ADM_DIR}/lai_ref.${ext}" "${UNSUP_DIR}/lai_ref.${ext}"
+    done
+    cd "$UNSUP_DIR"
+    admixture -j${THREADS} lai_ref.bed 5
+    cd - >/dev/null
+fi
+[[ -s "${UNSUP_DIR}/lai_ref.5.Q" ]] || { echo "ERROR: unsupervised ADMIXTURE failed"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 5. Parse .Q -> lai_ref_panel_samples.tsv.
-#    Component order in .Q follows alpha order of supervised labels: AFR AMR EAS EUR SAS.
+# 5. Parse both .Q files -> lai_ref_panel_samples.tsv.
+#    Supervised .Q component order = alpha of labels in .pop (AFR AMR EAS EUR SAS).
+#    Unsupervised .Q columns are c1..c5 — we map cluster -> super-pop by majority
+#    vote among anchor samples (which cluster do the AFR anchors fall into? etc).
 # ---------------------------------------------------------------------------
 echo "[$(date +%T)] write lai_ref_panel_samples.tsv"
 SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.tsv"
 python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.5.Q" \
+    "${UNSUP_DIR}/lai_ref.5.Q" "${ADM_DIR}/lai_ref.pop" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" \
     "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$SAMPLES_TSV" <<'PYEOF'
 import sys
-fam, qfile, groups_f, gnomad_f, mxb_pop_f, sas_f, thresh, out = sys.argv[1:9]
+from collections import defaultdict, Counter
+
+fam, qs_f, qu_f, pop_f, groups_f, gnomad_f, mxb_pop_f, sas_f, thresh, out = sys.argv[1:11]
 thresh = float(thresh)
 
-# sample -> super_pop from make_sample_groups.sh (AFR/AMR/EUR/EAS/CSA/OCE/MEN).
 sg = {}
 with open(groups_f) as f:
     for line in f:
         s, sp = line.rstrip("\n").split("\t")[:2]
         sg[s] = sp
 
-# sas_rfmix: 1KG-SAS sub-pops (refine CSA -> SAS for these samples).
 sas_ids = set(open(sas_f).read().split())
 
-# gnomAD meta -> sample -> sub-pop (hgdp_tgp_meta.Population).
 gnomad_pop = {}
 with open(gnomad_f) as f:
-    header = next(f).rstrip("\n").split("\t")
-    sc = header.index("project_meta.sample_id")
-    pc = header.index("hgdp_tgp_meta.Population")
+    h = next(f).rstrip("\n").split("\t")
+    sc = h.index("project_meta.sample_id"); pc = h.index("hgdp_tgp_meta.Population")
     for line in f:
-        fields = line.rstrip("\n").split("\t")
-        if len(fields) > max(sc, pc):
-            gnomad_pop[fields[sc]] = fields[pc]
+        ff = line.rstrip("\n").split("\t")
+        if len(ff) > max(sc, pc): gnomad_pop[ff[sc]] = ff[pc]
 
-# MXB sub-pop from MXB50genomes_popinfo.tsv (Sample_ID -> inferred_genetic_cluster).
 mxb_pop = {}
 with open(mxb_pop_f) as f:
     h = next(f).rstrip("\n").split("\t")
-    sc = h.index("Sample_ID")
-    pc = h.index("inferred_genetic_cluster")
+    sc = h.index("Sample_ID"); pc = h.index("inferred_genetic_cluster")
     for line in f:
         ff = line.rstrip("\n").split("\t")
         mxb_pop[ff[sc]] = ff[pc]
 
-COMPS = ["AFR", "AMR", "EAS", "EUR", "SAS"]
+SUP_COMPS = ["AFR", "AMR", "EAS", "EUR", "SAS"]
 samples = [l.split()[1] for l in open(fam)]
-Q = [list(map(float, l.split())) for l in open(qfile)]
-assert len(samples) == len(Q), f"sample/Q row mismatch: {len(samples)} vs {len(Q)}"
+Qs = [list(map(float, l.split())) for l in open(qs_f)]
+Qu = [list(map(float, l.split())) for l in open(qu_f)]
+anchors = [l.strip() for l in open(pop_f)]
+assert len(samples) == len(Qs) == len(Qu) == len(anchors)
+
+anchor_cluster_votes = defaultdict(Counter)
+for a, qu in zip(anchors, Qu):
+    if a == "-": continue
+    top = qu.index(max(qu))
+    anchor_cluster_votes[a][top] += 1
+
+cluster_to_sp = {}
+used = set()
+for sp, ctr in sorted(anchor_cluster_votes.items(),
+                     key=lambda kv: -sum(kv[1].values())):
+    for cl, _ in ctr.most_common():
+        if cl not in used:
+            cluster_to_sp[cl] = sp; used.add(cl); break
+for cl in range(5):
+    cluster_to_sp.setdefault(cl, f"UNKc{cl+1}")
+sp_to_cluster = {v: k for k, v in cluster_to_sp.items()}
+print(f"cluster_pop_map = {cluster_to_sp}", file=sys.stderr)
 
 def cohort_of(s):
-    if s.startswith("MXB"):                          return "MXB"
-    if s.startswith(("HGDP", "LP6005", "SS")):       return "HGDP"
-    if s.startswith(("HG", "NA")):                   return "1KG"
+    if s.startswith("MXB"): return "MXB"
+    if s.startswith(("HGDP", "LP6005", "SS")): return "HGDP"
+    if s.startswith(("HG", "NA")): return "1KG"
     return "OTHER"
 
 def super_pop_of(s):
-    if s in mxb_pop:                  return "AMR"
+    if s in mxb_pop: return "AMR"
     raw = sg.get(s, "NA")
-    if raw == "CSA":                  return "SAS" if s in sas_ids else "NA"
+    if raw == "CSA": return "SAS" if s in sas_ids else "NA"
     if raw in ("AFR","AMR","EUR","EAS"): return raw
     return "NA"
 
 def pop_of(s):
-    if s in mxb_pop:           return mxb_pop[s]
+    if s in mxb_pop: return mxb_pop[s]
     return gnomad_pop.get(s, "NA")
 
 with open(out, "w") as g:
-    hdr = ["sample", "cohort", "pop", "super_pop"] + [f"Q_{c}" for c in COMPS] + \
-          ["assigned", "max_Q", "included"]
+    hdr = ["sample","cohort","pop","super_pop","assigned"] \
+        + [f"Q_sup_{c}" for c in SUP_COMPS] + ["max_Q_sup","argmax_pop_sup"] \
+        + [f"Q_unsup_{cluster_to_sp[i]}" for i in range(5)] \
+        + ["max_Q_unsup","argmax_pop_unsup","sup_unsup_agree","included"]
     g.write("\t".join(hdr) + "\n")
     n_incl = 0
-    for s, q in zip(samples, Q):
+    for s, qs, qu, a in zip(samples, Qs, Qu, anchors):
         co = cohort_of(s); sp = super_pop_of(s); p = pop_of(s)
-        max_q = max(q); assigned = COMPS[q.index(max_q)]
+        max_qs = max(qs); ap_sup = SUP_COMPS[qs.index(max_qs)]
+        max_qu = max(qu); top_cl = qu.index(max_qu); ap_unsup = cluster_to_sp[top_cl]
+        agree = 1 if ap_sup == ap_unsup else 0
+        qu_ordered = [qu[sp_to_cluster[cluster_to_sp[i]]] for i in range(5)]
         if co == "MXB":
-            included = 1                # always include MXB
+            included = 1
         elif sp == "NA":
-            included = 0                # OCE / MEN / non-SAS CSA
+            included = 0
         else:
-            included = 1 if (max_q >= thresh and assigned == sp) else 0
+            included = 1 if (max_qu >= thresh and agree and ap_unsup == sp) else 0
         n_incl += included
-        g.write("\t".join([s, co, p, sp] + [f"{x:.4f}" for x in q] +
-                          [assigned, f"{max_q:.4f}", str(included)]) + "\n")
-    print(f"included {n_incl}/{len(samples)} samples", file=sys.stderr)
+        g.write("\t".join(
+            [s, co, p, sp, a]
+            + [f"{x:.4f}" for x in qs] + [f"{max_qs:.4f}", ap_sup]
+            + [f"{x:.4f}" for x in qu_ordered] + [f"{max_qu:.4f}", ap_unsup,
+                                                  str(agree), str(included)]
+        ) + "\n")
+    print(f"included {n_incl}/{len(samples)}", file=sys.stderr)
 PYEOF
 
 N_INCL=$(awk -F'\t' 'NR>1 && $NF==1' "$SAMPLES_TSV" | wc -l)
