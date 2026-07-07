@@ -4,7 +4,7 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_chunk
 #SBATCH --partition=mhgcp
-#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=08:00:00
 #SBATCH --time-min=02:00:00
 #SBATCH --mem=16G
@@ -69,6 +69,10 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 set +u
 conda activate "$CONDA_ENV"
 set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] phase_common ${PHASE_REGION}"
 SHAPEIT5_phase_common \

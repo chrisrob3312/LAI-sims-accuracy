@@ -61,6 +61,10 @@ set +u
 conda activate "$CONDA_ENV"
 set -u
 
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
+
 # 1. Detect contig naming; rename to chr-prefixed if needed
 first_contig=$(bcftools view -h "$MXB_HG19" | awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}')
 echo "[$(date +%T)] MXB first contig: $first_contig"

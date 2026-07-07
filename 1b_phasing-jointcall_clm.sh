@@ -111,6 +111,10 @@ set +u
 conda activate "$CONDA_ENV"
 set -u
 
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
+
 MERGED="${TMPDIR}/merged_chr${CHR}.bcf"
 SOFTUNION="${TMPDIR}/merged_chr${CHR}.softunion.bcf"
 QCED_PREFIX="${TMPDIR}/merged_chr${CHR}.qced"

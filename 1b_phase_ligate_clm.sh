@@ -4,7 +4,7 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_ligate
 #SBATCH --partition=mhgcp
-#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=00:15:00
 #SBATCH --time=04:00:00
 #SBATCH --mem=24G
@@ -50,6 +50,10 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 set +u
 conda activate "$CONDA_ENV"
 set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # Skip if already done.
 if [[ -s "$RECHR" && -s "${RECHR}.csi" ]]; then
