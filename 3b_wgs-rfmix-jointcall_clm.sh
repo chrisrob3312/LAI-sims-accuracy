@@ -69,8 +69,13 @@ PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"               # supply if runnin
 PEL_EAS_RFMIX="${PEL_EAS_RFMIX:-${REFS}/pel_eas_rfmix.txt}"   # supply if running panel 3
 
 # Tools
+# RFMIX_DIR holds the compiled RFMix v1 binaries (PopPhased/, TrioPhased/).
+# ANCESTRY_PIPELINE_PY3_DIR holds our Py3-ported copies of Jessica's Py2
+# shapeit2rfmix.py and RunRFMix.py (system python is Py3, originals fail).
+# RunRFMix.py must still be invoked from inside RFMIX_DIR because it calls
+# ./PopPhased/RFMix_PopPhased via a relative path.
 RFMIX_DIR="${RFMIX_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/RFMix_v1.5.4}"
-ANCESTRY_PIPELINE_DIR="${ANCESTRY_PIPELINE_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/ancestry_pipeline-master}"
+ANCESTRY_PIPELINE_PY3_DIR="${ANCESTRY_PIPELINE_PY3_DIR:-${REPO_DIR}/scripts/ancestry_pipeline_py3}"
 
 # RFMix-format genetic map (3 cols: pos chr cM)
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -221,7 +226,7 @@ run_panel_track () {
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] shapeit2rfmix"
-    python "${ANCESTRY_PIPELINE_DIR}/shapeit2rfmix.py" \
+    python "${ANCESTRY_PIPELINE_PY3_DIR}/shapeit2rfmix.py" \
         --shapeit_hap_ref     "${nat_haps},${WORKDIR}/IBS_1KG_chr${CHR}.haps,${WORKDIR}/YRI_1KG_chr${CHR}.haps" \
         --shapeit_hap_admixed "$admixed_haps" \
         --shapeit_sample_ref     "${WORKDIR}/${nat_label}_chr${CHR}.sample,${WORKDIR}/IBS_1KG_chr${CHR}.sample,${WORKDIR}/YRI_1KG_chr${CHR}.sample" \
@@ -233,7 +238,7 @@ run_panel_track () {
         --out "$out_prefix"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] RFMix v1"
-    ( cd "$RFMIX_DIR" && python RunRFMix.py \
+    ( cd "$RFMIX_DIR" && python "${ANCESTRY_PIPELINE_PY3_DIR}/RunRFMix.py" \
         -e "$RFMIX_E" -w "$RFMIX_W" -n "$RFMIX_N" -G "$GEN" \
         --num-threads "$THREADS" \
         --use-reference-panels-in-EM \
