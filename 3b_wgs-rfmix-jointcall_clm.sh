@@ -162,10 +162,10 @@ extract_haps YRI_1KG         "$YRI_RFMIX"
 [[ -s "$PEL_RFMIX"     ]] && extract_haps NAT_PEL         "$PEL_RFMIX"     || true
 [[ -s "$PEL_EAS_RFMIX" ]] && extract_haps NAT_PEL_EAS     "$PEL_EAS_RFMIX" || true
 
-# Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR portion = amr_rfmix + mxb_rfmix + mxb_simu.
+# Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR portion = amr_rfmix + mxb_rfmix + mxb_simulation.
 # Build a temporary keep-file inline since the union isn't stored separately in REFS/.
 {
-    cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simu.txt"
+    cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt"
 } > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
 extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
 

@@ -18,7 +18,7 @@
 
 popinfo_path <- "reference_ids/MXB50genomes_popinfo.tsv"
 hgdp_rfmix   <- "reference_ids/amr_rfmix.txt"
-out_simu     <- "reference_ids/mxb_simu.txt"
+out_simu     <- "reference_ids/mxb_simulation.txt"
 out_rfmix    <- "reference_ids/mxb_rfmix.txt"
 out_combined <- "reference_ids/amr_hgdpmxb_rfmix.txt"
 

@@ -30,7 +30,7 @@ mkdir -p "$OUTDIR"
 
 # Required inputs (new on this branch + existing)
 for f in amr_rfmix.txt mxb_rfmix.txt amr_hgdpmxb_rfmix.txt \
-         amr_simulation.txt mxb_simu.txt amr_hgdpmxb_simu.txt \
+         amr_simulation.txt mxb_simulation.txt amr_hgdpmxb_simulation.txt \
          eur_rfmix.txt afr_rfmix.txt; do
     [[ -s "${REFS}/${f}" ]] || { echo "ERROR: missing ${REFS}/${f}"; exit 1; }
 done
@@ -44,19 +44,19 @@ cat "${REFS}/amr_hgdpmxb_rfmix.txt" "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.t
     > "${OUTDIR}/panel4_HGDPMXB_IBS_YRI.keep"
 
 # --- Panel 5 (NEW) : HGDP-NAT-rfmix + ALL MXB (50) + IBS + YRI ---
-# All 50 MXB samples in the reference (mxb_rfmix + mxb_simu unioned).
+# All 50 MXB samples in the reference (mxb_rfmix + mxb_simulation unioned).
 # Constraint: this panel is only valid against the NAT-only sim track --
 # pairing it with the NATMXB sim track would put the 25 MXB-simu donor
 # samples into BOTH the simulated-haplotype source and the reference,
 # inflating accuracy estimates. 3b_wgs-rfmix-jointcall_clm.sh enforces
 # this by skipping (NATMXB, NAT_HGDPMXB_FULL) combinations.
-cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simu.txt" \
+cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt" \
     "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" \
     > "${OUTDIR}/panel5_HGDPMXB_FULL_IBS_YRI.keep"
 
 # --- SIMU donor lists ---
 cp "${REFS}/amr_simulation.txt"        "${OUTDIR}/simu_HGDPNAT_donors.keep"
-cp "${REFS}/amr_hgdpmxb_simu.txt"      "${OUTDIR}/simu_HGDPMXB_donors.keep"
+cp "${REFS}/amr_hgdpmxb_simulation.txt"      "${OUTDIR}/simu_HGDPMXB_donors.keep"
 
 # Sanity counts
 echo "Panel 1 (HGDP-NAT + IBS + YRI):                     $(wc -l < ${OUTDIR}/panel1_HGDPNAT_IBS_YRI.keep) IDs"
