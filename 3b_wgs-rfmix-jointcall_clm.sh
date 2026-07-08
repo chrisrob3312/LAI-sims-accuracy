@@ -153,13 +153,16 @@ extract_haps () {
            --out "$out" \
            > "${out}.plink.log" 2>&1
 
-    # Rebuild .sample header (plink2 reorders rows; legacy convention used 7-col format)
-    head -n 2 "${out}.sample" > "${out}.sample.hdr"
-    sed '1,2d' "${out}.sample" \
-        | awk '{print $1, $2, $3, 0, 0, 0, -9}' \
-        > "${out}.sample.body"
-    cat "${out}.sample.hdr" "${out}.sample.body" > "${out}.sample"
-    rm "${out}.sample.hdr" "${out}.sample.body"
+    # Rebuild both header and body in SHAPEIT 7-column format. plink2 writes a
+    # 3-column header (ID_1 ID_2 missing); shapeit2rfmix.py hard-checks for
+    # ['ID_1','ID_2','missing','father','mother','sex','plink_pheno'] and
+    # RuntimeError's on anything else. Data rows also get 4 padding cols.
+    {
+        echo "ID_1 ID_2 missing father mother sex plink_pheno"
+        echo "0 0 0 D D D B"
+        sed '1,2d' "${out}.sample" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
+    } > "${out}.sample.rewrite"
+    mv "${out}.sample.rewrite" "${out}.sample"
 }
 
 echo "[$(date +%T)] [chr${CHR}] extracting per-pop reference haps"
@@ -222,8 +225,19 @@ run_panel_track () {
     [[ -s "$nat_haps" ]] || { echo "[chr${CHR}] [$track/$panel] missing $nat_haps -- skipping"; return 0; }
 
     local admixed_haps="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.haps"
-    local admixed_sample="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.sample"
+    local admixed_sample_raw="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.sample"
     [[ -s "$admixed_haps" ]] || { echo "ERROR: missing $admixed_haps -- run 2b_simulation_clm.sh first"; exit 1; }
+
+    # 2b emits a 3-col .sample header (ID_1 ID_2 missing) but shapeit2rfmix.py
+    # requires the SHAPEIT 7-col header. Normalize into a work copy per (track,chr).
+    local admixed_sample="${WORKDIR}/${track}.${ADMIX_POP}.chr${CHR}.7col.sample"
+    if [[ ! -s "$admixed_sample" ]]; then
+        {
+            echo "ID_1 ID_2 missing father mother sex plink_pheno"
+            echo "0 0 0 D D D B"
+            sed '1,2d' "$admixed_sample_raw" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
+        } > "$admixed_sample"
+    fi
 
     local ref_keep="${WORKDIR}/REF_${panel}.ref"
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
