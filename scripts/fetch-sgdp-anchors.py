@@ -136,34 +136,41 @@ def download_metadata(dst_path: str) -> None:
 
 
 def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
-    """Yield sample dict rows from SGDP metadata TSV, respecting tier filters."""
+    """Yield sample dict rows from SGDP metadata TSV, respecting tier filters.
+
+    SGDP header line starts with '#Sequencing_Panel' -- treat it as the header,
+    not a comment. Tier is the 'Embargo' column with values FullyPublic,
+    SignedLetterNoDelay, SignedLetterDelay (or DO_NOT_USE)."""
     with open(path, encoding="utf-8", errors="replace") as f:
-        # File is whitespace/tab-delimited with a header comment block.
-        # Find the header row starting with 'Sample_ID' or similar.
-        reader = csv.DictReader(
-            (line for line in f if not line.startswith("#") and line.strip()),
-            delimiter="\t")
+        lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        if not lines:
+            return
+        # Strip leading '#' from the header row so DictReader keys match.
+        if lines[0].startswith("#"):
+            lines[0] = lines[0][1:]
+        reader = csv.DictReader(lines, delimiter="\t")
         for row in reader:
-            # SGDP uses one of these column names; normalize.
+            # Real SGDP columns: Sample_ID, Population_ID, Region, Gender, Embargo, ...
             sample = (row.get("Sample_ID") or row.get("SGDP_ID")
                       or row.get("SampleID") or row.get("Illumina_ID"))
             pop    = row.get("Population_ID") or row.get("Population")
             region = row.get("Region")
-            source = (row.get("Sequencing_source") or row.get("Panel") or "").strip()
+            embargo = (row.get("Embargo") or "").strip()
             if not sample or not pop or not region:
                 continue
-            src_lower = source.lower()
-            if "letter" in src_lower and not include_signed_letter:
+            if embargo == "DO_NOT_USE":
                 continue
-            if "fan" in src_lower and not include_fan:
+            if embargo == "SignedLetterNoDelay" and not include_signed_letter:
+                continue
+            if embargo == "SignedLetterDelay" and not (include_signed_letter and include_fan):
                 continue
             yield {
                 "sample": sample.strip(),
                 "population": pop.strip(),
                 "region": region.strip(),
-                "sequencing_source": source,
+                "sequencing_source": embargo,
                 "country": (row.get("Country") or "").strip(),
-                "sex": (row.get("Sex") or "").strip(),
+                "sex": (row.get("Gender") or row.get("Sex") or "").strip(),
                 "latitude": (row.get("Latitude") or "").strip(),
                 "longitude": (row.get("Longitude") or "").strip(),
             }
