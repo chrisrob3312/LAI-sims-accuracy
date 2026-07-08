@@ -7,7 +7,7 @@
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=00:15:00
 #SBATCH --time=06:00:00
-#SBATCH --mem=48G
+#SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-22
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/5a_lift19_chr%a_%j.out
@@ -40,7 +40,7 @@ HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg38ToHg19.over.chain.gz}"
 HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/hg19/hg19.fa}"
-PICARD_XMX="${PICARD_XMX:-36g}"
+PICARD_XMX="${PICARD_XMX:-48g}"
 # St Jude / Ensembl-annotated RNA-seq uses '1..22'. UCSC hg19.fa yields 'chr1..chr22'
 # after Picard. Set RENAME_TO_ENSEMBL=1 to rename output contigs 'chr1' -> '1'.
 RENAME_TO_ENSEMBL="${RENAME_TO_ENSEMBL:-1}"
@@ -88,6 +88,10 @@ do_lift () {
     bcftools view "$src" -Oz -o "$in_vcf"
     bcftools index -t "$in_vcf"
     echo "[$(date +%T)] [chr${CHR}] lifting $(basename "$src") -> hg19"
+    # DISABLE_SORT=true: skip Picard's in-memory sort. On 3448-sample panels the
+    # internal sort OOMs at 36g heap (java.lang.OutOfMemoryError). bcftools
+    # sort below spills to disk and handles the reorder efficiently.
+    # MAX_RECORDS_IN_RAM cut from 500000 -> 100000 to further bound heap use.
     picard "-Xmx${PICARD_XMX}" LiftoverVcf \
         I="$in_vcf" \
         O="$lift_vcf" \
@@ -97,7 +101,8 @@ do_lift () {
         RECOVER_SWAPPED_REF_ALT=true \
         WARN_ON_MISSING_CONTIG=true \
         CREATE_INDEX=false \
-        MAX_RECORDS_IN_RAM=500000
+        DISABLE_SORT=true \
+        MAX_RECORDS_IN_RAM=100000
     rm -f "$in_vcf" "${in_vcf}.tbi"
     # Optionally rename contigs to Ensembl style ('chr1' -> '1') for RNA-seq
     # collaborators using Ensembl-annotated GRCh37 (St Jude STAR pipeline).
