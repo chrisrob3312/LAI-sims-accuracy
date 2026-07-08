@@ -68,7 +68,7 @@ GNOMAD_META="${GNOMAD_META:-/storage/atkinson/shared_resources/reference/Referen
 SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
 MXB_POPINFO="${MXB_POPINFO:-${REPO_DIR}/reference_ids/MXB50genomes_popinfo.tsv}"
 REFS="${REFS:-${REPO_DIR}/reference_ids}"
-HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.95}"
+HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.90}"
 
 set -euo pipefail
 THREADS=${SLURM_CPUS_PER_TASK:-16}
@@ -244,30 +244,40 @@ with open(mxb_pop_f) as f:
         ff = line.rstrip("\n").split("\t")
         mxb_pop[ff[sc]] = ff[pc]
 
-SUP_COMPS = ["AFR", "AMR", "EAS", "EUR", "SAS"]
 samples = [l.split()[1] for l in open(fam)]
 Qs = [list(map(float, l.split())) for l in open(qs_f)]
 Qu = [list(map(float, l.split())) for l in open(qu_f)]
 anchors = [l.strip() for l in open(pop_f)]
 assert len(samples) == len(Qs) == len(Qu) == len(anchors)
 
-anchor_cluster_votes = defaultdict(Counter)
-for a, qu in zip(anchors, Qu):
-    if a == "-": continue
-    top = qu.index(max(qu))
-    anchor_cluster_votes[a][top] += 1
+# ADMIXTURE (supervised OR unsupervised) writes Q columns in the order the
+# distinct anchor labels first appear in the .pop file, which is NOT
+# alphabetical. Both mappings are derived here by anchor majority vote.
+def majority_vote_map(anchors, Q):
+    votes = defaultdict(Counter)
+    for a, q in zip(anchors, Q):
+        if a == "-": continue
+        top = q.index(max(q))
+        votes[a][top] += 1
+    m = {}
+    used = set()
+    for sp, ctr in sorted(votes.items(), key=lambda kv: -sum(kv[1].values())):
+        for cl, _ in ctr.most_common():
+            if cl not in used:
+                m[cl] = sp; used.add(cl); break
+    for cl in range(5):
+        m.setdefault(cl, f"UNKc{cl+1}")
+    return m
 
-cluster_to_sp = {}
-used = set()
-for sp, ctr in sorted(anchor_cluster_votes.items(),
-                     key=lambda kv: -sum(kv[1].values())):
-    for cl, _ in ctr.most_common():
-        if cl not in used:
-            cluster_to_sp[cl] = sp; used.add(cl); break
-for cl in range(5):
-    cluster_to_sp.setdefault(cl, f"UNKc{cl+1}")
-sp_to_cluster = {v: k for k, v in cluster_to_sp.items()}
-print(f"cluster_pop_map = {cluster_to_sp}", file=sys.stderr)
+sup_cluster_to_sp   = majority_vote_map(anchors, Qs)
+unsup_cluster_to_sp = majority_vote_map(anchors, Qu)
+sup_sp_to_cluster   = {v: k for k, v in sup_cluster_to_sp.items()}
+unsup_sp_to_cluster = {v: k for k, v in unsup_cluster_to_sp.items()}
+print(f"sup_cluster_pop_map   = {sup_cluster_to_sp}",   file=sys.stderr)
+print(f"unsup_cluster_pop_map = {unsup_cluster_to_sp}", file=sys.stderr)
+
+# TSV columns emit in stable alphabetical order for both runs.
+POP_ORDER = ["AFR", "AMR", "EAS", "EUR", "SAS"]
 
 def cohort_of(s):
     if s.startswith("MXB"): return "MXB"
@@ -288,27 +298,31 @@ def pop_of(s):
 
 with open(out, "w") as g:
     hdr = ["sample","cohort","pop","super_pop","assigned"] \
-        + [f"Q_sup_{c}" for c in SUP_COMPS] + ["max_Q_sup","argmax_pop_sup"] \
-        + [f"Q_unsup_{cluster_to_sp[i]}" for i in range(5)] \
-        + ["max_Q_unsup","argmax_pop_unsup","sup_unsup_agree","included"]
+        + [f"Q_sup_{c}"   for c in POP_ORDER] + ["max_Q_sup","argmax_pop_sup"] \
+        + [f"Q_unsup_{c}" for c in POP_ORDER] + ["max_Q_unsup","argmax_pop_unsup","sup_unsup_agree","included"]
     g.write("\t".join(hdr) + "\n")
     n_incl = 0
     for s, qs, qu, a in zip(samples, Qs, Qu, anchors):
         co = cohort_of(s); sp = super_pop_of(s); p = pop_of(s)
-        max_qs = max(qs); ap_sup = SUP_COMPS[qs.index(max_qs)]
-        max_qu = max(qu); top_cl = qu.index(max_qu); ap_unsup = cluster_to_sp[top_cl]
+        max_qs = max(qs); ap_sup   = sup_cluster_to_sp[qs.index(max_qs)]
+        max_qu = max(qu); ap_unsup = unsup_cluster_to_sp[qu.index(max_qu)]
         agree = 1 if ap_sup == ap_unsup else 0
-        qu_ordered = [qu[sp_to_cluster[cluster_to_sp[i]]] for i in range(5)]
+        # Reorder raw Q columns into stable alphabetical output for both runs.
+        qs_ordered = [qs[sup_sp_to_cluster[c]]   if c in sup_sp_to_cluster   else 0.0 for c in POP_ORDER]
+        qu_ordered = [qu[unsup_sp_to_cluster[c]] if c in unsup_sp_to_cluster else 0.0 for c in POP_ORDER]
+        # Supervised proportions are the truth for the homogeneity filter --
+        # anchor-informed and robust to cluster-labeling ambiguity in the
+        # unsupervised run. MXB samples are force-included.
         if co == "MXB":
             included = 1
         elif sp == "NA":
             included = 0
         else:
-            included = 1 if (max_qu >= thresh and agree and ap_unsup == sp) else 0
+            included = 1 if (max_qs >= thresh and ap_sup == sp) else 0
         n_incl += included
         g.write("\t".join(
             [s, co, p, sp, a]
-            + [f"{x:.4f}" for x in qs] + [f"{max_qs:.4f}", ap_sup]
+            + [f"{x:.4f}" for x in qs_ordered] + [f"{max_qs:.4f}", ap_sup]
             + [f"{x:.4f}" for x in qu_ordered] + [f"{max_qu:.4f}", ap_unsup,
                                                   str(agree), str(included)]
         ) + "\n")
