@@ -177,15 +177,17 @@ extract_haps YRI_1KG         "$YRI_RFMIX"
 # Build a temporary keep-file inline since the union isn't stored separately in REFS/.
 {
     cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt"
-} > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
-extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.txt"
+} > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
+extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
 
 # ----------------------------------------------------------------------------
 # .ref keep-files for shapeit2rfmix (sample order: NAT then EUR then AFR)
 # ----------------------------------------------------------------------------
 build_ref () {
     local panel="$1" nat_label="$2"
-    local ref="${WORKDIR}/REF_${panel}.ref"
+    # Per-chr suffix to avoid concurrent write-vs-read races between array tasks
+    # sharing the same $WORKDIR (per-pop, per-generation, not per-chr).
+    local ref="${WORKDIR}/REF_${panel}.chr${CHR}.ref"
     sed '1,2d' "${WORKDIR}/${nat_label}_chr${CHR}.sample" | awk '{print $2}' > "$ref"
     sed '1,2d' "${WORKDIR}/IBS_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
     sed '1,2d' "${WORKDIR}/YRI_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
@@ -239,7 +241,7 @@ run_panel_track () {
         } > "$admixed_sample"
     fi
 
-    local ref_keep="${WORKDIR}/REF_${panel}.ref"
+    local ref_keep="${WORKDIR}/REF_${panel}.chr${CHR}.ref"
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] shapeit2rfmix"
@@ -269,7 +271,7 @@ run_panel_track () {
     # Viterbi recoding: 1->0 (NAT), 2->1 (EUR), 3->2 (AFR)  -- matches accuracy.R input
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] recode Viterbi -> Lat3"
     sed -e 's/1/0/g' -e 's/2/1/g' -e 's/3/2/g' \
-        "${out_prefix}.rfmix.2.Viterbi.txt" > "${out_prefix}.recoded"
+        "${out_prefix}.rfmix.${RFMIX_E}.Viterbi.txt" > "${out_prefix}.recoded"
     awk '{print $1, $3}' "${out_prefix}_chr${CHR}.map" | sed 's/:.*//g' > "${out_prefix}.mappin"
     paste "${out_prefix}.mappin" "${out_prefix}.recoded" | sed 's/\t/ /g' > "${out_prefix}.Lat3"
     rm "${out_prefix}.recoded" "${out_prefix}.mappin"

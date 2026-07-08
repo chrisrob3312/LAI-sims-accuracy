@@ -126,10 +126,12 @@ for option in list(options.keys()):
 if args. admixed_phasing == "TrioPhased":
   command = " ".join(["./TrioPhased/RFMix_TrioPhased"] + parameters)
   print(command)
-  os.system(command)
+  rc = os.system(command)
+  sys.exit(rc >> 8)
 elif args.admixed_phasing == "PopPhased":
   command = " ".join(["./PopPhased/RFMix_PopPhased"] + parameters)
   print(command)
-  os.system(command)
+  rc = os.system(command)
+  sys.exit(rc >> 8)
   
 
