@@ -70,10 +70,17 @@ do_lift () {
         return 0
     fi
     [[ -s "$src" ]] || { echo "WARN: missing $src, skipping"; return 0; }
+    # Picard's htsjdk chokes on bcftools-emitted BCFs with
+    #   "Input stream does not contain a BCF encoded file; BCF magic header info not found"
+    # even when the file is a valid BCF2. Feed it a bgzipped VCF instead.
+    local in_vcf="${TMPDIR_LIFT}/$(basename "${src%.bcf}").vcf.gz"
     local lift_vcf="${TMPDIR_LIFT}/$(basename "${dst%.bcf}").lifted.vcf.gz"
+    echo "[$(date +%T)] [chr${CHR}] BCF -> VCF.gz for Picard: $(basename "$src")"
+    bcftools view "$src" -Oz -o "$in_vcf"
+    bcftools index -t "$in_vcf"
     echo "[$(date +%T)] [chr${CHR}] lifting $(basename "$src") -> hg19"
     picard "-Xmx${PICARD_XMX}" LiftoverVcf \
-        I="$src" \
+        I="$in_vcf" \
         O="$lift_vcf" \
         CHAIN="$CHAIN" \
         R="$HG19_FA" \
@@ -82,6 +89,7 @@ do_lift () {
         WARN_ON_MISSING_CONTIG=true \
         CREATE_INDEX=false \
         MAX_RECORDS_IN_RAM=500000
+    rm -f "$in_vcf" "${in_vcf}.tbi"
     # Convert to BCF and index; sort because Picard's output may need it.
     bcftools sort -m 8G -T "${TMPDIR_LIFT}/sort" -Ob -o "$dst" "$lift_vcf"
     bcftools index "$dst"
