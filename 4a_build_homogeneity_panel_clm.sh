@@ -68,7 +68,7 @@ GNOMAD_META="${GNOMAD_META:-/storage/atkinson/shared_resources/reference/Referen
 SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
 MXB_POPINFO="${MXB_POPINFO:-${REPO_DIR}/reference_ids/MXB50genomes_popinfo.tsv}"
 REFS="${REFS:-${REPO_DIR}/reference_ids}"
-HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.90}"
+HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 
 set -euo pipefail
 THREADS=${SLURM_CPUS_PER_TASK:-16}
