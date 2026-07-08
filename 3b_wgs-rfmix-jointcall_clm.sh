@@ -50,6 +50,9 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 # Project root -- all outputs anchored under this so nothing collides with
 # other lab members' work.
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+# Repo root -- BASH_SOURCE under sbatch points at /var/spool, so we fall back
+# through SLURM_SUBMIT_DIR before resolving from BASH_SOURCE.
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 
 # Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
