@@ -149,24 +149,30 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 extract_haps () {
     local label="$1" keep_file="$2"
     local out="${WORKDIR}/${label}_chr${CHR}"
-    if [[ -s "${out}.haps" ]]; then return 0; fi   # cached
-    plink2 --bcf "$PANEL" \
-           --keep <(awk '{print 0, $1}' "$keep_file") \
-           --export haps \
-           --threads "$THREADS" \
-           --out "$out" \
-           > "${out}.plink.log" 2>&1
+    # Extract .haps only if not already cached (expensive plink2 pass).
+    if [[ ! -s "${out}.haps" ]]; then
+        plink2 --bcf "$PANEL" \
+               --keep <(awk '{print 0, $1}' "$keep_file") \
+               --export haps \
+               --threads "$THREADS" \
+               --out "$out" \
+               > "${out}.plink.log" 2>&1
+    fi
 
-    # Rebuild both header and body in SHAPEIT 7-column format. plink2 writes a
-    # 3-column header (ID_1 ID_2 missing); shapeit2rfmix.py hard-checks for
-    # ['ID_1','ID_2','missing','father','mother','sex','plink_pheno'] and
-    # RuntimeError's on anything else. Data rows also get 4 padding cols.
-    {
-        echo "ID_1 ID_2 missing father mother sex plink_pheno"
-        echo "0 0 0 D D D B"
-        sed '1,2d' "${out}.sample" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
-    } > "${out}.sample.rewrite"
-    mv "${out}.sample.rewrite" "${out}.sample"
+    # Rebuild .sample in SHAPEIT 7-column format UNCONDITIONALLY. Older cached
+    # runs may have left a 3-col plink2-native header that shapeit2rfmix.py
+    # rejects with 'Shapeit sample file appears to be incorrect'. Skip only if
+    # the file already looks 7-col.
+    local first
+    first=$(head -1 "${out}.sample" 2>/dev/null)
+    if [[ "$first" != "ID_1 ID_2 missing father mother sex plink_pheno" ]]; then
+        {
+            echo "ID_1 ID_2 missing father mother sex plink_pheno"
+            echo "0 0 0 D D D B"
+            sed '1,2d' "${out}.sample" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
+        } > "${out}.sample.rewrite"
+        mv "${out}.sample.rewrite" "${out}.sample"
+    fi
 }
 
 echo "[$(date +%T)] [chr${CHR}] extracting per-pop reference haps"
