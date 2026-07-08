@@ -23,9 +23,16 @@ Output:
   reference_ids/sgdp_sas_anchors.txt        SAS samples (per subpopulation majority)
   reference_ids/sgdp_oceania_anchors.txt    Papuan / Melanesian / Australian
   reference_ids/sgdp_men_anchors.txt        Middle Eastern (Bedouin, Iranian, ...)
-  reference_ids/sgdp_manifest.tsv           full filtered metadata rows for the
-                                            three groups above -- provenance for
+  reference_ids/sgdp_amr_anchors.txt        Native American (Karitiana, Surui,
+                                            Mayan, Pima, Mixe, Zapotec, Piapoco...)
+  reference_ids/sgdp_manifest.tsv           full filtered metadata rows for all
+                                            four groups above -- provenance for
                                             the paper + easy re-download
+
+Companion source (dbGaP-restricted, not scraped here): Jimenez-Kaufmann et al.
+(Moreno-Estrada lab) rare-variant imputation reference panel supplement lists
+publicly available InMEGEN / MAIS Amerindigenous sample IDs; ingest via a
+separate dbGaP-authorized script when access is granted.
 
 Usage:
   scripts/fetch-sgdp-anchors.py \
@@ -68,9 +75,17 @@ DEFAULT_METADATA_URL = (
 # SGDP "Region" values seen in the public metadata:
 #   Africa, America, CentralAsiaSiberia, EastAsia, WestEurasia, SouthAsia, Oceania
 # "WestEurasia" is Europe + Middle East -> refine by Population_ID.
+# "America" is Native American -> whitelist homogeneous NAT-like populations.
 SGDP_TO_SUPERPOP = {
     "SouthAsia":         "SAS",
     "Oceania":           "OCE",
+}
+
+# SGDP "America" populations that are homogeneous NAT (per Reich lab curation
+# in Mallick et al. 2016 Table S1). Excludes Mexican-American / admixed cohorts.
+AMR_POPULATIONS = {
+    "Karitiana", "Surui", "Mayan", "Pima", "Mixe",
+    "Zapotec", "Piapoco", "Quechua", "Chane",
 }
 
 # WestEurasia populations that we bucket as Middle Eastern.
@@ -124,7 +139,7 @@ def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
 
 
 def bucket(rows, cap_per_pop=None):
-    """Assign each row to SAS/OCE/MEN or drop. Optional per-population cap."""
+    """Assign each row to SAS/OCE/MEN/AMR or drop. Optional per-population cap."""
     per_pop_seen = Counter()
     buckets = defaultdict(list)
     for r in rows:
@@ -133,6 +148,8 @@ def bucket(rows, cap_per_pop=None):
         if super_pop is None:
             if region == "WestEurasia" and pop in MEN_POPULATIONS:
                 super_pop = "MEN"
+            elif region == "America" and pop in AMR_POPULATIONS:
+                super_pop = "AMR"
             else:
                 continue
         if cap_per_pop and per_pop_seen[(super_pop, pop)] >= cap_per_pop:
@@ -175,7 +192,8 @@ def main():
     # Anchor lists (one sample per line, sorted for deterministic output).
     for sp_key, out_name in [("SAS", "sgdp_sas_anchors.txt"),
                              ("OCE", "sgdp_oceania_anchors.txt"),
-                             ("MEN", "sgdp_men_anchors.txt")]:
+                             ("MEN", "sgdp_men_anchors.txt"),
+                             ("AMR", "sgdp_amr_anchors.txt")]:
         out_path = os.path.join(args.outdir, out_name)
         samples = sorted({r["sample"] for r in buckets.get(sp_key, [])})
         with open(out_path, "w") as g:
@@ -191,7 +209,7 @@ def main():
               "sex", "latitude", "longitude", "sequencing_source"]
     with open(manifest_path, "w") as g:
         g.write("\t".join(fields) + "\n")
-        for sp_key in ("SAS", "OCE", "MEN"):
+        for sp_key in ("SAS", "OCE", "MEN", "AMR"):
             for r in sorted(buckets.get(sp_key, []),
                             key=lambda x: (x["population"], x["sample"])):
                 g.write("\t".join(str(r.get(k, "")) for k in fields) + "\n")
