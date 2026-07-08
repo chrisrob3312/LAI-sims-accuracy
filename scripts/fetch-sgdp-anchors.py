@@ -62,6 +62,8 @@ Notes:
 import argparse
 import csv
 import os
+import shutil
+import subprocess
 import sys
 import urllib.request
 from collections import defaultdict, Counter
@@ -100,8 +102,28 @@ MEN_POPULATIONS = {
 }
 
 def download_metadata(dst_path: str) -> None:
+    """Fetch via urllib; fall back to curl/wget when the cluster's Python has no
+    CA bundle (common HPC issue: SSLCertVerificationError). curl/wget on the
+    cluster inherits the system trust store and Just Works."""
     print(f"[fetch] downloading SGDP metadata -> {dst_path}", file=sys.stderr)
-    urllib.request.urlretrieve(DEFAULT_METADATA_URL, dst_path)
+    try:
+        urllib.request.urlretrieve(DEFAULT_METADATA_URL, dst_path)
+        return
+    except Exception as e:
+        print(f"[fetch] urllib failed ({type(e).__name__}: {e}); "
+              f"trying curl/wget", file=sys.stderr)
+    for tool, argv in (("curl", ["curl", "-sSL", "-o", dst_path, DEFAULT_METADATA_URL]),
+                       ("wget", ["wget", "-q", "-O", dst_path, DEFAULT_METADATA_URL])):
+        if shutil.which(tool) is None:
+            continue
+        r = subprocess.run(argv)
+        if r.returncode == 0 and os.path.getsize(dst_path) > 0:
+            print(f"[fetch] downloaded via {tool}", file=sys.stderr)
+            return
+    raise RuntimeError(
+        "All download attempts failed. Fetch the file manually with:\n"
+        f"  curl -sSL -o sgdp_metadata.tsv '{DEFAULT_METADATA_URL}'\n"
+        "and pass it with --metadata-tsv sgdp_metadata.tsv")
 
 
 def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
