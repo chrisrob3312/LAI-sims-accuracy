@@ -41,6 +41,9 @@ HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg38ToHg19.over.chain.gz}"
 HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/hg19/hg19.fa}"
 PICARD_XMX="${PICARD_XMX:-36g}"
+# St Jude / Ensembl-annotated RNA-seq uses '1..22'. UCSC hg19.fa yields 'chr1..chr22'
+# after Picard. Set RENAME_TO_ENSEMBL=1 to rename output contigs 'chr1' -> '1'.
+RENAME_TO_ENSEMBL="${RENAME_TO_ENSEMBL:-1}"
 
 set -euo pipefail
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job}
@@ -50,6 +53,10 @@ mkdir -p "$HG19_DIR/all_samples" "$HG19_DIR/homog_5pop" "$TMPDIR_LIFT"
 
 [[ -s "$CHAIN"   ]] || { echo "ERROR: missing $CHAIN"; exit 1; }
 [[ -s "$HG19_FA" ]] || { echo "ERROR: missing $HG19_FA. Override with HG19_FA=..."; exit 1; }
+# Picard requires a .dict sidecar. Without it, LiftoverVcf fails only AFTER the
+# slow BCF -> VCF.gz conversion; check up front.
+HG19_DICT="${HG19_FA%.fa}.dict"
+[[ -s "$HG19_DICT" ]] || { echo "ERROR: missing Picard sequence dictionary $HG19_DICT"; exit 1; }
 
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
@@ -69,7 +76,9 @@ do_lift () {
         echo "[$(date +%T)] [chr${CHR}] $dst exists, skipping"
         return 0
     fi
-    [[ -s "$src" ]] || { echo "WARN: missing $src, skipping"; return 0; }
+    # Fail loud on missing input -- prior silent 'return 0' hid a real 4a
+    # regression that dropped all non-AMR homog samples.
+    [[ -s "$src" ]] || { echo "ERROR: missing $src"; exit 2; }
     # Picard's htsjdk chokes on bcftools-emitted BCFs with
     #   "Input stream does not contain a BCF encoded file; BCF magic header info not found"
     # even when the file is a valid BCF2. Feed it a bgzipped VCF instead.
@@ -90,6 +99,21 @@ do_lift () {
         CREATE_INDEX=false \
         MAX_RECORDS_IN_RAM=500000
     rm -f "$in_vcf" "${in_vcf}.tbi"
+    # Optionally rename contigs to Ensembl style ('chr1' -> '1') for RNA-seq
+    # collaborators using Ensembl-annotated GRCh37 (St Jude STAR pipeline).
+    if [[ "${RENAME_TO_ENSEMBL}" == "1" ]]; then
+        local rename_tsv="${TMPDIR_LIFT}/rename_chrs.tsv"
+        if [[ ! -s "$rename_tsv" ]]; then
+            : > "$rename_tsv"
+            for c in {1..22} X Y MT; do echo -e "chr${c}\t${c}" >> "$rename_tsv"; done
+            # UCSC hg19 uses 'chrM'; Ensembl uses 'MT'.
+            echo -e "chrM\tMT" >> "$rename_tsv"
+        fi
+        local lift_vcf_renamed="${TMPDIR_LIFT}/$(basename "${dst%.bcf}").lifted.renamed.vcf.gz"
+        bcftools annotate --rename-chrs "$rename_tsv" -Oz -o "$lift_vcf_renamed" "$lift_vcf"
+        rm -f "$lift_vcf"
+        lift_vcf="$lift_vcf_renamed"
+    fi
     # Convert to BCF and index; sort because Picard's output may need it.
     bcftools sort -m 8G -T "${TMPDIR_LIFT}/sort" -Ob -o "$dst" "$lift_vcf"
     bcftools index "$dst"

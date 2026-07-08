@@ -93,9 +93,13 @@ NOTREF_FILE="${NOTREF_FILE:-${SIM_DIR}/${ADMIX_POP}.notref}"  # IDs of simulated
 # Which panels to run (space-separated; comment out 2/3 if you don't have PEL lists yet)
 # If pel_rfmix.txt / pel_eas_rfmix.txt exist (built by build-pel-panels.sh),
 # auto-include panels 2 and 3 in addition to 1 and 4.
-DEFAULT_PANELS="NAT_HGDP NAT_HGDPMXB NAT_HGDPMXB_FULL"
-[[ -s "${REFS}/pel_rfmix.txt"     ]] && DEFAULT_PANELS="NAT_HGDP NAT_PEL ${DEFAULT_PANELS#NAT_HGDP }"
-[[ -s "${REFS}/pel_eas_rfmix.txt" ]] && DEFAULT_PANELS="${DEFAULT_PANELS/NAT_PEL /NAT_PEL NAT_PEL_EAS }"
+# Rebuild DEFAULT_PANELS unambiguously so PEL_EAS is not silently dropped when
+# only pel_eas_rfmix.txt exists (the previous string-substitution was a no-op
+# in that case).
+DEFAULT_PANELS="NAT_HGDP"
+[[ -s "${REFS}/pel_rfmix.txt"     ]] && DEFAULT_PANELS="${DEFAULT_PANELS} NAT_PEL"
+[[ -s "${REFS}/pel_eas_rfmix.txt" ]] && DEFAULT_PANELS="${DEFAULT_PANELS} NAT_PEL_EAS"
+DEFAULT_PANELS="${DEFAULT_PANELS} NAT_HGDPMXB NAT_HGDPMXB_FULL"
 PANELS_TO_RUN="${PANELS_TO_RUN:-$DEFAULT_PANELS}"
 
 # Sim tracks to run (space-separated)

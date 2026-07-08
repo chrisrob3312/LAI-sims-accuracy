@@ -15,7 +15,7 @@ def open_shapeit(filename):
     open haps and sample files
     """
     if filename.endswith('gz'):
-        shapeit_file = gzip.open(filename)
+        shapeit_file = gzip.open(filename, 'rt')
     else:
         shapeit_file = open(filename)
     return(shapeit_file)
