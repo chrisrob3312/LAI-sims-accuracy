@@ -29,10 +29,19 @@ Output:
                                             four groups above -- provenance for
                                             the paper + easy re-download
 
-Companion source (dbGaP-restricted, not scraped here): Jimenez-Kaufmann et al.
-(Moreno-Estrada lab) rare-variant imputation reference panel supplement lists
-publicly available InMEGEN / MAIS Amerindigenous sample IDs; ingest via a
-separate dbGaP-authorized script when access is granted.
+Companion sources (each needs its own ingestion script, not scraped here):
+  * Jimenez-Kaufmann et al. (Moreno-Estrada) rare-variant imputation reference
+    panel: publicly available InMEGEN / MAIS Amerindigenous sample IDs are in
+    the supplementary info. Individual genotypes are dbGaP-restricted; the
+    Atkinson lab has a DUA with Moreno-Estrada for the MXB portion, so an
+    InMEGEN ingestion script is feasible.
+  * LASI-DAD (Li et al., HGG Adv 2026): 2,680 Indian WGS participants,
+    publicly available, 69.5M variants. Highest-yield SAS panel currently
+    available (SGDP SAS n~30 is a floor; LASI-DAD is ~100x that). Access
+    documented at PMC12945573.
+  * SG10K_Health (Chang et al., HMG 2026): ~10K Singaporean (Chinese, Malay,
+    Indian) WGS. Consortium panel -- access via SG10K_Health MTA. Higher
+    ROI for EAS refinement than SAS.
 
 Usage:
   scripts/fetch-sgdp-anchors.py \
