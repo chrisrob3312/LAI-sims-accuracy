@@ -93,14 +93,18 @@ do_rsync () {
     ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" "mkdir -p '${remote_full}'"
 
     # rsync. Include relevant data files only; exclude tmp / scratch / logs.
+    # Excludes must precede the '*/' catch-all include -- rsync's first-match
+    # wins, and '*/' would otherwise pull in tmp/ before the exclude rule fires.
     rsync -avz --partial --progress \
         -e "ssh ${MAB_SSH_OPTS}" \
+        --exclude='tmp/' --exclude='.stage_*' \
+        --exclude='*.log' --exclude='*.tmp' \
+        --exclude='*.rejected.vcf.gz' \
         --include='*/' \
         --include='*.bcf' --include='*.bcf.csi' \
         --include='*.vcf.gz' --include='*.vcf.gz.csi' --include='*.vcf.gz.tbi' \
         --include='*.tsv' --include='*.txt' \
         --include='.manifest.txt' \
-        --exclude='tmp/' --exclude='*.log' --exclude='*.tmp' \
         --exclude='*' \
         "$src/" \
         "${MAB_USER}@${MAB_HOST}:${remote_full}/"
