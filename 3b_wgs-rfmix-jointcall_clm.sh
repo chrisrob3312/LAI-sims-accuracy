@@ -255,7 +255,7 @@ run_panel_track () {
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] shapeit2rfmix"
-    python "${ANCESTRY_PIPELINE_PY3_DIR}/shapeit2rfmix.py" \
+    python -u "${ANCESTRY_PIPELINE_PY3_DIR}/shapeit2rfmix.py" \
         --shapeit_hap_ref     "${nat_haps},${WORKDIR}/IBS_1KG_chr${CHR}.haps,${WORKDIR}/YRI_1KG_chr${CHR}.haps" \
         --shapeit_hap_admixed "$admixed_haps" \
         --shapeit_sample_ref     "${WORKDIR}/${nat_label}_chr${CHR}.sample,${WORKDIR}/IBS_1KG_chr${CHR}.sample,${WORKDIR}/YRI_1KG_chr${CHR}.sample" \
@@ -267,7 +267,7 @@ run_panel_track () {
         --out "$out_prefix"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] RFMix v1"
-    ( cd "$RFMIX_DIR" && python "${ANCESTRY_PIPELINE_PY3_DIR}/RunRFMix.py" \
+    ( cd "$RFMIX_DIR" && python -u "${ANCESTRY_PIPELINE_PY3_DIR}/RunRFMix.py" \
         -e "$RFMIX_E" -w "$RFMIX_W" -n "$RFMIX_N" -G "$GEN" \
         --num-threads "$THREADS" \
         --use-reference-panels-in-EM \
@@ -287,10 +287,41 @@ run_panel_track () {
     rm "${out_prefix}.recoded" "${out_prefix}.mappin"
 }
 
+# -----------------------------------------------------------------------------
+# Parallelize the (track x panel) combo grid within one array task. On 12
+# CPUs, run 3 combos concurrently; each RFMix invocation gets 4 threads via
+# per-combo THREADS override (see run_panel_track's use of --num-threads).
+# Skip the (NATMXB, NAT_HGDPMXB_FULL) combo -- it double-dips donors.
+# -----------------------------------------------------------------------------
+COMBOS_MAX_PARALLEL="${COMBOS_MAX_PARALLEL:-3}"
+COMBO_THREADS="${COMBO_THREADS:-4}"
+THREADS="$COMBO_THREADS"    # picked up by run_panel_track via --num-threads
+
+echo "[$(date +%T)] [chr${CHR}] launching combos with max ${COMBOS_MAX_PARALLEL} concurrent, ${COMBO_THREADS} threads each"
+active=0
 for track in $TRACKS_TO_RUN; do
     for panel in $PANELS_TO_RUN; do
-        run_panel_track "$track" "$panel"
+        if [[ "$track" == "NATMXB" && "$panel" == "NAT_HGDPMXB_FULL" ]]; then
+            echo "[$(date +%T)] [chr${CHR}] skip invalid combo $track/$panel (donors overlap)"
+            continue
+        fi
+        # Redirect each combo's stdout to its own log so parallel writes don't
+        # interleave line-by-line; keep the main stdout summary short.
+        combo_log="${WORKDIR}/_combo_${track}_${panel}_chr${CHR}.log"
+        (
+            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] START (log: $(basename "$combo_log"))"
+            run_panel_track "$track" "$panel" >> "$combo_log" 2>&1
+            rc=$?
+            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] END rc=${rc}"
+            exit $rc
+        ) &
+        active=$((active + 1))
+        if (( active >= COMBOS_MAX_PARALLEL )); then
+            wait -n
+            active=$((active - 1))
+        fi
     done
 done
+wait
 
 echo "[$(date +%T)] [chr${CHR}] # Complete. RFMix outputs in $WORKDIR"
