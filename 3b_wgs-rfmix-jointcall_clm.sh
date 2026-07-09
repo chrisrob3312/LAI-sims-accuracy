@@ -288,40 +288,50 @@ run_panel_track () {
 }
 
 # -----------------------------------------------------------------------------
-# Parallelize the (track x panel) combo grid within one array task. On 12
-# CPUs, run 3 combos concurrently; each RFMix invocation gets 4 threads via
-# per-combo THREADS override (see run_panel_track's use of --num-threads).
+# Parallelize the (track x panel) combo grid in fixed-size batches. Wall
+# clock per task = ceil(N_combos / BATCH) x slowest-combo-in-batch. On 12
+# CPUs, BATCH=3 with COMBO_THREADS=4 saturates all cores.
+#
+# Fixed-size batches (not a rolling wait -n) because bash on this cluster is
+# older than 4.3 and doesn't support 'wait -n'. Batched wait is bash 3-safe.
 # Skip the (NATMXB, NAT_HGDPMXB_FULL) combo -- it double-dips donors.
 # -----------------------------------------------------------------------------
-COMBOS_MAX_PARALLEL="${COMBOS_MAX_PARALLEL:-3}"
+BATCH_SIZE="${COMBOS_MAX_PARALLEL:-3}"
 COMBO_THREADS="${COMBO_THREADS:-4}"
 THREADS="$COMBO_THREADS"    # picked up by run_panel_track via --num-threads
 
-echo "[$(date +%T)] [chr${CHR}] launching combos with max ${COMBOS_MAX_PARALLEL} concurrent, ${COMBO_THREADS} threads each"
-active=0
+combos=()
 for track in $TRACKS_TO_RUN; do
     for panel in $PANELS_TO_RUN; do
         if [[ "$track" == "NATMXB" && "$panel" == "NAT_HGDPMXB_FULL" ]]; then
             echo "[$(date +%T)] [chr${CHR}] skip invalid combo $track/$panel (donors overlap)"
             continue
         fi
-        # Redirect each combo's stdout to its own log so parallel writes don't
-        # interleave line-by-line; keep the main stdout summary short.
+        combos+=("${track}|${panel}")
+    done
+done
+
+echo "[$(date +%T)] [chr${CHR}] launching ${#combos[@]} combos in batches of ${BATCH_SIZE}, ${COMBO_THREADS} threads each"
+
+batch_num=0
+for ((i=0; i<${#combos[@]}; i+=BATCH_SIZE)); do
+    batch_num=$((batch_num + 1))
+    echo "[$(date +%T)] [chr${CHR}] --- batch ${batch_num}: ${combos[@]:i:BATCH_SIZE} ---"
+    for combo in "${combos[@]:i:BATCH_SIZE}"; do
+        track="${combo%|*}"; panel="${combo#*|}"
         combo_log="${WORKDIR}/_combo_${track}_${panel}_chr${CHR}.log"
         (
+            set +e
             echo "[$(date +%T)] [chr${CHR}] [$track/$panel] START (log: $(basename "$combo_log"))"
             run_panel_track "$track" "$panel" >> "$combo_log" 2>&1
             rc=$?
             echo "[$(date +%T)] [chr${CHR}] [$track/$panel] END rc=${rc}"
-            exit $rc
+            exit "$rc"
         ) &
-        active=$((active + 1))
-        if (( active >= COMBOS_MAX_PARALLEL )); then
-            wait -n
-            active=$((active - 1))
-        fi
     done
+    # Wait for all subshells in this batch; don't let set -e kill us on a
+    # failed combo (the failed combo's log preserves the traceback).
+    wait || true
 done
-wait
 
 echo "[$(date +%T)] [chr${CHR}] # Complete. RFMix outputs in $WORKDIR"
