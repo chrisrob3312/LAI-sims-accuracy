@@ -95,7 +95,11 @@ do_rsync () {
     # rsync. Include relevant data files only; exclude tmp / scratch / logs.
     # Excludes must precede the '*/' catch-all include -- rsync's first-match
     # wins, and '*/' would otherwise pull in tmp/ before the exclude rule fires.
-    rsync -avz --partial --progress \
+    # -L / --copy-links: dereference symlinks and send the target file. The
+    # hg38 handlers stage symlinks in .stage_*/ dirs, and without -L rsync
+    # preserves those symlinks (pointing at source-cluster paths that don't
+    # exist on mab), producing 188K of dead links instead of real BCFs.
+    rsync -avzL --partial --progress \
         -e "ssh ${MAB_SSH_OPTS}" \
         --exclude='tmp/' --exclude='.stage_*' \
         --exclude='*.log' --exclude='*.tmp' \
