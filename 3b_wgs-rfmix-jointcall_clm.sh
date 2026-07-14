@@ -245,6 +245,16 @@ run_panel_track () {
     local nat_haps="${WORKDIR}/${nat_label}_chr${CHR}.haps"
     [[ -s "$nat_haps" ]] || { echo "[chr${CHR}] [$track/$panel] missing $nat_haps -- skipping"; return 0; }
 
+    # Idempotency: skip if the final .Lat3 output already exists and is non-empty.
+    # Lets a resubmit only redo combos that didn't complete previously, and
+    # protects the (long) RFMix binary run from re-running after transient
+    # failures elsewhere in the array task.
+    local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
+    if [[ -s "${out_prefix}.Lat3" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] [$track/$panel] already have .Lat3, skipping combo"
+        return 0
+    fi
+
     local admixed_haps="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.haps"
     local admixed_sample_raw="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.sample"
     [[ -s "$admixed_haps" ]] || { echo "ERROR: missing $admixed_haps -- run 2b_simulation_clm.sh first"; exit 1; }
@@ -261,7 +271,6 @@ run_panel_track () {
     fi
 
     local ref_keep="${WORKDIR}/REF_${panel}.chr${CHR}.ref"
-    local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] shapeit2rfmix"
     python -u "${ANCESTRY_PIPELINE_PY3_DIR}/shapeit2rfmix.py" \
