@@ -143,6 +143,15 @@ set -u
 unset PYTHONHOME PYTHONPATH
 export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
+# Pin OpenBLAS / OMP / MKL to single-thread. numpy pulls in OpenBLAS which,
+# left to spawn one thread per available CPU on the node, deadlocks or stalls
+# when 2-3 combos are running in parallel plus RFMix's own OpenMP threading.
+# We saw the same OpenBLAS symptom on mab; single-thread everywhere fixes it.
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # ----------------------------------------------------------------------------
 # Helper: per-pop .haps/.sample for one panel-component (NAT, IBS, YRI, etc.)
 # ----------------------------------------------------------------------------
