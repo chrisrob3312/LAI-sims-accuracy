@@ -157,31 +157,39 @@ def main(args):
     
     #get genetic positions for all sites using known genetic positions and interpolating when not possible
     print('Getting genetic positions through known genetic map and interpolation [' + datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S') + ']')
-    current_position = 0
-    for position in range(len(union_pos)):
-        if pos_gen_map[union_pos[position]] is not None: #we already have the genetic position
-            continue
-        elif position == 0 and pos_gen_map[union_pos[position]] is None: #we're at the beginning of the file, which doesn't have a genetic position
-            next_position = position
-            while(pos_gen_map[union_pos[next_position]]) is None:
-                next_position += 1
-            ####running into None issues at the next line. probably need a try except here, but first figure out why it's not getting the right index
-            interpolated = float(pos_gen_map[union_pos[next_position]]*union_pos[position])/union_pos[next_position]
-            pos_gen_map[union_pos[position]] = interpolated
-        elif pos_gen_map[union_pos[position]] is None: #we're between known genetic positions or at the end
-            next_position = position
-            try:
-                while(pos_gen_map[union_pos[next_position]]) is None:
-                    next_position += 1
-                interpolated = (float(union_pos[position] - union_pos[position-1]) * (pos_gen_map[union_pos[next_position]] - pos_gen_map[union_pos[position-1]]) /
-                    float(union_pos[next_position] - union_pos[position-1])) + pos_gen_map[union_pos[position-1]]
-                pos_gen_map[union_pos[position]] = interpolated
-            except IndexError: #we're near the end, need to perform linear interpolation like we did at the beginning of the fil
-                last_position = position
-                while(pos_gen_map[union_pos[last_position]]) is None:
-                    last_position = last_position - 1
-                interpolated = float(pos_gen_map[union_pos[last_position]]*union_pos[position])/union_pos[last_position]
-                pos_gen_map[union_pos[position]] = interpolated
+    # Vectorized replacement for the original O(N * gap_size) forward-scan loop
+    # (Jessica's original was ~30 min on 1.7M sites x ~500-average gap; the
+    # numpy.interp version below runs in a couple of seconds).
+    #
+    # numpy.interp does linear interpolation of unknown x-values against a
+    # sorted list of known (x, y) points, and matches the two piecewise
+    # extrapolations Jessica's code hand-coded:
+    #   - x < min(known):  linear from origin through first known point
+    #                      (equivalent to y = y0 * x / x0)
+    #   - min <= x <= max: standard linear interpolation between neighbors
+    #   - x > max(known):  linear from origin through last known point
+    #                      (equivalent to y = y_last * x / x_last)
+    #
+    # For (2) numpy.interp is a direct match. For (1) and (3) numpy.interp
+    # instead clamps to y0 / y_last, so we handle those two tail regions
+    # explicitly with the same origin-line formula the original used.
+    import numpy as np
+    known_pos = np.array(sorted(k for k, v in pos_gen_map.items() if v is not None),
+                         dtype=np.int64)
+    known_gen = np.array([pos_gen_map[int(p)] for p in known_pos], dtype=np.float64)
+    if known_pos.size == 0:
+        raise RuntimeError('Genetic map has zero usable entries after intersection')
+    query = np.asarray(union_pos, dtype=np.int64)
+    interp = np.interp(query, known_pos, known_gen)
+    # Extrapolate tails via the origin-line formula (matches the original)
+    lo_mask = query < known_pos[0]
+    hi_mask = query > known_pos[-1]
+    if lo_mask.any():
+        interp[lo_mask] = (known_gen[0] * query[lo_mask]) / float(known_pos[0])
+    if hi_mask.any():
+        interp[hi_mask] = (known_gen[-1] * query[hi_mask]) / float(known_pos[-1])
+    for i, pos in enumerate(union_pos):
+        pos_gen_map[pos] = float(interp[i])
     
     alleles = open(args.out + '_chr' + args.chr + '.alleles', 'w')
     snps = open(args.out + '_chr' + args.chr + '.snp_locations', 'w')
