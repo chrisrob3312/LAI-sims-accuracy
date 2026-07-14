@@ -3,7 +3,7 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_phase
-#SBATCH --partition=mhgcp,atkinson
+#SBATCH --partition=atkinson,mhgcp
 #SBATCH --time=72:00:00
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=32

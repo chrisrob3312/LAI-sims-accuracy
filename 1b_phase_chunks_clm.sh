@@ -3,7 +3,7 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_chunk
-#SBATCH --partition=mhgcp
+#SBATCH --partition=atkinson,mhgcp
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=08:00:00
 #SBATCH --time-min=02:00:00
