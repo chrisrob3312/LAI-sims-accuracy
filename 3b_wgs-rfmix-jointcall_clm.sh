@@ -245,15 +245,25 @@ run_panel_track () {
     local nat_haps="${WORKDIR}/${nat_label}_chr${CHR}.haps"
     [[ -s "$nat_haps" ]] || { echo "[chr${CHR}] [$track/$panel] missing $nat_haps -- skipping"; return 0; }
 
-    # Idempotency: skip if the final .Lat3 output already exists and is non-empty.
-    # Lets a resubmit only redo combos that didn't complete previously, and
-    # protects the (long) RFMix binary run from re-running after transient
-    # failures elsewhere in the array task.
+    # Idempotency: skip only when a '.done' marker exists AND .Lat3 is non-empty.
+    # The .done marker is touched at the very end of this function, after every
+    # step (shapeit2rfmix, RFMix, sed, paste) has already succeeded. If a run
+    # was SIGKILL'd mid-way (walltime, OOM, node preemption), RFMix leaves a
+    # truncated Viterbi -- sed+paste then produce a non-empty but WRONG .Lat3.
+    # -s on .Lat3 alone would falsely skip that case. Keying on the explicit
+    # .done marker ensures we only skip combos that completed cleanly.
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
-    if [[ -s "${out_prefix}.Lat3" ]]; then
-        echo "[$(date +%T)] [chr${CHR}] [$track/$panel] already have .Lat3, skipping combo"
+    if [[ -f "${out_prefix}.done" && -s "${out_prefix}.Lat3" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] [$track/$panel] .done marker present + .Lat3 non-empty, skipping combo"
         return 0
     fi
+    # Clear any partial artifacts from a prior interrupted run so we start clean.
+    rm -f "${out_prefix}.done" "${out_prefix}.Lat3" \
+          "${out_prefix}.rfmix.${RFMIX_E}.Viterbi.txt" \
+          "${out_prefix}.rfmix.${RFMIX_E}.ForwardBackward.txt" \
+          "${out_prefix}.rfmix.${RFMIX_E}.SNPsPerWindow.txt" \
+          "${out_prefix}.rfmix.log.txt" \
+          "${out_prefix}.recoded" "${out_prefix}.mappin" 2>/dev/null || true
 
     local admixed_haps="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.haps"
     local admixed_sample_raw="${SIM_DIR}/${track}.${ADMIX_POP}.chr${CHR}.sample"
@@ -298,11 +308,32 @@ run_panel_track () {
 
     # Viterbi recoding: 1->0 (NAT), 2->1 (EUR), 3->2 (AFR)  -- matches accuracy.R input
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] recode Viterbi -> Lat3"
-    sed -e 's/1/0/g' -e 's/2/1/g' -e 's/3/2/g' \
-        "${out_prefix}.rfmix.${RFMIX_E}.Viterbi.txt" > "${out_prefix}.recoded"
-    awk '{print $1, $3}' "${out_prefix}_chr${CHR}.map" | sed 's/:.*//g' > "${out_prefix}.mappin"
+    # Guard: refuse to recode from a truncated RFMix output. Line count of the
+    # Viterbi text should equal the site count that shapeit2rfmix wrote to the
+    # .map file (both are per-site). Mismatch => RFMix was killed mid-run.
+    local vit="${out_prefix}.rfmix.${RFMIX_E}.Viterbi.txt"
+    local map="${out_prefix}_chr${CHR}.map"
+    [[ -s "$vit" ]] || { echo "[chr${CHR}] [$track/$panel] MISSING Viterbi output -- RFMix failed"; return 1; }
+    [[ -s "$map" ]] || { echo "[chr${CHR}] [$track/$panel] MISSING .map -- shapeit2rfmix failed"; return 1; }
+    local n_vit=$(wc -l < "$vit")
+    local n_map=$(wc -l < "$map")
+    if [[ "$n_vit" -ne "$n_map" ]]; then
+        echo "[chr${CHR}] [$track/$panel] TRUNCATED: Viterbi has ${n_vit} lines, .map has ${n_map} -- likely killed mid-write"
+        return 1
+    fi
+    sed -e 's/1/0/g' -e 's/2/1/g' -e 's/3/2/g' "$vit" > "${out_prefix}.recoded"
+    awk '{print $1, $3}' "$map" | sed 's/:.*//g' > "${out_prefix}.mappin"
     paste "${out_prefix}.mappin" "${out_prefix}.recoded" | sed 's/\t/ /g' > "${out_prefix}.Lat3"
-    rm "${out_prefix}.recoded" "${out_prefix}.mappin"
+    rm -f "${out_prefix}.recoded" "${out_prefix}.mappin"
+    # Final sanity: .Lat3 must have same line count as Viterbi/map. If so, we're done.
+    local n_lat3=$(wc -l < "${out_prefix}.Lat3")
+    if [[ "$n_lat3" -eq "$n_map" && "$n_lat3" -gt 0 ]]; then
+        touch "${out_prefix}.done"
+        echo "[$(date +%T)] [chr${CHR}] [$track/$panel] COMPLETE (${n_lat3} sites) -- .done marker written"
+    else
+        echo "[chr${CHR}] [$track/$panel] BAD .Lat3 (${n_lat3} vs .map=${n_map}) -- not marking done"
+        return 1
+    fi
 }
 
 # -----------------------------------------------------------------------------
