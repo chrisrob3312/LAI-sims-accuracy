@@ -6,12 +6,12 @@
 #SBATCH --partition=atkinson,mhgcp
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=04:00:00
-#SBATCH --time=96:00:00
-#SBATCH --mem=64G
-#SBATCH --cpus-per-task=12
-#SBATCH --array=1-22
-#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.out
-#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_chr%a_%j.err
+#SBATCH --time=24:00:00
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=4
+#SBATCH --array=1-198
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_task%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/3b_rfmix_task%a_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
@@ -116,8 +116,39 @@ LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 
 set -euo pipefail
 
-CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}
-THREADS=${SLURM_CPUS_PER_TASK:-12}
+: "${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-198 ...)}"
+THREADS=${SLURM_CPUS_PER_TASK:-4}
+
+# ----------------------------------------------------------------------------
+# Per-combo fan-out: one SLURM task = one (chr, track, panel). Enumerate the
+# combo grid deterministically so TASK_ID -> (chr, track, panel) is stable
+# across submissions. Chr is the OUTER dim, combo is the INNER dim:
+#   task 1..N_COMBOS   -> chr 1, combos in listed order
+#   task N_COMBOS+1..  -> chr 2, ...
+# If PANELS/TRACKS shrink (e.g. no PEL), N_COMBOS < 9 and trailing task IDs
+# with chr > 22 exit 0 (over-provisioned array is harmless).
+# ----------------------------------------------------------------------------
+combos=()
+for track in $TRACKS_TO_RUN; do
+    for panel in $PANELS_TO_RUN; do
+        if [[ "$track" == "NATMXB" && "$panel" == "NAT_HGDPMXB_FULL" ]]; then continue; fi
+        combos+=("${track}|${panel}")
+    done
+done
+N_COMBOS=${#combos[@]}
+[[ "$N_COMBOS" -gt 0 ]] || { echo "ERROR: empty combo grid"; exit 1; }
+
+TID=$((SLURM_ARRAY_TASK_ID - 1))
+CHR=$((TID / N_COMBOS + 1))
+CIDX=$((TID % N_COMBOS))
+if [[ "$CHR" -gt 22 ]]; then
+    echo "[task ${SLURM_ARRAY_TASK_ID}] chr=${CHR} out of range (N_COMBOS=${N_COMBOS}) -- no-op"
+    exit 0
+fi
+COMBO="${combos[$CIDX]}"
+TASK_TRACK="${COMBO%|*}"
+TASK_PANEL="${COMBO#*|}"
+echo "[task ${SLURM_ARRAY_TASK_ID}] chr=${CHR} track=${TASK_TRACK} panel=${TASK_PANEL}"
 
 # shellcheck disable=SC2059
 PANEL=$(printf "$PANEL_TPL" "$CHR")
@@ -184,39 +215,67 @@ extract_haps () {
     fi
 }
 
-echo "[$(date +%T)] [chr${CHR}] extracting per-pop reference haps"
-extract_haps NAT_HGDP        "$NAT_HGDP_RFMIX"
-extract_haps NAT_HGDPMXB     "$NAT_HGDPMXB_RFMIX"
-extract_haps IBS_1KG         "$IBS_RFMIX"
-extract_haps YRI_1KG         "$YRI_RFMIX"
-[[ -s "$PEL_RFMIX"     ]] && extract_haps NAT_PEL         "$PEL_RFMIX"     || true
-[[ -s "$PEL_EAS_RFMIX" ]] && extract_haps NAT_PEL_EAS     "$PEL_EAS_RFMIX" || true
-
-# Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR portion = amr_rfmix + mxb_rfmix + mxb_simulation.
-# Build a temporary keep-file inline since the union isn't stored separately in REFS/.
-{
-    cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt"
-} > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
-extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
+# ----------------------------------------------------------------------------
+# Early exit: skip prep entirely if this combo is already complete. Honors both
+# the .done marker AND a line-count backfill against .map (job 3562984 finished
+# 33 combos before the .done guard existed).
+# ----------------------------------------------------------------------------
+_out_prefix_check="${WORKDIR}/${TASK_TRACK}.${TASK_PANEL}.gen${GEN}_chr${CHR}"
+if [[ -f "${_out_prefix_check}.done" && -s "${_out_prefix_check}.Lat3" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] .done marker present, skipping task"
+    exit 0
+fi
+if [[ -s "${_out_prefix_check}.Lat3" && -s "${_out_prefix_check}.map" ]]; then
+    _n_lat3=$(wc -l < "${_out_prefix_check}.Lat3")
+    _n_map=$(wc -l < "${_out_prefix_check}.map")
+    if [[ "$_n_lat3" -eq "$_n_map" && "$_n_lat3" -gt 0 ]]; then
+        touch "${_out_prefix_check}.done"
+        echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] backfilled .done for legacy Lat3 (${_n_lat3} sites) -- skipping task"
+        exit 0
+    fi
+fi
 
 # ----------------------------------------------------------------------------
-# .ref keep-files for shapeit2rfmix (sample order: NAT then EUR then AFR)
+# Chr-scoped prep phase: extract_haps + build_ref for THIS chr, guarded by a
+# flock so concurrent tasks on the same chr don't race on plink2 outputs.
+# extract_haps is already idempotent (skips if .haps exists), so followers
+# just walk through and return fast.
 # ----------------------------------------------------------------------------
-build_ref () {
-    local panel="$1" nat_label="$2"
-    # Per-chr suffix to avoid concurrent write-vs-read races between array tasks
-    # sharing the same $WORKDIR (per-pop, per-generation, not per-chr).
-    local ref="${WORKDIR}/REF_${panel}.chr${CHR}.ref"
-    sed '1,2d' "${WORKDIR}/${nat_label}_chr${CHR}.sample" | awk '{print $2}' > "$ref"
-    sed '1,2d' "${WORKDIR}/IBS_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
-    sed '1,2d' "${WORKDIR}/YRI_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
-}
+_prep_lock="${WORKDIR}/.prep_chr${CHR}.lock"
+mkdir -p "$WORKDIR"
+: > "$_prep_lock" 2>/dev/null || true
 
-build_ref NAT_HGDP         NAT_HGDP
-build_ref NAT_HGDPMXB      NAT_HGDPMXB
-build_ref NAT_HGDPMXB_FULL NAT_HGDPMXB_FULL
-[[ -s "${WORKDIR}/NAT_PEL_chr${CHR}.haps"     ]] && build_ref NAT_PEL     NAT_PEL     || true
-[[ -s "${WORKDIR}/NAT_PEL_EAS_chr${CHR}.haps" ]] && build_ref NAT_PEL_EAS NAT_PEL_EAS || true
+(
+    flock -x 9
+    echo "[$(date +%T)] [chr${CHR}] extracting per-pop reference haps (prep-lock held)"
+    extract_haps NAT_HGDP        "$NAT_HGDP_RFMIX"
+    extract_haps NAT_HGDPMXB     "$NAT_HGDPMXB_RFMIX"
+    extract_haps IBS_1KG         "$IBS_RFMIX"
+    extract_haps YRI_1KG         "$YRI_RFMIX"
+    [[ -s "$PEL_RFMIX"     ]] && extract_haps NAT_PEL         "$PEL_RFMIX"     || true
+    [[ -s "$PEL_EAS_RFMIX" ]] && extract_haps NAT_PEL_EAS     "$PEL_EAS_RFMIX" || true
+
+    # Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR = amr_rfmix + mxb_rfmix + mxb_simulation
+    {
+        cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt"
+    } > "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
+    extract_haps NAT_HGDPMXB_FULL "${WORKDIR}/_NAT_HGDPMXB_FULL_keep.chr${CHR}.txt"
+
+    # .ref keep-files for shapeit2rfmix (sample order: NAT then EUR then AFR)
+    build_ref () {
+        local panel="$1" nat_label="$2"
+        local ref="${WORKDIR}/REF_${panel}.chr${CHR}.ref"
+        sed '1,2d' "${WORKDIR}/${nat_label}_chr${CHR}.sample" | awk '{print $2}' > "$ref"
+        sed '1,2d' "${WORKDIR}/IBS_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
+        sed '1,2d' "${WORKDIR}/YRI_1KG_chr${CHR}.sample"      | awk '{print $2}' >> "$ref"
+    }
+    build_ref NAT_HGDP         NAT_HGDP
+    build_ref NAT_HGDPMXB      NAT_HGDPMXB
+    build_ref NAT_HGDPMXB_FULL NAT_HGDPMXB_FULL
+    [[ -s "${WORKDIR}/NAT_PEL_chr${CHR}.haps"     ]] && build_ref NAT_PEL     NAT_PEL     || true
+    [[ -s "${WORKDIR}/NAT_PEL_EAS_chr${CHR}.haps" ]] && build_ref NAT_PEL_EAS NAT_PEL_EAS || true
+    echo "[$(date +%T)] [chr${CHR}] prep complete"
+) 9<>"$_prep_lock"
 
 # ----------------------------------------------------------------------------
 # For each (track, panel): shapeit2rfmix.py -> RFMix v1 -> Viterbi recoding
@@ -246,16 +305,30 @@ run_panel_track () {
     [[ -s "$nat_haps" ]] || { echo "[chr${CHR}] [$track/$panel] missing $nat_haps -- skipping"; return 0; }
 
     # Idempotency: skip only when a '.done' marker exists AND .Lat3 is non-empty.
-    # The .done marker is touched at the very end of this function, after every
-    # step (shapeit2rfmix, RFMix, sed, paste) has already succeeded. If a run
-    # was SIGKILL'd mid-way (walltime, OOM, node preemption), RFMix leaves a
-    # truncated Viterbi -- sed+paste then produce a non-empty but WRONG .Lat3.
-    # -s on .Lat3 alone would falsely skip that case. Keying on the explicit
-    # .done marker ensures we only skip combos that completed cleanly.
+    # If a run was SIGKILL'd mid-way, RFMix leaves a truncated Viterbi and
+    # sed+paste produce a non-empty but WRONG .Lat3, so -s on .Lat3 alone
+    # would falsely skip.
+    #
+    # Backfill path: legacy runs from before the .done marker existed left
+    # valid .Lat3 files with no marker. Retroactively write .done when the
+    # existing .Lat3 line count matches the .map (single source of truth for
+    # site count). This lets us skip completed work from job 3562984 without
+    # a separate one-time cleanup pass.
     local out_prefix="${WORKDIR}/${track}.${panel}.gen${GEN}_chr${CHR}"
     if [[ -f "${out_prefix}.done" && -s "${out_prefix}.Lat3" ]]; then
         echo "[$(date +%T)] [chr${CHR}] [$track/$panel] .done marker present + .Lat3 non-empty, skipping combo"
         return 0
+    fi
+    if [[ -s "${out_prefix}.Lat3" && -s "${out_prefix}.map" ]]; then
+        local _n_lat3=$(wc -l < "${out_prefix}.Lat3")
+        local _n_map=$(wc -l < "${out_prefix}.map")
+        if [[ "$_n_lat3" -eq "$_n_map" && "$_n_lat3" -gt 0 ]]; then
+            touch "${out_prefix}.done"
+            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] backfilled .done for legacy Lat3 (${_n_lat3} sites) -- skipping"
+            return 0
+        else
+            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] stale Lat3 (${_n_lat3} vs .map=${_n_map}) -- will rerun"
+        fi
     fi
     # Clear any partial artifacts from a prior interrupted run so we start clean.
     rm -f "${out_prefix}.done" "${out_prefix}.Lat3" \
@@ -337,50 +410,15 @@ run_panel_track () {
 }
 
 # -----------------------------------------------------------------------------
-# Parallelize the (track x panel) combo grid in fixed-size batches. Wall
-# clock per task = ceil(N_combos / BATCH) x slowest-combo-in-batch. On 12
-# CPUs, BATCH=3 with COMBO_THREADS=4 saturates all cores.
-#
-# Fixed-size batches (not a rolling wait -n) because bash on this cluster is
-# older than 4.3 and doesn't support 'wait -n'. Batched wait is bash 3-safe.
-# Skip the (NATMXB, NAT_HGDPMXB_FULL) combo -- it double-dips donors.
+# Run ONLY this task's assigned combo. The array is fanned out per (chr,
+# track, panel), so one SLURM task = one combo. RFMix v1 gets all this task's
+# CPUs via --num-threads.
 # -----------------------------------------------------------------------------
-BATCH_SIZE="${COMBOS_MAX_PARALLEL:-3}"
-COMBO_THREADS="${COMBO_THREADS:-4}"
-THREADS="$COMBO_THREADS"    # picked up by run_panel_track via --num-threads
-
-combos=()
-for track in $TRACKS_TO_RUN; do
-    for panel in $PANELS_TO_RUN; do
-        if [[ "$track" == "NATMXB" && "$panel" == "NAT_HGDPMXB_FULL" ]]; then
-            echo "[$(date +%T)] [chr${CHR}] skip invalid combo $track/$panel (donors overlap)"
-            continue
-        fi
-        combos+=("${track}|${panel}")
-    done
-done
-
-echo "[$(date +%T)] [chr${CHR}] launching ${#combos[@]} combos in batches of ${BATCH_SIZE}, ${COMBO_THREADS} threads each"
-
-batch_num=0
-for ((i=0; i<${#combos[@]}; i+=BATCH_SIZE)); do
-    batch_num=$((batch_num + 1))
-    echo "[$(date +%T)] [chr${CHR}] --- batch ${batch_num}: ${combos[@]:i:BATCH_SIZE} ---"
-    for combo in "${combos[@]:i:BATCH_SIZE}"; do
-        track="${combo%|*}"; panel="${combo#*|}"
-        combo_log="${WORKDIR}/_combo_${track}_${panel}_chr${CHR}.log"
-        (
-            set +e
-            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] START (log: $(basename "$combo_log"))"
-            run_panel_track "$track" "$panel" >> "$combo_log" 2>&1
-            rc=$?
-            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] END rc=${rc}"
-            exit "$rc"
-        ) &
-    done
-    # Wait for all subshells in this batch; don't let set -e kill us on a
-    # failed combo (the failed combo's log preserves the traceback).
-    wait || true
-done
-
-echo "[$(date +%T)] [chr${CHR}] # Complete. RFMix outputs in $WORKDIR"
+combo_log="${WORKDIR}/_combo_${TASK_TRACK}_${TASK_PANEL}_chr${CHR}.log"
+echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] START (log: $(basename "$combo_log"))"
+set +e
+run_panel_track "$TASK_TRACK" "$TASK_PANEL" >> "$combo_log" 2>&1
+rc=$?
+set -e
+echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] END rc=${rc}"
+exit "$rc"
