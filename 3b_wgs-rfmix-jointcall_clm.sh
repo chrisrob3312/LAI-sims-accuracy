@@ -6,7 +6,7 @@
 #SBATCH --partition=atkinson,mhgcp
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=04:00:00
-#SBATCH --time=24:00:00
+#SBATCH --time=72:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-198
