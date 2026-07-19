@@ -225,9 +225,10 @@ if [[ -f "${_out_prefix_check}.done" && -s "${_out_prefix_check}.Lat3" ]]; then
     echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] .done marker present, skipping task"
     exit 0
 fi
-if [[ -s "${_out_prefix_check}.Lat3" && -s "${_out_prefix_check}.map" ]]; then
+_map_check="${_out_prefix_check}_chr${CHR}.map"    # shapeit2rfmix doubles the chr suffix
+if [[ -s "${_out_prefix_check}.Lat3" && -s "$_map_check" ]]; then
     _n_lat3=$(wc -l < "${_out_prefix_check}.Lat3")
-    _n_map=$(wc -l < "${_out_prefix_check}.map")
+    _n_map=$(wc -l < "$_map_check")
     if [[ "$_n_lat3" -eq "$_n_map" && "$_n_lat3" -gt 0 ]]; then
         touch "${_out_prefix_check}.done"
         echo "[$(date +%T)] [chr${CHR}] [$TASK_TRACK/$TASK_PANEL] backfilled .done for legacy Lat3 (${_n_lat3} sites) -- skipping task"
@@ -319,9 +320,10 @@ run_panel_track () {
         echo "[$(date +%T)] [chr${CHR}] [$track/$panel] .done marker present + .Lat3 non-empty, skipping combo"
         return 0
     fi
-    if [[ -s "${out_prefix}.Lat3" && -s "${out_prefix}.map" ]]; then
+    local _map="${out_prefix}_chr${CHR}.map"    # shapeit2rfmix doubles the chr suffix
+    if [[ -s "${out_prefix}.Lat3" && -s "$_map" ]]; then
         local _n_lat3=$(wc -l < "${out_prefix}.Lat3")
-        local _n_map=$(wc -l < "${out_prefix}.map")
+        local _n_map=$(wc -l < "$_map")
         if [[ "$_n_lat3" -eq "$_n_map" && "$_n_lat3" -gt 0 ]]; then
             touch "${out_prefix}.done"
             echo "[$(date +%T)] [chr${CHR}] [$track/$panel] backfilled .done for legacy Lat3 (${_n_lat3} sites) -- skipping"
