@@ -405,6 +405,17 @@ run_panel_track () {
     if [[ "$n_lat3" -eq "$n_map" && "$n_lat3" -gt 0 ]]; then
         touch "${out_prefix}.done"
         echo "[$(date +%T)] [chr${CHR}] [$track/$panel] COMPLETE (${n_lat3} sites) -- .done marker written"
+        # Reclaim ForwardBackward files. They average 8-12 GB each and 3b
+        # doesn't consume them downstream (accuracy_v2.R reads only .Lat3 +
+        # truth .hanc). A full 198-combo run leaks ~2 TB otherwise.
+        local reclaimed=0
+        for _fb in "${out_prefix}".rfmix.[012].ForwardBackward.txt; do
+            [[ -s "$_fb" ]] || continue
+            reclaimed=$((reclaimed + $(stat -c%s "$_fb")))
+            rm -f "$_fb"
+        done
+        [[ "$reclaimed" -gt 0 ]] && \
+            echo "[$(date +%T)] [chr${CHR}] [$track/$panel] reclaimed $((reclaimed / 1073741824)) GB of ForwardBackward files"
     else
         echo "[chr${CHR}] [$track/$panel] BAD .Lat3 (${n_lat3} vs .map=${n_map}) -- not marking done"
         return 1
