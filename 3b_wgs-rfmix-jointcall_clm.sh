@@ -370,12 +370,18 @@ run_panel_track () {
         --out "$out_prefix"
 
     echo "[$(date +%T)] [chr${CHR}] [$track/$panel] RFMix v1"
+    # PopPhased -- our admixed haps come from SHAPEIT5 population phasing, not
+    # trio-phased pedigrees. TrioPhased treats every phase-switch error as a
+    # real ancestry breakpoint, producing near-random calls (see accuracy pilot
+    # cb201ce: 36/36/26 uniform vs Brazilian truth 15/61/23). PopPhased runs
+    # extra EM to correct switch errors during LAI inference -- slower per run
+    # but the only correct choice for our data.
     ( cd "$RFMIX_DIR" && python -u "${ANCESTRY_PIPELINE_PY3_DIR}/RunRFMix.py" \
         -e "$RFMIX_E" -w "$RFMIX_W" -n "$RFMIX_N" -G "$GEN" \
         --num-threads "$THREADS" \
         --use-reference-panels-in-EM \
         --forward-backward \
-        TrioPhased \
+        PopPhased \
         "${out_prefix}_chr${CHR}.alleles" \
         "${out_prefix}.classes" \
         "${out_prefix}_chr${CHR}.snp_locations" \
