@@ -54,13 +54,15 @@ dir.create(OUTDIR, showWarnings = FALSE, recursive = TRUE)
 dir.create(file.path(OUTDIR, "plots"), showWarnings = FALSE, recursive = TRUE)
 
 # --- Readers -------------------------------------------------------------
-# Truth .hanc: one row per SNP, one character per haplotype (0/1/2), no separators.
+# Truth .hanc: 2b writes ONE LINE PER HAPLOTYPE with one character per SNP
+# (no separators). So an n_haps x n_sites matrix — we transpose to
+# n_sites x n_haps to match RFMix's row=SNP orientation.
 read_hanc <- function(path) {
   L <- readLines(path)
   if (length(L) == 0) stop("empty hanc: ", path)
   m <- do.call(rbind, lapply(strsplit(L, "", fixed = TRUE), as.integer))
-  storage.mode(m) <- "integer"   # n_sites x n_haps
-  m
+  storage.mode(m) <- "integer"
+  t(m)   # -> n_sites x n_haps
 }
 
 # Truth positions: admix-simu .snp is 5-col "snp_id chr cM phys_pos allele".
@@ -89,11 +91,21 @@ read_lat3 <- function(path) {
   list(pos = positions, mat = m)
 }
 
-read_admixed_samples <- function(chr, track) {
-  f <- file.path(SIM_DIR, sprintf("%s.%s.chr%d.sample", track, ADMIX_POP, chr))
-  s <- readLines(f)
-  s <- s[3:length(s)]                          # drop SHAPEIT 7-col header rows
-  vapply(strsplit(s, "\\s+"), `[`, character(1), 2)
+# 2b doesn't write per-track admixed sample IDs, so synth "sim_<h>" hap labels.
+# We keep the arg signature so callers stay stable.
+read_admixed_samples <- function(chr, track, n_admixed) {
+  sprintf("sim_%03d", seq_len(n_admixed / 2))
+}
+
+# .classes has one integer per haplotype in RFMix's column order:
+#   ref haps first (class 1, 2, 3), admixed haps last (class 0).
+# Returns the column indices INTO the .Lat3 hap columns (which start at 3 in
+# the raw .Lat3 file) where class == 0.
+read_admixed_hap_cols <- function(chr, track, panel) {
+  f <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d.classes",
+                                  track, panel, GEN, chr))
+  cls <- scan(f, what = integer(), quiet = TRUE)
+  which(cls == 0L)
 }
 
 # --- Core: per-hap per-ancestry accuracy for one (track, panel, chr) ----
@@ -115,12 +127,17 @@ score_one <- function(track, panel, chr) {
                  chr, length(tpos), nrow(truth)))
 
   lat3 <- read_lat3(lat3_f)
-  rec  <- lat3$mat                           # n_sites_rfmix x n_haps
-  rpos <- lat3$pos
+  rec_all <- lat3$mat                        # n_sites x n_ALL_haps (ref + admixed)
+  rpos    <- lat3$pos
 
+  # RFMix writes ancestry for every hap (ref + admixed) in Viterbi.txt, which
+  # is what 3b pastes into .Lat3. Only the class-0 columns (admixed) match
+  # truth.
+  adm_cols <- read_admixed_hap_cols(chr, track, panel)
+  rec <- rec_all[, adm_cols, drop = FALSE]
   if (ncol(truth) != ncol(rec))
-    stop(sprintf("[%s/%s chr%d] hap count mismatch: truth %d vs recoded %d",
-                 track, panel, chr, ncol(truth), ncol(rec)))
+    stop(sprintf("[%s/%s chr%d] admixed-hap count mismatch: truth %d vs .classes 0-count %d (n_all=%d)",
+                 track, panel, chr, ncol(truth), ncol(rec), ncol(rec_all)))
 
   # Intersect on physical position (both are 1-based, hg38).
   shared <- intersect(tpos, rpos)
@@ -135,7 +152,7 @@ score_one <- function(track, panel, chr) {
   R  <- rec  [ri, , drop = FALSE]
 
   n_haps <- ncol(T)
-  samps  <- read_admixed_samples(chr, track)
+  samps  <- read_admixed_samples(chr, track, n_haps)
   # Each simulated diploid contributes 2 haps: sample name replicated once per hap.
   hap_sample <- rep(samps, each = 2)[seq_len(n_haps)]
 
