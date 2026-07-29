@@ -60,9 +60,18 @@ dir.create(file.path(OUTDIR, "plots"), showWarnings = FALSE, recursive = TRUE)
 read_hanc <- function(path) {
   L <- readLines(path)
   if (length(L) == 0) stop("empty hanc: ", path)
-  m <- do.call(rbind, lapply(strsplit(L, "", fixed = TRUE), as.integer))
-  storage.mode(m) <- "integer"
-  t(m)   # -> n_sites x n_haps
+  n_haps  <- length(L)
+  n_sites <- nchar(L[1L])
+  # Character-by-character parse in one pass: paste all lines, tear into
+  # single-char vector, coerce to integer, reshape as (n_sites x n_haps).
+  # Bulk vector allocation is ~4x less RAM than rbind-of-split.
+  chars <- unlist(strsplit(L, "", fixed = TRUE), use.names = FALSE)
+  rm(L); gc(FALSE)
+  # Column-major fill: chars[1..n_sites] = hap 1 sites 1..N so
+  # M[s, h] = char at site s of hap h with byrow=FALSE (R default).
+  m <- matrix(as.integer(chars), nrow = n_sites, ncol = n_haps)
+  rm(chars); gc(FALSE)
+  m
 }
 
 # Truth positions: admix-simu .snp is 5-col "snp_id chr cM phys_pos allele".
@@ -83,12 +92,14 @@ read_truth_pos <- function(chr) {
 #   col 2  = snp_id (usually chr:pos)
 #   col 3+ = per-haplotype recoded ancestry (0/1/2)
 read_lat3 <- function(path) {
-  d <- read.table(path, header = FALSE, sep = "", stringsAsFactors = FALSE,
-                  colClasses = "character")
-  positions <- as.integer(d[[1]])
-  m <- as.matrix(sapply(d[, -c(1, 2), drop = FALSE], as.integer))
-  storage.mode(m) <- "integer"
-  list(pos = positions, mat = m)
+  # Use scan() into a raw integer vector — much less RAM than read.table,
+  # which materialises a data.frame + several copies during coercion.
+  # We know the column count from the first line: 2 metadata + N haps.
+  ncol_total <- length(scan(path, what = integer(), nlines = 1, quiet = TRUE))
+  flat <- scan(path, what = integer(), quiet = TRUE)
+  m <- matrix(flat, ncol = ncol_total, byrow = TRUE)
+  rm(flat); gc(FALSE)
+  list(pos = m[, 1L], mat = m[, -c(1L, 2L), drop = FALSE])
 }
 
 # 2b doesn't write per-track admixed sample IDs, so synth "sim_<h>" hap labels.
@@ -196,6 +207,9 @@ for (i in seq_len(nrow(grid))) {
   message(sprintf("  [%d/%d] %s / %s chr%d", i, nrow(grid), g$track, g$panel, g$chr))
   results[[i]] <- tryCatch(score_one(g$track, g$panel, g$chr),
                            error = function(e) { warning(e$message); NULL })
+  # Explicit gc() every iteration -- big chrs (1-3) allocate ~2 GB matrices,
+  # R's lazy GC leaves them resident and kills the process by chr 4-5.
+  gc(FALSE)
 }
 long <- bind_rows(results)
 if (nrow(long) == 0) stop("No accuracy rows produced -- check paths and file existence.")
