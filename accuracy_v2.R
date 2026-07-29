@@ -242,13 +242,23 @@ wide <- long |>
   select(track, panel, chr, hap, sample, ancestry, concordance) |>
   pivot_wider(names_from = panel, values_from = concordance)
 
-non_baseline <- setdiff(PANELS, BASELINE_PANEL)
+# Only compare panels that actually landed in the wide table -- during a
+# partial run (e.g. NAT_PEL_EAS still finishing), pivot_wider will omit any
+# panel that has zero completed combos, so all_of(panel) would blow up.
+available_panels <- intersect(PANELS, names(wide))
+non_baseline <- setdiff(available_panels, BASELINE_PANEL)
+if (!(BASELINE_PANEL %in% available_panels)) {
+  message("[accuracy_v2] baseline panel ", BASELINE_PANEL,
+          " has no done combos yet -- skipping panel_vs_baseline.tsv")
+  non_baseline <- character(0)
+}
 comparisons <- expand.grid(track = TRACKS, panel = non_baseline,
                            ancestry = unname(ANC_LABELS),
                            stringsAsFactors = FALSE) |>
   filter(mapply(is_valid_combo, track, panel))
 
-comp_rows <- vector("list", nrow(comparisons))
+comp_rows <- vector("list", max(nrow(comparisons), 1L))
+if (nrow(comparisons) == 0L) comp_rows <- list()
 for (i in seq_len(nrow(comparisons))) {
   c_ <- comparisons[i, ]
   sub <- wide |> filter(track == c_$track, ancestry == c_$ancestry) |>
@@ -268,13 +278,21 @@ for (i in seq_len(nrow(comparisons))) {
     n = nrow(sub), base_mean = mean(base), alt_mean = mean(alt),
     delta = mean(alt - base), wilcox_p = w$p.value, stringsAsFactors = FALSE)
 }
-comp <- bind_rows(comp_rows) |>
-  mutate(bonferroni_p = pmin(1, wilcox_p * sum(!is.na(wilcox_p))),
-         signif = case_when(is.na(bonferroni_p) ~ "",
-                            bonferroni_p < 0.001 ~ "***",
-                            bonferroni_p < 0.01  ~ "**",
-                            bonferroni_p < 0.05  ~ "*",
-                            TRUE ~ "n.s."))
+comp <- if (length(comp_rows)) {
+  bind_rows(comp_rows) |>
+    mutate(bonferroni_p = pmin(1, wilcox_p * sum(!is.na(wilcox_p))),
+           signif = case_when(is.na(bonferroni_p) ~ "",
+                              bonferroni_p < 0.001 ~ "***",
+                              bonferroni_p < 0.01  ~ "**",
+                              bonferroni_p < 0.05  ~ "*",
+                              TRUE ~ "n.s."))
+} else {
+  data.frame(track = character(0), panel = character(0),
+             ancestry = character(0), n = integer(0),
+             base_mean = numeric(0), alt_mean = numeric(0),
+             delta = numeric(0), wilcox_p = numeric(0),
+             bonferroni_p = numeric(0), signif = character(0))
+}
 write_tsv(comp, file.path(OUTDIR, "panel_vs_baseline.tsv"))
 
 # --- Plots ---------------------------------------------------------------
