@@ -34,6 +34,9 @@ SIM_DIR        <- file.path(PROJECT_ROOT, "02_simulations", ADMIX_POP, paste0("g
 RFMIX_ROOT     <- Sys.getenv("RFMIX_ROOT", file.path(PROJECT_ROOT, "03_rfmix"))
 WORKDIR        <- Sys.getenv("WORKDIR", RFMIX_ROOT)  # 3b's per-(pop, gen) dir
 OUTDIR         <- Sys.getenv("OUTDIR", file.path(PROJECT_ROOT, "04_accuracy"))
+# When OUTDIR points inside a git repo (e.g. results/accuracy_pilot), the
+# .tsv summary and PDF plots become committable review artifacts. Big files
+# (accuracy_long.tsv) still stay under OUTDIR only.
 BASELINE_PANEL <- Sys.getenv("BASELINE_PANEL", "NAT_HGDP")
 
 CHRS   <- 1:22
@@ -69,19 +72,21 @@ read_truth_pos <- function(chr) {
   as.integer(d$V4)
 }
 
-# RFMix recoded: whitespace-separated 0/1/2 matrix. Each row = one SNP site,
-# each column = one admixed haplotype (2 per simulated individual).
-read_recoded <- function(path) {
-  as.matrix(read.table(path, header = FALSE, colClasses = "integer"))
-}
-
-# RFMix physical positions: shapeit2rfmix .map writes "phys_pos gen_pos snp_id".
-# Same site order as the .recoded matrix rows.
-read_rfmix_pos <- function(chr, track, panel) {
-  f <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d_chr%d.map",
-                                  track, panel, GEN, chr, chr))
-  d <- read.table(f, header = FALSE, sep = "", stringsAsFactors = FALSE)
-  as.integer(d$V1)
+# RFMix ancestry + positions from a .Lat3 file. 3b deletes the intermediate
+# .recoded, so read directly from .Lat3 which is guaranteed to exist for any
+# combo whose .done marker was written.
+#
+# .Lat3 format (from 3b line 401): each row is a SNP site, space-separated:
+#   col 1  = physical position (hg38, integer)
+#   col 2  = snp_id (usually chr:pos)
+#   col 3+ = per-haplotype recoded ancestry (0/1/2)
+read_lat3 <- function(path) {
+  d <- read.table(path, header = FALSE, sep = "", stringsAsFactors = FALSE,
+                  colClasses = "character")
+  positions <- as.integer(d[[1]])
+  m <- as.matrix(sapply(d[, -c(1, 2), drop = FALSE], as.integer))
+  storage.mode(m) <- "integer"
+  list(pos = positions, mat = m)
 }
 
 read_admixed_samples <- function(chr, track) {
@@ -94,9 +99,14 @@ read_admixed_samples <- function(chr, track) {
 # --- Core: per-hap per-ancestry accuracy for one (track, panel, chr) ----
 score_one <- function(track, panel, chr) {
   hanc_f <- file.path(SIM_DIR, sprintf("%s.%s%d.hanc",   track, ADMIX_POP, chr))
-  rec_f  <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d.recoded",
+  lat3_f <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d.Lat3",
                                        track, panel, GEN, chr))
-  if (!file.exists(hanc_f) || !file.exists(rec_f)) return(NULL)
+  done_f <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d.done",
+                                       track, panel, GEN, chr))
+  # Silently skip anything without a .done marker so partial runs (e.g. 55/198)
+  # produce clean output for whatever finished.
+  if (!file.exists(hanc_f) || !file.exists(lat3_f) || !file.exists(done_f))
+    return(NULL)
 
   truth <- read_hanc(hanc_f)                 # n_sites_truth x n_haps
   tpos  <- read_truth_pos(chr)               # length n_sites_truth
@@ -104,11 +114,9 @@ score_one <- function(track, panel, chr) {
     stop(sprintf("[chr%d] truth pos vs hanc rows mismatch: %d vs %d",
                  chr, length(tpos), nrow(truth)))
 
-  rec  <- read_recoded(rec_f)                # n_sites_rfmix x n_haps
-  rpos <- read_rfmix_pos(chr, track, panel)
-  if (length(rpos) != nrow(rec))
-    stop(sprintf("[%s/%s chr%d] rfmix pos vs recoded rows mismatch: %d vs %d",
-                 track, panel, chr, length(rpos), nrow(rec)))
+  lat3 <- read_lat3(lat3_f)
+  rec  <- lat3$mat                           # n_sites_rfmix x n_haps
+  rpos <- lat3$pos
 
   if (ncol(truth) != ncol(rec))
     stop(sprintf("[%s/%s chr%d] hap count mismatch: truth %d vs recoded %d",
