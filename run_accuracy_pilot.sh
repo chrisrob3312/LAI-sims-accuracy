@@ -25,6 +25,14 @@ WORKDIR="${WORKDIR:-${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}}"
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/04_accuracy}"
 REVIEW_DIR="${REPO_DIR}/results/accuracy_pilot"
 
+# Force R to see the conda-provided library first. /opt/biobuilds-2016.04 is
+# system-wide at path priority 1 and shadows conda's modern tidyverse install
+# with a magrittr from 2016 (which R 4.x refuses to load).
+if [[ -z "${R_LIBS_USER:-}" ]] && command -v conda >/dev/null 2>&1; then
+    _conda_r_lib="$(conda info --base 2>/dev/null)/envs/${CONDA_DEFAULT_ENV:-shapeit5}/lib/R/library"
+    [[ -d "$_conda_r_lib" ]] && export R_LIBS_USER="$_conda_r_lib"
+fi
+
 mkdir -p "$OUTDIR" "$REVIEW_DIR/plots"
 
 # Quick sanity: how many combos will be scored?
