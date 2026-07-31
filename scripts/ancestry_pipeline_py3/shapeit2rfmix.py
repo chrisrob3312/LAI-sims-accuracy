@@ -148,14 +148,49 @@ def main(args):
     intersection_ordered = sorted(list(full_intersection))
     
     #save all genetic positions that are known in a recombination map in a dict
+    #
+    # Two 3-column formats exist in the wild:
+    #   (A) SHAPEIT / RFMix v1:  pos  chr  cM   -> pos is col 0
+    #   (B) RFMix v2:            chr  pos  cM   -> pos is col 1
+    #
+    # Auto-detect from the first data line: whichever column looks like a
+    # physical position (large integer, > any plausible chromosome id) is the
+    # pos column. This was previously hard-coded to col 0, so when the map
+    # was RFMix-v2 format every entry keyed on the chr id (e.g. 22), the
+    # dict collapsed to a single (22, cM_last) pair, and interpolation blew
+    # snp_locations up to ~3.37x the physical bp value -- producing near-
+    # random RFMix output because window sizes were meaningless.
     genetic_map = open(args.genetic_map)
     pos_gen_map = {}
-    header = genetic_map.readline().strip().split()
-    if len(header) != 3:
+    first_line = genetic_map.readline().strip().split()
+    if len(first_line) != 3:
         raise RuntimeError('Genetic map file does not have expected columns')
+    def _parse_map_line(fields, pos_col, cm_col):
+        return int(fields[pos_col]), float(fields[cm_col])
+    # Try both formats on the first line and pick whichever has a bp-scale value.
+    # (Chromosome ids fit in a byte; physical positions do not.)
+    def _pos_col_from(fields):
+        c0, c1 = int(fields[0]), int(fields[1])
+        return 1 if c0 <= 25 and c1 > c0 else 0
+    # If the first line is actually a header (non-numeric), skip it; otherwise
+    # include it as data.
+    try:
+        pos_col = _pos_col_from(first_line)
+        cm_col = 2
+        p, cm = _parse_map_line(first_line, pos_col, cm_col)
+        pos_gen_map[p] = cm
+        header_consumed = False
+    except (ValueError, IndexError):
+        # First line was a header; detect on the next data line
+        first_data = genetic_map.readline().strip().split()
+        pos_col = _pos_col_from(first_data)
+        cm_col = 2
+        p, cm = _parse_map_line(first_data, pos_col, cm_col)
+        pos_gen_map[p] = cm
+        header_consumed = True
     for line in genetic_map:
         myLine = line.strip().split()
-        pos_gen_map[int(myLine[0])] = float(myLine[2])
+        pos_gen_map[int(myLine[pos_col])] = float(myLine[cm_col])
 
     #write physical positions with unknown genetic positions in a dict mapping to None to interpolate
     union_pos = sorted(list(full_intersection | set(pos_gen_map.keys())))
