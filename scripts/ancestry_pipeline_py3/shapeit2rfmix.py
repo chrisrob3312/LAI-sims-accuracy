@@ -87,7 +87,14 @@ def write_or_flip(snp_alleles, snp_haps, allele_order, file):
             else: #need to flip
                 flipped = ['0' if x == '1' else '1' for x in snp_haps]
                 file.write(''.join(flipped))
-        elif snp_alleles == allele_order:
+        elif list(snp_alleles) == list(allele_order):
+            # snp_alleles is a list, allele_order is a tuple -- Python's list == tuple
+            # is ALWAYS False, so before this coercion this branch was dead code and
+            # every biallelic site fell through to the flip branch below. With any
+            # plink2 --export haps polarity flip between per-population --keep subsets,
+            # that scrambled which A1/A2 orientation RFMix saw per class -> near-
+            # random ancestry calls. Force list == list so this "same-order-keep"
+            # branch actually fires when it should.
             file.write(''.join(snp_haps))
         else:
         #need to flip alleles before writing
