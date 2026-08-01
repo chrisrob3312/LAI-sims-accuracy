@@ -1,6 +1,6 @@
 # accuracy_v2.R pilot run
 
-Ran against **26/198** completed combos as of 2026-08-01T09:33:26Z.
+Ran against **46/198** completed combos as of 2026-08-01T14:08:26Z.
 
 ## Contents
 - accuracy_summary.tsv    -- weighted concordance per (track, panel, ancestry)
