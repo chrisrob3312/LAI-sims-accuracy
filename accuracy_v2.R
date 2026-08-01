@@ -398,6 +398,59 @@ if (nrow(comp) > 0) {
          p6, width = 10, height = 7)
 }
 
+# 7. MXB-in-reference vs MXB-not-in-reference, split by sim track.
+#    Answers: "does adding MXB to the RFMix reference help, and does it depend
+#    on whether the simulated admixed haps contain MXB donors?"
+mxb_in_ref <- c("NAT_HGDPMXB", "NAT_HGDPMXB_FULL", "NAT_HOMOG")
+long_mxb_flag <- long |>
+  mutate(mxb_in_ref = ifelse(panel %in% mxb_in_ref, "MXB in reference", "no MXB in reference"),
+         track_lab  = ifelse(track == "NATMXB", "MXB in simulation", "no MXB in simulation"))
+
+p7 <- ggplot(long_mxb_flag,
+             aes(x = panel, y = concordance, fill = mxb_in_ref)) +
+  geom_boxplot(outlier.size = 0.4, alpha = 0.85) +
+  facet_grid(track_lab ~ ancestry) +
+  scale_y_continuous(labels = scales::percent_format(1), limits = c(0, 1)) +
+  scale_fill_manual(values = c("MXB in reference" = "#4C9F70",
+                               "no MXB in reference" = "#B95E82")) +
+  labs(x = NULL, y = "Per-hap concordance", fill = NULL,
+       title = "Effect of MXB in reference panel, split by whether MXB is in simulation",
+       subtitle = "Rows: sim track (with/without MXB donors)  |  Columns: ancestry class") +
+  theme_lai + theme(axis.text.x = element_text(angle = 30, hjust = 1))
+ggsave(file.path(OUTDIR, "plots", "07_mxb_in_ref_by_sim_track.pdf"),
+       p7, width = 12, height = 7)
+
+# 8. Mexican-cohort framing: NAT-ancestry accuracy only, ranked panel bar with
+#    both sim tracks side-by-side. This is the "for my Mexican-admixed GWAS
+#    cohort, which reference panel gives me the best NAT ancestry calls" plot.
+nat_only <- weighted_summary |>
+  filter(ancestry == "NAT") |>
+  mutate(track_lab = ifelse(track == "NATMXB",
+                            "MXB donors in simulated admixed",
+                            "HGDP-only donors in simulated admixed"),
+         mxb_in_ref = ifelse(panel %in% mxb_in_ref, "MXB in ref", "no MXB in ref"))
+
+p8 <- ggplot(nat_only,
+             aes(x = reorder(panel, weighted_concordance),
+                 y = weighted_concordance, fill = mxb_in_ref)) +
+  geom_col(alpha = 0.9, width = 0.7) +
+  geom_errorbar(aes(ymin = weighted_concordance - se,
+                    ymax = weighted_concordance + se), width = 0.3) +
+  geom_text(aes(label = sprintf("%.1f%%", 100 * weighted_concordance)),
+            hjust = -0.15, size = 3.2) +
+  coord_flip(ylim = c(0, 1.05)) +
+  facet_wrap(~ track_lab, ncol = 1) +
+  scale_y_continuous(labels = scales::percent_format(1)) +
+  scale_fill_manual(values = c("MXB in ref" = "#4C9F70",
+                               "no MXB in ref" = "#B95E82")) +
+  labs(x = NULL, y = "Native-American ancestry concordance",
+       fill = NULL,
+       title = "NAT-ancestry concordance by reference panel",
+       subtitle = "Split by whether MXB donors are in the simulated admixed sample; error bars = SE across haps") +
+  theme_lai + theme(legend.position = "top")
+ggsave(file.path(OUTDIR, "plots", "08_nat_ancestry_by_panel_ranked.pdf"),
+       p8, width = 10, height = 8)
+
 message("[accuracy_v2] DONE. Outputs under ", OUTDIR)
 message("  Tables : accuracy_long.tsv, accuracy_summary.tsv, accuracy_per_chr.tsv, panel_vs_baseline.tsv")
-message("  Plots  : plots/01..06_*.pdf")
+message("  Plots  : plots/01..08_*.pdf")
