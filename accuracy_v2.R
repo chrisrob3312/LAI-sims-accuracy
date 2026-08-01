@@ -39,10 +39,15 @@ OUTDIR         <- Sys.getenv("OUTDIR", file.path(PROJECT_ROOT, "04_accuracy"))
 # (accuracy_long.tsv) still stay under OUTDIR only.
 BASELINE_PANEL <- Sys.getenv("BASELINE_PANEL", "NAT_HGDP")
 
-CHRS   <- 1:22
+# Comma-separated chr override, e.g. CHRS=20,21,22 to restrict a pilot run.
+CHRS   <- if (nzchar(Sys.getenv("CHRS"))) {
+    as.integer(strsplit(Sys.getenv("CHRS"), "[, ]+")[[1]])
+} else {
+    1:22
+}
 TRACKS <- c("NAT", "NATMXB")
 PANELS <- strsplit(Sys.getenv("PANELS_TO_RUN",
-                              "NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB NAT_HGDPMXB_FULL"),
+                              "NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB NAT_HGDPMXB_FULL NAT_HOMOG"),
                    " +")[[1]]
 
 # Invalid combo per PIPELINE.md: NATMXB sim + HGDPMXB_FULL panel double-dips donors.
