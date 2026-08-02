@@ -304,16 +304,38 @@ def slide_wgs_result():
              size=10.5, color=INK)
     add_footer(s, 5, 7, "Result · AMR zoom")
     set_notes(s,
-        "This is the headline result. On the Mexican-like cohort (NATMXB track, "
-        "blue), adding 25 MXB samples to the HGDP baseline lifts NAT recall from "
-        "0.931 to 0.942. Adding 50 gets the same benefit (0.942) — 25 is enough. "
-        "On the Brazilian-like cohort (NAT track, red), the picture flips: the "
-        "MXB-augmented panel actually LOSES ~2% NAT recall because Brazilian "
-        "NAT ancestry is closer to Amazonian sources than to Mexican; PEL (Peru) "
-        "is the best panel there. The homogeneous-only NAT_HOMOG panel matches "
-        "HGDPMXB on the Mexican cohort while being donor-safe. Punchline for "
-        "the committee: there is no single best panel — the answer depends on "
-        "the ancestry composition of the cohort being called.")
+        "HEADLINE RESULT. On the Mexican-like cohort (NATMXB track, teal), adding "
+        "25 MXB samples to the HGDP baseline lifts NAT recall from 0.931 to 0.942 "
+        "and F1 from 0.956 to 0.965. Adding 50 gets the same benefit (0.942 / "
+        "0.965) — 25 is enough. On the Brazilian-like cohort (NAT track, orange) "
+        "the recall picture flips: the MXB-augmented panel LOSES ~2-5% NAT recall "
+        "because Brazilian NAT ancestry is closer to Amazonian sources than "
+        "Mexican; PEL (Peru) matches or beats HGDP on that cohort. But on F1 "
+        "the Brazilian penalty softens — precision goes UP when MXB is added "
+        "because the panel gets stricter about calling AMR, and F1 barely moves. "
+        "NAT_HOMOG (Q≥0.95 filter) matches HGDPMXB on the Mexican cohort while "
+        "being donor-safe. Punchline: no single best panel — the winner depends "
+        "on the cohort's ancestry composition.\n\n"
+        "──────── METRICS CHEAT SHEET ────────\n"
+        "• TP / FP / FN: sites where called ancestry matches truth (TP), calls "
+        "were wrong-class (FP), or truth was this class but we missed (FN). "
+        "TN is ignored — this is a small-positive-class setting.\n"
+        "• Recall = Sensitivity = TPR = TP / (TP + FN). Of all true NAT sites, "
+        "how many we recovered. Currently plotted on the hero bars.\n"
+        "• Precision = PPV = TP / (TP + FP). Of the sites we CALLED NAT, how "
+        "many were actually NAT. Guards against over-calling.\n"
+        "• F1 = 2·P·R / (P + R). Harmonic mean of precision and recall — the "
+        "class-imbalance-robust summary. NOT the same as balanced accuracy "
+        "(which uses specificity); F1 ignores TN by design.\n"
+        "• Weighted (in these tables): concordance / recall / precision are "
+        "weighted by (n_haps × n_sites) per chromosome so long chromosomes "
+        "and larger haplotype counts contribute more.\n"
+        "• Concordance in these tables (== weighted_recall in current R impl) "
+        "is per-site agreement to truth, per ancestry, one-vs-rest.\n"
+        "• SE: standard error of the per-chromosome mean (not a bootstrap CI).\n"
+        "Publication table with all three metrics is committed to "
+        "results/tables/publication_table_amr.tsv and rendered to "
+        "slides/tables/publication_table_amr.png.")
     return s
 
 # ---------------------------------------------------------------- SLIDE 5
