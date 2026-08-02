@@ -209,9 +209,9 @@ def render_amr_png(rows):
     h0 = row_h_of(0)
     ax.add_patch(plt.Rectangle((0, row_y(0)), col_x[1], h0,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(col_x[1]/2, row_y(0) + h0/2, "AMR-tract calling accuracy",
+    ax.text(col_x[1]/2, row_y(0) + h0/2, "AMR LAI Accuracy",
             ha="center", va="center", color="white",
-            fontsize=11, fontweight="bold")
+            fontsize=11.5, fontweight="bold")
     # Brasa banner
     ax.add_patch(plt.Rectangle((col_x[1], row_y(0)), col_x[4] - col_x[1], h0,
                                facecolor=ORANGE, edgecolor="none"))
@@ -273,7 +273,7 @@ def render_amr_png(rows):
     y = row_y(2); bh = row_h_of(2)
     ax.add_patch(plt.Rectangle((0, y), 1.0, bh,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(0.01, y + bh/2, "  WGS density",
+    ax.text(0.01, y + bh/2, "  Whole Genome Sequencing",
             ha="left", va="center", color="white",
             fontsize=11, fontweight="bold")
 
@@ -285,7 +285,7 @@ def render_amr_png(rows):
     y = row_y(chip_hdr_i); bh = row_h_of(chip_hdr_i)
     ax.add_patch(plt.Rectangle((0, y), 1.0, bh,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(0.01, y + bh/2, "  GSA chip density (unimputed)",
+    ax.text(0.01, y + bh/2, "  Genotyping chip (GSA — Unimputed)",
             ha="left", va="center", color="white",
             fontsize=11, fontweight="bold")
 
