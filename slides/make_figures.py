@@ -264,7 +264,83 @@ def fig_pipeline():
     plt.close(fig)
     return out
 
+# ---------------------------------------------------------------- FIG 5: 3-ancestry range
+def fig_wgs_all_ancestry():
+    """
+    Small multiples: AMR / EUR / AFR side-by-side, same y-scale.
+    Shows that AMR is where panel choice matters — EUR/AFR are already
+    near ceiling and barely move.
+    """
+    panels = [
+        ("HGDP + 1KG baseline",              "NAT_HGDP"),
+        ("+ 25 MXB",                         "NAT_HGDPMXB"),
+        ("+ 50 MXB",                         "NAT_HGDPMXB_FULL"),
+        ("All homog. Q≥0.95",                "NAT_HOMOG"),
+        ("HGDP + PEL",                       "NAT_PEL"),
+        ("HGDP + PEL + EAS",                 "NAT_PEL_EAS"),
+    ]
+    tracks = [("NAT",    "Brazilian-like (Brasa)",   "#c94a53"),
+              ("NATMXB", "Mexican-like (MXB)",       "#3e6bb0")]
+    ancestries = [("NAT", "AMR (Amerindigenous)"),
+                  ("EUR", "EUR (European)"),
+                  ("AFR", "AFR (African)")]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6.2), dpi=180, sharey=True)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.86, bottom=0.28, wspace=0.10)
+
+    x = np.arange(len(panels))
+    w = 0.36
+
+    for ax, (anc, anc_label) in zip(axes, ancestries):
+        for i, (track, tlabel, color) in enumerate(tracks):
+            vals = [wgs.get((track, key, anc), np.nan) for _, key in panels]
+            bars = ax.bar(x + (i - 0.5) * w, vals, w,
+                          label=tlabel, color=color,
+                          edgecolor="white", linewidth=0.6)
+            for xi, v in zip(bars, vals):
+                if not np.isnan(v):
+                    ax.text(xi.get_x() + xi.get_width()/2, v + 0.003,
+                            f"{v:.3f}", ha="center", va="bottom",
+                            fontsize=8.5, color="#111", fontweight="semibold")
+
+        # range annotation
+        all_vals = [wgs.get((tr, key, anc), np.nan)
+                    for tr, _, _ in tracks for _, key in panels]
+        rng = max(all_vals) - min(all_vals)
+        ax.text(0.5, 0.02, f"panel-choice range: {rng*100:.1f}%",
+                transform=ax.transAxes, ha="center", va="bottom",
+                fontsize=10, fontweight="bold",
+                color=("#c94a53" if rng > 0.03 else "#666"))
+
+        ax.set_title(anc_label, fontweight="bold", fontsize=13, pad=10)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{lab}\n({key.replace('NAT_','')})"
+                            for lab, key in panels],
+                           fontsize=8.5)
+        for lbl in ax.get_xticklabels():
+            lbl.set_multialignment("center")
+
+    axes[0].set_ylim(0.85, 1.00)
+    axes[0].set_ylabel("Weighted per-hap recall\n(chr20-22)",
+                       fontsize=12, fontweight="bold")
+    for ax in axes:
+        ax.set_xlabel("")
+
+    fig.suptitle("Panel choice moves AMR recall by ~3-4%; EUR / AFR are near ceiling",
+                 fontweight="bold", fontsize=14, y=0.97)
+
+    leg = axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.30),
+                         ncol=2, fontsize=12, frameon=False)
+    for t in leg.get_texts():
+        t.set_fontweight("bold")
+
+    out = OUT / "fig_wgs_all_ancestry.png"
+    fig.savefig(out)
+    plt.close(fig)
+    return out
+
 if __name__ == "__main__":
-    for f in (fig_wgs_panels, fig_chip_vs_wgs, fig_amr_disparity, fig_pipeline):
+    for f in (fig_wgs_panels, fig_wgs_all_ancestry, fig_chip_vs_wgs,
+              fig_amr_disparity, fig_pipeline):
         p = f()
         print(f"wrote {p}  ({p.stat().st_size/1024:.0f} kB)")
