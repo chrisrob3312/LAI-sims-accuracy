@@ -102,7 +102,7 @@ def fig_wgs_panels():
     ax.tick_params(axis="y", pad=6, labelsize=11)
 
     ax.set_ylim(0.85, 1.00)
-    ax.set_ylabel("Weighted NAT-ancestry recall\n(chr20-22, per-hap concordance)",
+    ax.set_ylabel("Weighted AMR recall\n(chr20-22, per-hap concordance)",
                   fontsize=13, fontweight="bold", labelpad=16)
 
     ax.set_title("Local Ancestry Inference Simulation Accuracy (AMR tracts)",
@@ -147,7 +147,7 @@ def fig_chip_vs_wgs():
     for lbl in ax.get_xticklabels():
         lbl.set_multialignment("center")
     ax.set_ylim(0.85, 0.96)
-    ax.set_ylabel("Weighted NAT-ancestry recall",
+    ax.set_ylabel("Weighted AMR recall",
                   fontsize=12, fontweight="bold", labelpad=12)
     ax.tick_params(axis="y", pad=6, labelsize=10.5)
     ax.tick_params(axis="x", pad=8)
@@ -170,7 +170,7 @@ def fig_chip_vs_wgs():
 def fig_amr_disparity():
     fig = plt.figure(figsize=(13.5, 6.6), dpi=180)
     gs = fig.add_gridspec(1, 2, width_ratios=[1.65, 1.0], wspace=0.32,
-                          bottom=0.28, top=0.90, left=0.06, right=0.98)
+                          bottom=0.28, top=0.90, left=0.09, right=0.98)
 
     # left: bars, samples per continental group in public references
     ax1 = fig.add_subplot(gs[0, 0])
@@ -185,7 +185,8 @@ def fig_amr_disparity():
         ax1.text(b.get_x()+b.get_width()/2, n+8, f"{n}",
                  ha="center", va="bottom", fontsize=9.5, fontweight="bold")
     ax1.set_ylabel("Reference haplotypes\navailable in public HGDP+1KG panel",
-                   fontweight="bold")
+                   fontweight="bold", fontsize=11.5, labelpad=16)
+    ax1.tick_params(axis="y", pad=6, labelsize=10.5)
     ax1.set_ylim(0, 760)
     ax1.set_title("Available Homogeneous Sample Counts in 1KG-HGDP-MXB",
                   loc="center", fontweight="bold", fontsize=13, pad=12)
@@ -332,8 +333,8 @@ def fig_wgs_all_ancestry():
     axes[0].set_ylabel("Weighted per-hap recall  (chr20-22)",
                        fontsize=12.5, fontweight="bold")
 
-    fig.suptitle("Local Ancestry Inference: Amerindigenous Ancestry vs. European and African",
-                 fontweight="bold", fontsize=15, y=0.965)
+    fig.suptitle("Local Ancestry Inference Accuracy",
+                 fontweight="bold", fontsize=16, y=0.965)
 
     leg = axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.24),
                          ncol=2, fontsize=13, frameon=False)
