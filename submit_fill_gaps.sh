@@ -24,7 +24,7 @@
 set -euo pipefail
 
 MAX_CHR="${MAX_CHR:-19}"
-THROTTLE="${THROTTLE:-12}"
+THROTTLE="${THROTTLE:-15}"
 DRY_RUN="${DRY_RUN:-}"
 
 # Combos per panel-set (must match the combo grid in each script):
