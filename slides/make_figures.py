@@ -72,9 +72,9 @@ def fig_wgs_panels():
     tracks = [("NAT",    "Brazilian-like (Brasa) admixed",  "#c94a53"),
               ("NATMXB", "Mexican-like (MXB) admixed",      "#3e6bb0")]
 
-    fig, ax = plt.subplots(figsize=(13.2, 6.8), dpi=180)
-    # shift the plot area right + leave room at the bottom for legend
-    fig.subplots_adjust(left=0.13, right=0.98, top=0.88, bottom=0.30)
+    fig, ax = plt.subplots(figsize=(15, 7.2), dpi=180)
+    # roomier left margin (y-label breathing room) + roomier bottom (x-labels + legend gap)
+    fig.subplots_adjust(left=0.11, right=0.985, top=0.88, bottom=0.36)
 
     x = np.arange(len(panels))
     w = 0.36
@@ -91,14 +91,15 @@ def fig_wgs_panels():
     # two-line tick labels: friendly on top, (panel_key) below
     tick_labels = [f"{lab}\n({key.replace('NAT_', '')})" for lab, key in panels]
     ax.set_xticks(x)
-    ax.set_xticklabels(tick_labels, fontsize=10.5)
+    ax.set_xticklabels(tick_labels, fontsize=11)
     for lbl in ax.get_xticklabels():
         lbl.set_multialignment("center")
+    ax.tick_params(axis="x", pad=8)             # gap between bars and x-labels
+    ax.tick_params(axis="y", pad=6, labelsize=11)  # gap between axis and y-tick numbers
 
     ax.set_ylim(0.85, 1.00)
     ax.set_ylabel("Weighted NAT-ancestry recall\n(chr20-22, per-hap concordance)",
-                  fontsize=12.5, fontweight="bold")
-    ax.set_xlabel("Reference panel", fontsize=12.5, fontweight="bold", labelpad=12)
+                  fontsize=13, fontweight="bold", labelpad=16)  # push away from y-ticks
 
     # graph title (bold, centered above plot)
     ax.set_title("Local Ancestry Inference Simulation Accuracy (AMR tracts)",
@@ -108,8 +109,8 @@ def fig_wgs_panels():
     ax.axhline(wgs[("NAT", "NAT_HGDP", "NAT")], ls=":", color="#c94a53", lw=0.9)
     ax.axhline(wgs[("NATMXB", "NAT_HGDP", "NAT")], ls=":", color="#3e6bb0", lw=0.9)
 
-    # legend: centered UNDER the plot, bold + larger
-    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
+    # legend: below plot with clear gap from x-labels
+    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28),
                     ncol=2, fontsize=13, frameon=False)
     for t in leg.get_texts():
         t.set_fontweight("bold")
