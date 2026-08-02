@@ -143,7 +143,7 @@ def slide_motivation():
              "Adding 50 MX Biobank WGS samples brings AMR to 88 — still leaves "
              "Central America, Southern Cone, Amazon, Caribbean underrepresented.",
              size=11, color=INK)
-    add_footer(s, 2, 6, "Motivation")
+    add_footer(s, 2, 7, "Motivation")
     set_notes(s,
         "The gap slide. Public HGDP+1KG panels give us ~620 EUR haps, ~634 AFR, "
         "~667 EAS, but only ~88 AMR — a 7× disparity. The MX Biobank donation "
@@ -246,7 +246,7 @@ def slide_methods():
              "     (tests whether MXB helps a Mexican cohort)",
              size=11, color=INK)
 
-    add_footer(s, 3, 6, "Methods")
+    add_footer(s, 3, 7, "Methods")
     set_notes(s,
         "Simulation harness: SHAPEIT5-phased references feed admix-simu to create "
         "30 admixed individuals per cohort at generation 12 (long enough for "
@@ -259,6 +259,29 @@ def slide_methods():
     return s
 
 # ---------------------------------------------------------------- SLIDE 4
+def slide_ancestry_overview():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s,
+        "Panel choice moves AMR recall by ~3%; EUR and AFR sit near ceiling.")
+    add_text(s, 0.55, 1.15, 12.2, 0.4,
+             "Weighted per-hap recall by ancestry, WGS density, chr20-22 pilot",
+             size=12, italic=True, color=MUTED)
+    add_picture(s, FIGDIR / "fig_wgs_all_ancestry.png", x=0.55, y=1.55, w=12.2)
+    add_text(s, 0.55, 6.75, 12.2, 0.35,
+             "→  AMR is where reference-panel choice actually matters — "
+             "so the rest of the deck focuses on AMR recall.",
+             size=12, italic=True, color=INK)
+    add_footer(s, 4, 7, "Result overview")
+    set_notes(s,
+        "Overview slide before we zoom in. Three ancestries side by side, same "
+        "panels, same y-scale. EUR and AFR sit near ceiling regardless of which "
+        "AMR reference we pick — those calls are easy because the EUR and AFR "
+        "reference pools are already large and diverse. AMR is the ancestry that "
+        "moves: ~3% swing across panel choice on the Mexican-like cohort. "
+        "Motivates zooming in on AMR in the next slide.")
+    return s
+
+# ---------------------------------------------------------------- SLIDE 5
 def slide_wgs_result():
     s = prs.slides.add_slide(BLANK)
     add_headline(s,
@@ -279,7 +302,7 @@ def slide_wgs_result():
              "•  Adding non-Mexican ancestry\n    to a Mexican reference hurts\n\n"
              "→  Panel-choice must match the\n     target cohort, not the largest\n     available sample source.",
              size=10.5, color=INK)
-    add_footer(s, 4, 6, "Result 1 · WGS")
+    add_footer(s, 5, 7, "Result · AMR zoom")
     set_notes(s,
         "This is the headline result. On the Mexican-like cohort (NATMXB track, "
         "blue), adding 25 MXB samples to the HGDP baseline lifts NAT recall from "
@@ -313,7 +336,7 @@ def slide_chip_result():
              "     HGDPMXB > HGDP > PEL_EAS\n\n"
              "•  Recommend HGDPMXB for the\n    Mexican-Latino GWAS pipeline",
              size=10.5, color=INK)
-    add_footer(s, 5, 6, "Result 2 · Chip")
+    add_footer(s, 6, 7, "Result · Chip")
     set_notes(s,
         "Complementary result. Same reference panels, but the admixed cohort's "
         "haplotypes were down-sampled to the ~385k autosomal Illumina GSA v3 "
@@ -362,7 +385,7 @@ def slide_pipeline():
                  txt, size=11, color=INK)
         y += row_h
 
-    add_footer(s, 6, 6, "Pipeline update")
+    add_footer(s, 7, 7, "Pipeline update")
     set_notes(s,
         "Two-part update: what shipped since the Spring TAC and what's queued. "
         "The 8 modules (colleague-led) now run end-to-end on test data with the "
@@ -381,9 +404,10 @@ if __name__ == "__main__":
     slide_title()
     slide_motivation()
     slide_methods()
-    slide_wgs_result()
-    slide_chip_result()
-    slide_pipeline()
+    slide_ancestry_overview()   # NEW slide 4
+    slide_wgs_result()          # AMR zoom (was 4)
+    slide_chip_result()         # (was 5)
+    slide_pipeline()            # (was 6)
     prs.save(OUT)
     n_slides = len(prs.slides)
     sz = OUT.stat().st_size
