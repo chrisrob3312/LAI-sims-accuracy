@@ -264,29 +264,25 @@ def fig_pipeline():
     plt.close(fig)
     return out
 
-# ---------------------------------------------------------------- FIG 5: 3-ancestry range
+# ---------------------------------------------------------------- FIG 5: 3-ancestry range (simplified)
 def fig_wgs_all_ancestry():
     """
     Small multiples: AMR / EUR / AFR side-by-side, same y-scale.
-    Shows that AMR is where panel choice matters — EUR/AFR are already
-    near ceiling and barely move.
+    Only 3 panels — HGDP baseline, +25 MXB, and PEL — to keep it uncluttered.
     """
     panels = [
-        ("HGDP + 1KG baseline",              "NAT_HGDP"),
-        ("+ 25 MXB",                         "NAT_HGDPMXB"),
-        ("+ 50 MXB",                         "NAT_HGDPMXB_FULL"),
-        ("All homog. Q≥0.95",                "NAT_HOMOG"),
-        ("HGDP + PEL",                       "NAT_PEL"),
-        ("HGDP + PEL + EAS",                 "NAT_PEL_EAS"),
+        ("HGDP + 1KG\nbaseline", "NAT_HGDP"),
+        ("+ 25 MXB",             "NAT_HGDPMXB"),
+        ("+ PEL (Peru)",         "NAT_PEL"),
     ]
-    tracks = [("NAT",    "Brazilian-like (Brasa)",   "#c94a53"),
-              ("NATMXB", "Mexican-like (MXB)",       "#3e6bb0")]
-    ancestries = [("NAT", "AMR (Amerindigenous)"),
-                  ("EUR", "EUR (European)"),
-                  ("AFR", "AFR (African)")]
+    tracks = [("NAT",    "Brazilian-like cohort", "#c94a53"),
+              ("NATMXB", "Mexican-like cohort",   "#3e6bb0")]
+    ancestries = [("NAT", "AMR"),
+                  ("EUR", "EUR"),
+                  ("AFR", "AFR")]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6.2), dpi=180, sharey=True)
-    fig.subplots_adjust(left=0.07, right=0.99, top=0.86, bottom=0.28, wspace=0.10)
+    fig, axes = plt.subplots(1, 3, figsize=(13, 6.4), dpi=180, sharey=True)
+    fig.subplots_adjust(left=0.09, right=0.985, top=0.83, bottom=0.24, wspace=0.20)
 
     x = np.arange(len(panels))
     w = 0.36
@@ -296,41 +292,29 @@ def fig_wgs_all_ancestry():
             vals = [wgs.get((track, key, anc), np.nan) for _, key in panels]
             bars = ax.bar(x + (i - 0.5) * w, vals, w,
                           label=tlabel, color=color,
-                          edgecolor="white", linewidth=0.6)
+                          edgecolor="white", linewidth=0.7)
             for xi, v in zip(bars, vals):
                 if not np.isnan(v):
-                    ax.text(xi.get_x() + xi.get_width()/2, v + 0.003,
+                    ax.text(xi.get_x() + xi.get_width()/2, v + 0.004,
                             f"{v:.3f}", ha="center", va="bottom",
-                            fontsize=8.5, color="#111", fontweight="semibold")
+                            fontsize=10, color="#111", fontweight="bold")
 
-        # range annotation
-        all_vals = [wgs.get((tr, key, anc), np.nan)
-                    for tr, _, _ in tracks for _, key in panels]
-        rng = max(all_vals) - min(all_vals)
-        ax.text(0.5, 0.02, f"panel-choice range: {rng*100:.1f}%",
-                transform=ax.transAxes, ha="center", va="bottom",
-                fontsize=10, fontweight="bold",
-                color=("#c94a53" if rng > 0.03 else "#666"))
-
-        ax.set_title(anc_label, fontweight="bold", fontsize=13, pad=10)
+        ax.set_title(anc_label, fontweight="bold", fontsize=15, pad=10)
         ax.set_xticks(x)
-        ax.set_xticklabels([f"{lab}\n({key.replace('NAT_','')})"
-                            for lab, key in panels],
-                           fontsize=8.5)
+        ax.set_xticklabels([lab for lab, _ in panels], fontsize=11)
         for lbl in ax.get_xticklabels():
             lbl.set_multialignment("center")
+        ax.tick_params(axis="y", labelsize=10)
 
     axes[0].set_ylim(0.85, 1.00)
-    axes[0].set_ylabel("Weighted per-hap recall\n(chr20-22)",
-                       fontsize=12, fontweight="bold")
-    for ax in axes:
-        ax.set_xlabel("")
+    axes[0].set_ylabel("Weighted per-hap recall  (chr20-22)",
+                       fontsize=12.5, fontweight="bold")
 
-    fig.suptitle("Panel choice moves AMR recall by ~3-4%; EUR / AFR are near ceiling",
-                 fontweight="bold", fontsize=14, y=0.97)
+    fig.suptitle("Panel choice moves AMR ~3%; EUR and AFR sit near ceiling",
+                 fontweight="bold", fontsize=15, y=0.955)
 
-    leg = axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.30),
-                         ncol=2, fontsize=12, frameon=False)
+    leg = axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.24),
+                         ncol=2, fontsize=13, frameon=False)
     for t in leg.get_texts():
         t.set_fontweight("bold")
 
