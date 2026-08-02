@@ -168,8 +168,9 @@ def fig_chip_vs_wgs():
 
 # ---------------------------------------------------------------- FIG 3: gap
 def fig_amr_disparity():
-    fig = plt.figure(figsize=(13.5, 5.6), dpi=180)
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.65, 1.0], wspace=0.32)
+    fig = plt.figure(figsize=(13.5, 6.6), dpi=180)
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.65, 1.0], wspace=0.32,
+                          bottom=0.28, top=0.90, left=0.06, right=0.98)
 
     # left: bars, samples per continental group in public references
     ax1 = fig.add_subplot(gs[0, 0])
@@ -207,17 +208,19 @@ def fig_amr_disparity():
         wedgeprops=dict(edgecolor="white", linewidth=1.5),
         textprops=dict(fontsize=9.5, color="white", fontweight="bold"),
     )
-    ax2.set_title("Within AMR: geographic\ncomposition after adding MXB",
-                  loc="left", fontweight="bold")
-    ax2.legend(wedges, [f"{p} (n={s})" for p, s in zip(parts, sizes)],
-               loc="center left", bbox_to_anchor=(1.0, 0.5),
-               fontsize=9)
+    ax2.set_title("Within AMR: geographic composition after adding MXB",
+                  loc="center", fontweight="bold", fontsize=12)
+    leg = ax2.legend(wedges, [f"{p} (n={s})" for p, s in zip(parts, sizes)],
+                     loc="upper center", bbox_to_anchor=(0.5, -0.02),
+                     fontsize=11, frameon=False, ncol=1,
+                     handletextpad=0.6, labelspacing=0.4)
+    for t in leg.get_texts():
+        t.set_fontweight("bold")
 
-    fig.text(0.03, -0.02,
+    fig.text(0.06, 0.03,
              "Gaps not addressed by MXB: Central America, Southern Cone, "
              "eastern Amazon, Caribbean",
-             fontsize=9, color="#555", style="italic")
-    fig.tight_layout()
+             fontsize=10, color="#555", style="italic")
     out = OUT / "fig_amr_disparity.png"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
