@@ -107,122 +107,181 @@ def write_amr_tsv(rows):
 # ---------------------------------------------------------------- rendered PNG
 def render_amr_png(rows):
     """
-    Publication-style table. Rows grouped by cohort, then panel.
-    Winning cell in each cohort×density×metric column is bolded.
+    Publication-style table.
+
+    Layout:
+      Columns:   Panel | Brazilian-like (Recall, Prec., F1) | Mexican-like (Recall, Prec., F1)
+      Row-band 1: WGS density   — 6 panel rows
+      Row-band 2: GSA chip      — 5-6 panel rows (missing panels shown as —)
+
+    Winners bolded per (density band × cohort × metric).
     """
     NAVY   = "#0E2841"
-    TEAL   = "#156082"
-    ORANGE = "#E97132"
-    ROW_A  = "#FFFFFF"
-    ROW_B  = "#F4F6F8"
+    TEAL   = "#156082"    # Mexican-like
+    ORANGE = "#E97132"    # Brazilian-like
+    BAND_W = "#F0F6FA"    # WGS band background
+    BAND_C = "#FFF3E9"    # chip band background
     HDR_BG = "#D6E6EE"
+    BOLD_C = "#B34A17"    # deep orange for winner cells
 
-    # sort: cohort first, then panel order
-    cohort_order = ["Mexican-like", "Brazilian-like"]
-    rows_sorted = []
-    for coh in cohort_order:
-        for panel_key, panel_lbl in PANEL_ORDER:
-            for r in rows:
-                if r["cohort"] == coh and r["panel"] == panel_lbl:
-                    rows_sorted.append(r); break
+    # regroup rows -> {(density, panel_label, cohort): (recall, prec, f1)}
+    def cell(row, density, metric):
+        return row.get(f"{density}_{metric}")
 
-    # winners per (cohort × density × metric)
+    # winners per (density × cohort × metric)
     winners = {}
-    for coh in cohort_order:
-        subset = [r for r in rows_sorted if r["cohort"] == coh]
-        for density in ("WGS", "chip"):
+    for density in ("WGS", "chip"):
+        for cohort in ("Brazilian-like", "Mexican-like"):
+            subset = [r for r in rows if r["cohort"] == cohort]
             for metric in ("recall", "precision", "f1"):
-                key = f"{density}_{metric}"
-                vals = [r[key] for r in subset if r[key] is not None]
+                vals = [cell(r, density, metric) for r in subset
+                        if cell(r, density, metric) is not None]
                 if vals:
-                    winners[(coh, key)] = max(vals)
+                    winners[(density, cohort, metric)] = max(vals)
 
-    # header layout: 2 rows of headers
-    #   [ Panel | Cohort | WGS(recall|prec|F1) | Chip(recall|prec|F1) ]
-    col_headers_row2 = ["Panel", "Cohort",
-                        "Recall", "Prec.", "F1",
-                        "Recall", "Prec.", "F1"]
-    n_cols = len(col_headers_row2)
-    n_rows = len(rows_sorted) + 2  # 2 header rows
+    # rows per density band: one row per panel, with 6 metric cols (Brasa | Mex)
+    def band_rows(density):
+        out = []
+        for panel_key, panel_lbl in PANEL_ORDER:
+            brasa = next((r for r in rows
+                          if r["cohort"] == "Brazilian-like"
+                          and r["panel"] == panel_lbl), None)
+            mex   = next((r for r in rows
+                          if r["cohort"] == "Mexican-like"
+                          and r["panel"] == panel_lbl), None)
+            out.append({
+                "panel": panel_lbl,
+                "brasa_recall":    (cell(brasa, density, "recall")    if brasa else None),
+                "brasa_precision": (cell(brasa, density, "precision") if brasa else None),
+                "brasa_f1":        (cell(brasa, density, "f1")        if brasa else None),
+                "mex_recall":      (cell(mex,   density, "recall")    if mex   else None),
+                "mex_precision":   (cell(mex,   density, "precision") if mex   else None),
+                "mex_f1":          (cell(mex,   density, "f1")        if mex   else None),
+            })
+        return out
 
-    fig, ax = plt.subplots(figsize=(12.5, 0.42 * n_rows + 1.4), dpi=200)
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    wgs_rows  = band_rows("WGS")
+    chip_rows = band_rows("chip")
 
-    # column widths (relative, must sum to 1)
-    col_w = [0.22, 0.15,  0.115, 0.105, 0.105,  0.115, 0.095, 0.095]
+    # only keep panels that have at least one non-None value in the band
+    def prune(band): return [r for r in band if any(
+        r[k] is not None for k in
+        ("brasa_recall","brasa_precision","brasa_f1","mex_recall","mex_precision","mex_f1"))]
+    wgs_rows, chip_rows = prune(wgs_rows), prune(chip_rows)
+
+    col_headers = ["Panel",
+                   "Recall", "Prec.", "F1",
+                   "Recall", "Prec.", "F1"]
+    n_cols = 7
+    # column widths (must sum to 1)
+    col_w = [0.22,  0.135, 0.125, 0.125,  0.135, 0.125, 0.135]
     assert abs(sum(col_w) - 1.0) < 1e-6, f"col_w sums to {sum(col_w)}"
     col_x = [sum(col_w[:i]) for i in range(n_cols + 1)]
 
-    row_h = 1.0 / n_rows
-    # y from top -> row index 0 at top
+    # layout: header row 1 (cohort banners), header row 2 (col names),
+    # WGS band label, WGS rows, chip band label, chip rows
+    n_rows = 2 + 1 + len(wgs_rows) + 1 + len(chip_rows)
+    row_h  = 1.0 / n_rows
     def row_y(i): return 1.0 - (i + 1) * row_h
 
-    # header row 1 (density banner across cols 2-4 and 5-7)
-    ax.add_patch(plt.Rectangle((0, row_y(0)), col_x[2], row_h,
-                               facecolor=NAVY, edgecolor="none"))
-    ax.text((0 + col_x[2]) / 2, row_y(0) + row_h/2, "AMR-tract calling accuracy",
-            ha="center", va="center", color="white", fontsize=11.5, fontweight="bold")
-    ax.add_patch(plt.Rectangle((col_x[2], row_y(0)), col_x[5] - col_x[2], row_h,
-                               facecolor=TEAL, edgecolor="none"))
-    ax.text((col_x[2] + col_x[5]) / 2, row_y(0) + row_h/2, "WGS density",
-            ha="center", va="center", color="white", fontsize=11.5, fontweight="bold")
-    ax.add_patch(plt.Rectangle((col_x[5], row_y(0)), col_x[8] - col_x[5], row_h,
-                               facecolor=ORANGE, edgecolor="none"))
-    ax.text((col_x[5] + col_x[8]) / 2, row_y(0) + row_h/2, "GSA chip density",
-            ha="center", va="center", color="white", fontsize=11.5, fontweight="bold")
+    fig, ax = plt.subplots(figsize=(11.5, 0.44 * n_rows + 1.2), dpi=200)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
 
-    # header row 2 (per-column labels)
+    # -------- header row 1: cohort banners
+    ax.add_patch(plt.Rectangle((0, row_y(0)), col_x[1], row_h,
+                               facecolor=NAVY, edgecolor="none"))
+    ax.text(col_x[1]/2, row_y(0) + row_h/2, "AMR-tract calling accuracy",
+            ha="center", va="center", color="white",
+            fontsize=11.5, fontweight="bold")
+    # Brasa banner
+    ax.add_patch(plt.Rectangle((col_x[1], row_y(0)), col_x[4] - col_x[1], row_h,
+                               facecolor=ORANGE, edgecolor="none"))
+    ax.text((col_x[1] + col_x[4])/2, row_y(0) + row_h/2, "Brazilian-like cohort",
+            ha="center", va="center", color="white",
+            fontsize=12, fontweight="bold")
+    # Mexican banner
+    ax.add_patch(plt.Rectangle((col_x[4], row_y(0)), col_x[7] - col_x[4], row_h,
+                               facecolor=TEAL, edgecolor="none"))
+    ax.text((col_x[4] + col_x[7])/2, row_y(0) + row_h/2, "Mexican-like cohort",
+            ha="center", va="center", color="white",
+            fontsize=12, fontweight="bold")
+
+    # -------- header row 2: metric names
     for c in range(n_cols):
         ax.add_patch(plt.Rectangle((col_x[c], row_y(1)), col_w[c], row_h,
                                    facecolor=HDR_BG, edgecolor="white", linewidth=0.5))
-        ax.text(col_x[c] + col_w[c]/2, row_y(1) + row_h/2, col_headers_row2[c],
-                ha="center", va="center", fontsize=10.5, fontweight="bold", color=NAVY)
+        ax.text(col_x[c] + col_w[c]/2, row_y(1) + row_h/2, col_headers[c],
+                ha="center", va="center",
+                fontsize=10.5, fontweight="bold", color=NAVY)
 
-    # data rows
-    for i, r in enumerate(rows_sorted):
-        y = row_y(i + 2)
-        # zebra
-        stripe = ROW_A if i % 2 == 0 else ROW_B
+    # -------- helper to draw one data-row
+    def draw_row(i, band_label, r, band_bg):
+        y = row_y(i)
         ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
-                                   facecolor=stripe, edgecolor="none"))
-        # cohort banner change
+                                   facecolor=band_bg, edgecolor="none"))
         text_cells = [
             r["panel"],
-            r["cohort"],
-            _fmt(r["WGS_recall"]),  _fmt(r["WGS_precision"]),  _fmt(r["WGS_f1"]),
-            _fmt(r["chip_recall"]), _fmt(r["chip_precision"]), _fmt(r["chip_f1"]),
+            _fmt(r["brasa_recall"]),  _fmt(r["brasa_precision"]),  _fmt(r["brasa_f1"]),
+            _fmt(r["mex_recall"]),    _fmt(r["mex_precision"]),    _fmt(r["mex_f1"]),
         ]
-        cell_keys = [None, None,
-                     "WGS_recall", "WGS_precision", "WGS_f1",
-                     "chip_recall", "chip_precision", "chip_f1"]
+        cell_keys = [None,
+                     ("brasa_recall","Brazilian-like","recall"),
+                     ("brasa_precision","Brazilian-like","precision"),
+                     ("brasa_f1","Brazilian-like","f1"),
+                     ("mex_recall","Mexican-like","recall"),
+                     ("mex_precision","Mexican-like","precision"),
+                     ("mex_f1","Mexican-like","f1")]
         for c in range(n_cols):
             val = text_cells[c]
             key = cell_keys[c]
-            bold = False
-            color = "#111"
+            bold = False; color = "#111"
             if key is not None:
-                wkey = (r["cohort"], key)
-                if wkey in winners and r[key] == winners[wkey]:
-                    bold = True; color = ORANGE
-            ha = "left" if c == 0 else ("center" if c > 1 else "left")
-            xpad = 0.008
-            xtext = (col_x[c] + xpad) if ha == "left" else (col_x[c] + col_w[c]/2)
+                col_key, cohort, metric = key
+                v = r[col_key]
+                w = winners.get((band_label, cohort, metric))
+                if v is not None and w is not None and v == w:
+                    bold = True; color = BOLD_C
+            ha = "left" if c == 0 else "center"
+            xtext = (col_x[c] + 0.008) if ha == "left" else (col_x[c] + col_w[c]/2)
             ax.text(xtext, y + row_h/2, val,
                     ha=ha, va="center",
-                    fontsize=10 if not bold else 10.5,
+                    fontsize=10.5 if bold else 10,
                     fontweight=("bold" if bold else "normal"),
                     color=color)
 
-    # thin dividers between cohorts + columns
-    ax.plot([0, 1], [row_y(2), row_y(2)], color=NAVY, lw=0.9)  # under header row 2
-    # cohort divider
-    cutoff_i = sum(1 for r in rows_sorted if r["cohort"] == cohort_order[0])
-    y_cut = row_y(cutoff_i + 2)
-    ax.plot([0, 1], [y_cut, y_cut], color=NAVY, lw=0.6, linestyle="--")
+    # -------- WGS band label row
+    y = row_y(2)
+    ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
+                               facecolor=NAVY, edgecolor="none"))
+    ax.text(0.01, y + row_h/2, "  WGS density",
+            ha="left", va="center", color="white",
+            fontsize=11, fontweight="bold")
 
-    # footer note
+    for i, r in enumerate(wgs_rows):
+        draw_row(3 + i, "WGS", r, BAND_W)
+
+    # -------- Chip band label row
+    chip_hdr_i = 3 + len(wgs_rows)
+    y = row_y(chip_hdr_i)
+    ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
+                               facecolor=NAVY, edgecolor="none"))
+    ax.text(0.01, y + row_h/2, "  GSA chip density (unimputed)",
+            ha="left", va="center", color="white",
+            fontsize=11, fontweight="bold")
+
+    for i, r in enumerate(chip_rows):
+        draw_row(chip_hdr_i + 1 + i, "chip", r, BAND_C)
+
+    # dividers
+    ax.plot([0, 1], [row_y(2), row_y(2)], color=NAVY, lw=0.8)
+    ax.plot([0, 1], [row_y(chip_hdr_i), row_y(chip_hdr_i)], color=NAVY, lw=0.8)
+    # column vertical rule between cohorts
+    ax.plot([col_x[4], col_x[4]], [row_y(1), 0], color=NAVY, lw=0.8)
+
+    # footer
     ax.text(0, -0.02,
-            "Weighted per-hap metrics · chr20–22 pilot · winner per cohort×density×metric bolded (orange)",
+            "Weighted per-hap metrics · winner per density×cohort×metric bolded (orange) · "
+            "chr1-8+20-22 for full-coverage WGS panels; chip pilot chr20-22.",
             transform=ax.transAxes, ha="left", va="top",
             fontsize=9, color="#555", style="italic")
 
