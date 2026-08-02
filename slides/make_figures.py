@@ -60,39 +60,62 @@ plt.rcParams.update({
 
 # ---------------------------------------------------------------- FIG 1: WGS
 def fig_wgs_panels():
-    panels = ["NAT_HGDP", "NAT_HGDPMXB", "NAT_HGDPMXB_FULL",
-              "NAT_HOMOG", "NAT_PEL", "NAT_PEL_EAS"]
+    # (friendly label, panel key)
+    panels = [
+        ("HGDP + 1KG baseline",              "NAT_HGDP"),
+        ("+ 25 MX Biobank samples",          "NAT_HGDPMXB"),
+        ("+ 50 MX Biobank samples",          "NAT_HGDPMXB_FULL"),
+        ("All homogeneous samples (Q≥0.95)", "NAT_HOMOG"),
+        ("HGDP + Peruvian (1KG PEL)",        "NAT_PEL"),
+        ("HGDP + PEL + EAS outgroup",        "NAT_PEL_EAS"),
+    ]
     tracks = [("NAT",    "Brazilian-like (Brasa) admixed",  "#c94a53"),
               ("NATMXB", "Mexican-like (MXB) admixed",      "#3e6bb0")]
 
-    fig, ax = plt.subplots(figsize=(11, 5), dpi=180)
+    fig, ax = plt.subplots(figsize=(13.2, 6.8), dpi=180)
+    # shift the plot area right + leave room at the bottom for legend
+    fig.subplots_adjust(left=0.13, right=0.98, top=0.88, bottom=0.30)
+
     x = np.arange(len(panels))
     w = 0.36
     for i, (track, label, color) in enumerate(tracks):
-        vals = [wgs.get((track, p, "NAT"), np.nan) for p in panels]
+        vals = [wgs.get((track, key, "NAT"), np.nan) for _, key in panels]
         bars = ax.bar(x + (i - 0.5) * w, vals, w, label=label,
-                      color=color, edgecolor="white", linewidth=0.6)
+                      color=color, edgecolor="white", linewidth=0.7)
         for xi, v in zip(bars, vals):
             if not np.isnan(v):
                 ax.text(xi.get_x() + xi.get_width()/2, v + 0.003,
-                        f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
+                        f"{v:.3f}", ha="center", va="bottom",
+                        fontsize=10, color="#111", fontweight="semibold")
 
+    # two-line tick labels: friendly on top, (panel_key) below
+    tick_labels = [f"{lab}\n({key.replace('NAT_', '')})" for lab, key in panels]
     ax.set_xticks(x)
-    ax.set_xticklabels([p.replace("NAT_", "").replace("_", "\n")
-                        for p in panels], fontsize=10)
-    ax.set_ylim(0.85, 1.00)
-    ax.set_ylabel("Weighted NAT-ancestry recall\n(chr20-22, per-hap concordance)")
-    ax.set_title("Best reference panel depends on cohort composition",
-                 loc="left", fontweight="bold")
-    ax.legend(loc="lower left", ncol=2, bbox_to_anchor=(0, 1.02))
-    ax.axhline(wgs[("NAT", "NAT_HGDP", "NAT")], ls=":", color="#c94a53", lw=0.8)
-    ax.axhline(wgs[("NATMXB", "NAT_HGDP", "NAT")], ls=":", color="#3e6bb0", lw=0.8)
-    ax.text(5.6, wgs[("NAT", "NAT_HGDP", "NAT")], "  HGDP baseline",
-            fontsize=8, color="#c94a53", va="center")
+    ax.set_xticklabels(tick_labels, fontsize=10.5)
+    for lbl in ax.get_xticklabels():
+        lbl.set_multialignment("center")
 
-    fig.tight_layout()
+    ax.set_ylim(0.85, 1.00)
+    ax.set_ylabel("Weighted NAT-ancestry recall\n(chr20-22, per-hap concordance)",
+                  fontsize=12.5, fontweight="bold")
+    ax.set_xlabel("Reference panel", fontsize=12.5, fontweight="bold", labelpad=12)
+
+    # graph title (bold, centered above plot)
+    ax.set_title("Local Ancestry Inference Simulation Accuracy (AMR tracts)",
+                 loc="center", fontweight="bold", fontsize=14, pad=14)
+
+    # baseline reference lines
+    ax.axhline(wgs[("NAT", "NAT_HGDP", "NAT")], ls=":", color="#c94a53", lw=0.9)
+    ax.axhline(wgs[("NATMXB", "NAT_HGDP", "NAT")], ls=":", color="#3e6bb0", lw=0.9)
+
+    # legend: centered UNDER the plot, bold + larger
+    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
+                    ncol=2, fontsize=13, frameon=False)
+    for t in leg.get_texts():
+        t.set_fontweight("bold")
+
     out = OUT / "fig_wgs_panels.png"
-    fig.savefig(out, bbox_inches="tight")
+    fig.savefig(out)
     plt.close(fig)
     return out
 
