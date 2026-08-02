@@ -140,7 +140,7 @@ def slide_motivation():
              size=12, italic=True, color=MUTED)
     add_picture(s, FIGDIR / "fig_amr_disparity.png", x=0.4, y=1.65, w=12.5)
     add_text(s, 0.55, 6.65, 12.2, 0.45,
-             "Adding 50 MX Biobank WGS samples raises AMR to 138 haps — still leaves "
+             "Adding 50 MX Biobank WGS samples brings AMR to 88 — still leaves "
              "Central America, Southern Cone, Amazon, Caribbean underrepresented.",
              size=11, color=INK)
     add_footer(s, 2, 6, "Motivation")

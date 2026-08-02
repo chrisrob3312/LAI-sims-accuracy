@@ -127,7 +127,7 @@ def fig_chip_vs_wgs():
     wgs_v  = [wgs.get( (track, p, "NAT"), np.nan) for p in panels]
     chip_v = [chip.get((track, p, "NAT"), np.nan) for p in panels]
 
-    fig, ax = plt.subplots(figsize=(10.5, 4.8), dpi=180)
+    fig, ax = plt.subplots(figsize=(11.5, 6.0), dpi=180)
     x = np.arange(len(panels))
     w = 0.36
     b1 = ax.bar(x - w/2, wgs_v, w, label="WGS density",
@@ -144,12 +144,20 @@ def fig_chip_vs_wgs():
     ax.set_xticklabels([p.replace("NAT_", "").replace("_", "\n")
                         for p in panels], fontsize=10)
     ax.set_ylim(0.85, 0.96)
-    ax.set_ylabel("Weighted NAT-ancestry recall")
-    ax.set_title("Chip-density LAI holds within ~1% of WGS   (Mexican-like cohort)",
-                 loc="left", fontweight="bold")
-    ax.legend(loc="lower left", ncol=2, bbox_to_anchor=(0, 1.02))
+    ax.set_ylabel("Weighted NAT-ancestry recall",
+                  fontsize=12, fontweight="bold", labelpad=12)
+    ax.tick_params(axis="y", pad=6, labelsize=10.5)
+    ax.tick_params(axis="x", pad=8)
 
-    fig.tight_layout()
+    ax.set_title("LAI Accuracy: Genotyping (unimputed) vs. Whole-genome sequencing",
+                 loc="center", fontweight="bold", fontsize=13.5, pad=14)
+
+    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.22),
+                    ncol=2, fontsize=12, frameon=False)
+    for t in leg.get_texts():
+        t.set_fontweight("bold")
+
+    fig.subplots_adjust(left=0.11, right=0.98, top=0.86, bottom=0.28)
     out = OUT / "fig_chip_vs_wgs.png"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
@@ -163,7 +171,7 @@ def fig_amr_disparity():
     # left: bars, samples per continental group in public references
     ax1 = fig.add_subplot(gs[0, 0])
     groups = ["EAS", "AFR", "EUR", "SAS", "AMR\n(HGDP+1KG)", "AMR\n+MXB (this study)"]
-    counts = [ 667,   634,   620,   48,   88,               138]
+    counts = [ 667,   634,   620,   48,   38,               88]
     colors = [TEAL, ORANGE, FOREST, CYAN, PLUM, PLUM]
     alphas = [1,1,1,1,0.55,1.0]
     bars = ax1.bar(groups, counts, color=colors, alpha=None)
@@ -172,10 +180,11 @@ def fig_amr_disparity():
     for b, n in zip(bars, counts):
         ax1.text(b.get_x()+b.get_width()/2, n+8, f"{n}",
                  ha="center", va="bottom", fontsize=9.5, fontweight="bold")
-    ax1.set_ylabel("Reference haplotypes\navailable in public HGDP+1KG panel")
+    ax1.set_ylabel("Reference haplotypes\navailable in public HGDP+1KG panel",
+                   fontweight="bold")
     ax1.set_ylim(0, 760)
-    ax1.set_title("Amerindigenous references are ~7× smaller than other continents",
-                  loc="left", fontweight="bold")
+    ax1.set_title("Available Homogeneous Sample Counts in 1KG-HGDP-MXB",
+                  loc="center", fontweight="bold", fontsize=13, pad=12)
     ax1.tick_params(axis="x", labelsize=9.5)
 
     # right: within-AMR pie showing geographic gaps
@@ -280,9 +289,10 @@ def fig_wgs_all_ancestry():
     ]
     tracks = [("NAT",    "Brazilian-like cohort", BRASA_COL),
               ("NATMXB", "Mexican-like cohort",   MXB_COL)]
-    ancestries = [("NAT", "AMR"),
-                  ("EUR", "EUR"),
-                  ("AFR", "AFR")]
+    # alphabetical: African, Amerindigenous, European
+    ancestries = [("AFR", "AFR (African)"),
+                  ("NAT", "AMR (Amerindigenous)"),
+                  ("EUR", "EUR (European)")]
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 6.4), dpi=180, sharey=True)
     fig.subplots_adjust(left=0.09, right=0.985, top=0.83, bottom=0.24, wspace=0.20)
@@ -313,8 +323,8 @@ def fig_wgs_all_ancestry():
     axes[0].set_ylabel("Weighted per-hap recall  (chr20-22)",
                        fontsize=12.5, fontweight="bold")
 
-    fig.suptitle("Panel choice moves AMR ~3%; EUR and AFR sit near ceiling",
-                 fontweight="bold", fontsize=15, y=0.955)
+    fig.suptitle("Local Ancestry Inference: Amerindigenous Ancestry vs. European and African",
+                 fontweight="bold", fontsize=15, y=0.965)
 
     leg = axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.24),
                          ncol=2, fontsize=13, frameon=False)
