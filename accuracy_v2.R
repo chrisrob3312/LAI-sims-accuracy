@@ -173,27 +173,42 @@ score_one <- function(track, panel, chr) {
   hap_sample <- rep(samps, each = 2)[seq_len(n_haps)]
 
   # Long-form per hap x per ancestry class.
-  # For each class a (only sites where truth == a): concordance = mean(R == T)
+  # For each class a we record:
+  #   n_sites      = sites where truth == a  (support for recall)
+  #   n_correct    = sites where truth == a AND rec == a  (TP)
+  #   concordance  = n_correct / n_sites  = per-class recall (Jessica's TPR)
+  #   n_pred       = sites where rec == a   (support for precision)
+  #   n_tp         = same as n_correct (for clarity in F1 downstream)
+  #   n_fp         = sites where rec == a AND truth != a
+  #   n_fn         = sites where truth == a AND rec != a
+  # Downstream aggregation computes precision, recall, F1 per (track,panel,ancestry).
   out <- vector("list", n_haps * length(ANC_LABELS))
   k <- 0L
   for (h in seq_len(n_haps)) {
     tv <- T[, h]; rv <- R[, h]
     for (a in as.integer(names(ANC_LABELS))) {
-      mask <- (tv == a)
-      n_a  <- sum(mask)
+      truth_mask <- (tv == a)
+      pred_mask  <- (rv == a)
+      n_a   <- sum(truth_mask)
       if (n_a == 0L) next
-      hits <- sum(rv[mask] == a)
+      n_p   <- sum(pred_mask)
+      n_tp  <- sum(truth_mask & pred_mask)
+      n_fp  <- n_p - n_tp
+      n_fn  <- n_a - n_tp
       k <- k + 1L
       out[[k]] <- data.frame(
-        track     = track,
-        panel     = panel,
-        chr       = chr,
-        hap       = h,
-        sample    = hap_sample[h],
-        ancestry  = ANC_LABELS[[as.character(a)]],
-        n_sites   = as.integer(n_a),
-        n_correct = as.integer(hits),
-        concordance = hits / n_a,
+        track       = track,
+        panel       = panel,
+        chr         = chr,
+        hap         = h,
+        sample      = hap_sample[h],
+        ancestry    = ANC_LABELS[[as.character(a)]],
+        n_sites     = as.integer(n_a),
+        n_correct   = as.integer(n_tp),
+        concordance = n_tp / n_a,          # per-class recall / TPR
+        n_pred      = as.integer(n_p),
+        n_fp        = as.integer(n_fp),
+        n_fn        = as.integer(n_fn),
         stringsAsFactors = FALSE)
     }
   }
@@ -225,20 +240,58 @@ message(sprintf("[accuracy_v2] wrote %d long rows", nrow(long)))
 # --- Summaries -----------------------------------------------------------
 # Genome-wide per (track, panel, ancestry): weighted mean across chrs & haps,
 # weights = n_sites in truth for that ancestry class.
+# Metrics reported:
+#   recall (aka TPR, aka concordance): TP / (TP + FN) = n_correct / n_sites
+#   precision:                          TP / (TP + FP) = n_correct / n_pred
+#   F1:                                 2 * P * R / (P + R)
+#   These are the standard metrics Honorato-Mauer 2025 reports; F1 is preferred
+#   for imbalanced ancestries (NAT is 15% of Brasa sites, so recall alone
+#   overstates when the model predicts NAT rarely).
 weighted_summary <- long |>
   group_by(track, panel, ancestry) |>
   summarise(
-    weighted_concordance = sum(n_correct) / sum(n_sites),
-    unweighted_mean      = mean(concordance),
-    se                   = sd(concordance) / sqrt(n()),
-    n_haps_chr           = n(),
+    tp = sum(n_correct),
+    fp = sum(n_fp),
+    fn = sum(n_fn),
     total_sites          = sum(n_sites),
+    n_haps_chr           = n(),
+    .groups = "drop") |>
+  mutate(
+    weighted_recall      = tp / (tp + fn),
+    weighted_precision   = tp / (tp + fp),
+    weighted_f1          = 2 * weighted_precision * weighted_recall /
+                            (weighted_precision + weighted_recall),
+    weighted_concordance = weighted_recall  # legacy alias for compat with old plots
+  ) |>
+  # keep same column order as before + append precision/F1
+  select(track, panel, ancestry,
+         weighted_concordance, weighted_recall, weighted_precision, weighted_f1,
+         total_sites, n_haps_chr, tp, fp, fn)
+
+# unweighted per-hap mean/SE of recall (matches old "unweighted_mean" for plots)
+unweighted_stats <- long |>
+  group_by(track, panel, ancestry) |>
+  summarise(
+    unweighted_mean = mean(concordance),
+    se              = sd(concordance) / sqrt(n()),
     .groups = "drop")
+weighted_summary <- weighted_summary |>
+  left_join(unweighted_stats, by = c("track", "panel", "ancestry"))
 write_tsv(weighted_summary, file.path(OUTDIR, "accuracy_summary.tsv"))
 
+# Per-chr: recall + F1
 per_chr <- long |>
   group_by(track, panel, ancestry, chr) |>
-  summarise(concordance = sum(n_correct) / sum(n_sites), .groups = "drop")
+  summarise(
+    tp = sum(n_correct), fp = sum(n_fp), fn = sum(n_fn),
+    n_sites = sum(n_sites),
+    .groups = "drop") |>
+  mutate(
+    recall      = tp / (tp + fn),
+    precision   = tp / (tp + fp),
+    f1          = 2 * precision * recall / (precision + recall),
+    concordance = recall  # legacy alias
+  )
 write_tsv(per_chr, file.path(OUTDIR, "accuracy_per_chr.tsv"))
 
 # --- Paired comparisons vs baseline (Wilcoxon signed-rank, Bonferroni) ---
