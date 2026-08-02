@@ -272,9 +272,9 @@ def fig_wgs_all_ancestry():
     Only 3 panels — HGDP baseline, +25 MXB, and PEL — to keep it uncluttered.
     """
     panels = [
-        ("HGDP + 1KG\nbaseline", "NAT_HGDP"),
-        ("+ 25 MXB",             "NAT_HGDPMXB"),
-        ("+ PEL (Peru)",         "NAT_PEL"),
+        ("HGDP + 1KG",   "NAT_HGDP"),
+        ("+ MXB",        "NAT_HGDPMXB"),
+        ("+ PEL (Peru)", "NAT_PEL"),
     ]
     tracks = [("NAT",    "Brazilian-like cohort", "#c94a53"),
               ("NATMXB", "Mexican-like cohort",   "#3e6bb0")]
@@ -296,9 +296,9 @@ def fig_wgs_all_ancestry():
                           edgecolor="white", linewidth=0.7)
             for xi, v in zip(bars, vals):
                 if not np.isnan(v):
-                    ax.text(xi.get_x() + xi.get_width()/2, v + 0.004,
-                            f"{v:.3f}", ha="center", va="bottom",
-                            fontsize=10, color="#111", fontweight="bold")
+                    ax.text(xi.get_x() + xi.get_width()/2, v + 0.005,
+                            f"{v*100:.0f}%", ha="center", va="bottom",
+                            fontsize=11, color="#111", fontweight="bold")
 
         ax.set_title(anc_label, fontweight="bold", fontsize=15, pad=10)
         ax.set_xticks(x)
