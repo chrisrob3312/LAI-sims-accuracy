@@ -23,17 +23,18 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------- data readers
 def read_summary(tsv):
-    """Return {(track, panel, ancestry): weighted_concordance}."""
-    d = {}
+    """Return ({(track, panel, ancestry): weighted_concordance}, raw_rows)."""
+    d = {}; rows = []
     with open(tsv) as f:
         r = csv.DictReader(f, delimiter="\t")
         for row in r:
             k = (row["track"], row["panel"], row["ancestry"])
             d[k] = float(row["weighted_concordance"])
-    return d
+            rows.append(row)
+    return d, rows
 
-wgs  = read_summary(REPO / "results/accuracy_pilot/accuracy_summary.tsv")
-chip = read_summary(REPO / "results/accuracy_pilot_chip_gsa/accuracy_summary.tsv")
+wgs,  _wgs_rows  = read_summary(REPO / "results/accuracy_pilot/accuracy_summary.tsv")
+chip, _chip_rows = read_summary(REPO / "results/accuracy_pilot_chip_gsa/accuracy_summary.tsv")
 
 # ---------------------------------------------------------------- colors
 # Palette matches the Spring TAC pptx theme accent scheme (theme3.xml):
@@ -65,14 +66,23 @@ plt.rcParams.update({
 
 # ---------------------------------------------------------------- FIG 1: WGS
 def fig_wgs_panels():
-    # (friendly label, panel key)
+    # (friendly label, panel key) — asterisk flags panels with partial (chr20-22) coverage
+    def _cov_flag(key):
+        """Return '*' if this panel's WGS coverage is <20M sites (i.e., chr20-22 only)."""
+        v = wgs.get(("NAT", key, "NAT"))
+        if v is None: return ""
+        # look up total_sites for one row
+        for row in _wgs_rows:
+            if row["panel"] == key and row["ancestry"] == "NAT" and row["track"] == "NAT":
+                return "*" if int(row["total_sites"]) < 20_000_000 else ""
+        return ""
     panels = [
-        ("HGDP + 1KG",     "NAT_HGDP"),
-        ("+ 25 MXB",       "NAT_HGDPMXB"),
-        ("+ 50 MXB",       "NAT_HGDPMXB_FULL"),
-        ("Homog. Q≥0.95",  "NAT_HOMOG"),
-        ("+ PEL (Peru)",   "NAT_PEL"),
-        ("+ PEL + EAS",    "NAT_PEL_EAS"),
+        (f"HGDP + 1KG{_cov_flag('NAT_HGDP')}",              "NAT_HGDP"),
+        (f"+ 25 MXB{_cov_flag('NAT_HGDPMXB')}",             "NAT_HGDPMXB"),
+        (f"+ 50 MXB{_cov_flag('NAT_HGDPMXB_FULL')}",        "NAT_HGDPMXB_FULL"),
+        (f"Homog. Q≥0.95{_cov_flag('NAT_HOMOG')}",          "NAT_HOMOG"),
+        (f"+ PEL (Peru){_cov_flag('NAT_PEL')}",             "NAT_PEL"),
+        (f"+ PEL + EAS{_cov_flag('NAT_PEL_EAS')}",          "NAT_PEL_EAS"),
     ]
     tracks = [("NAT",    "Brazilian-like (Brasa) admixed",  BRASA_COL),
               ("NATMXB", "Mexican-like (MXB) admixed",      MXB_COL)]
@@ -111,6 +121,13 @@ def fig_wgs_panels():
     # legend: below plot with clear gap from x-labels
     leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24),
                     ncol=2, fontsize=13, frameon=False)
+
+    # coverage footnote if any panel is partial
+    has_partial = any(lab.endswith("*") for lab, _ in panels)
+    if has_partial:
+        fig.text(0.11, 0.02,
+                 "* chr20-22 only; other panels also cover chr1-8 in this pilot",
+                 fontsize=10, color="#555", style="italic")
     for t in leg.get_texts():
         t.set_fontweight("bold")
 
