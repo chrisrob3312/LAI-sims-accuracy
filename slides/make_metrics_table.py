@@ -178,46 +178,66 @@ def render_amr_png(rows):
     assert abs(sum(col_w) - 1.0) < 1e-6, f"col_w sums to {sum(col_w)}"
     col_x = [sum(col_w[:i]) for i in range(n_cols + 1)]
 
-    # layout: header row 1 (cohort banners), header row 2 (col names),
-    # WGS band label, WGS rows, chip band label, chip rows
-    n_rows = 2 + 1 + len(wgs_rows) + 1 + len(chip_rows)
-    row_h  = 1.0 / n_rows
-    def row_y(i): return 1.0 - (i + 1) * row_h
+    # layout: header row 1 (cohort banners, taller), header row 2 (col names,
+    # taller), WGS band label, WGS rows, chip band label, chip rows.
+    # Give the two top header rows extra height so the banner text has room.
+    HEAD1_MULT = 1.35    # cohort banner row height multiplier
+    HEAD2_MULT = 1.20    # column-label row height
+    BAND_MULT  = 1.15    # density band label row height
+    n_data     = len(wgs_rows) + len(chip_rows)
+    # total "row units" (data rows are 1 unit each, headers/bands are bigger)
+    total_units = HEAD1_MULT + HEAD2_MULT + BAND_MULT + len(wgs_rows) + BAND_MULT + len(chip_rows)
+    unit = 1.0 / total_units
+    # explicit per-row heights (from top to bottom)
+    row_heights = ([HEAD1_MULT, HEAD2_MULT, BAND_MULT] +
+                   [1.0] * len(wgs_rows) +
+                   [BAND_MULT] +
+                   [1.0] * len(chip_rows))
+    row_heights = [h * unit for h in row_heights]
+    # top edge of row i
+    row_top = [1.0 - sum(row_heights[:i]) for i in range(len(row_heights) + 1)]
+    def row_y(i):    return row_top[i] - row_heights[i]   # bottom edge of row i
+    def row_h_of(i): return row_heights[i]
 
-    fig, ax = plt.subplots(figsize=(11.5, 0.44 * n_rows + 1.2), dpi=200)
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
+    # generous figure size + a hair of ylim padding so the tight-bbox crop
+    # never clips the top cohort banner
+    fig_h = 0.42 * (n_data + 3.5) + 1.4
+    fig, ax = plt.subplots(figsize=(11.5, fig_h), dpi=200)
+    ax.set_xlim(0, 1); ax.set_ylim(-0.02, 1.02); ax.axis("off")
 
-    # -------- header row 1: cohort banners
-    ax.add_patch(plt.Rectangle((0, row_y(0)), col_x[1], row_h,
+    # -------- header row 1: cohort banners (taller)
+    h0 = row_h_of(0)
+    ax.add_patch(plt.Rectangle((0, row_y(0)), col_x[1], h0,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(col_x[1]/2, row_y(0) + row_h/2, "AMR-tract calling accuracy",
+    ax.text(col_x[1]/2, row_y(0) + h0/2, "AMR-tract calling accuracy",
             ha="center", va="center", color="white",
-            fontsize=11.5, fontweight="bold")
+            fontsize=11, fontweight="bold")
     # Brasa banner
-    ax.add_patch(plt.Rectangle((col_x[1], row_y(0)), col_x[4] - col_x[1], row_h,
+    ax.add_patch(plt.Rectangle((col_x[1], row_y(0)), col_x[4] - col_x[1], h0,
                                facecolor=ORANGE, edgecolor="none"))
-    ax.text((col_x[1] + col_x[4])/2, row_y(0) + row_h/2, "Brazilian-like cohort",
+    ax.text((col_x[1] + col_x[4])/2, row_y(0) + h0/2, "Brazilian-like cohort",
             ha="center", va="center", color="white",
-            fontsize=12, fontweight="bold")
+            fontsize=12.5, fontweight="bold")
     # Mexican banner
-    ax.add_patch(plt.Rectangle((col_x[4], row_y(0)), col_x[7] - col_x[4], row_h,
+    ax.add_patch(plt.Rectangle((col_x[4], row_y(0)), col_x[7] - col_x[4], h0,
                                facecolor=TEAL, edgecolor="none"))
-    ax.text((col_x[4] + col_x[7])/2, row_y(0) + row_h/2, "Mexican-like cohort",
+    ax.text((col_x[4] + col_x[7])/2, row_y(0) + h0/2, "Mexican-like cohort",
             ha="center", va="center", color="white",
-            fontsize=12, fontweight="bold")
+            fontsize=12.5, fontweight="bold")
 
     # -------- header row 2: metric names
+    h1 = row_h_of(1)
     for c in range(n_cols):
-        ax.add_patch(plt.Rectangle((col_x[c], row_y(1)), col_w[c], row_h,
+        ax.add_patch(plt.Rectangle((col_x[c], row_y(1)), col_w[c], h1,
                                    facecolor=HDR_BG, edgecolor="white", linewidth=0.5))
-        ax.text(col_x[c] + col_w[c]/2, row_y(1) + row_h/2, col_headers[c],
+        ax.text(col_x[c] + col_w[c]/2, row_y(1) + h1/2, col_headers[c],
                 ha="center", va="center",
                 fontsize=10.5, fontweight="bold", color=NAVY)
 
     # -------- helper to draw one data-row
     def draw_row(i, band_label, r, band_bg):
-        y = row_y(i)
-        ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
+        y = row_y(i); h = row_h_of(i)
+        ax.add_patch(plt.Rectangle((0, y), 1.0, h,
                                    facecolor=band_bg, edgecolor="none"))
         text_cells = [
             r["panel"],
@@ -243,17 +263,17 @@ def render_amr_png(rows):
                     bold = True; color = BOLD_C
             ha = "left" if c == 0 else "center"
             xtext = (col_x[c] + 0.008) if ha == "left" else (col_x[c] + col_w[c]/2)
-            ax.text(xtext, y + row_h/2, val,
+            ax.text(xtext, y + h/2, val,
                     ha=ha, va="center",
                     fontsize=10.5 if bold else 10,
                     fontweight=("bold" if bold else "normal"),
                     color=color)
 
     # -------- WGS band label row
-    y = row_y(2)
-    ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
+    y = row_y(2); bh = row_h_of(2)
+    ax.add_patch(plt.Rectangle((0, y), 1.0, bh,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(0.01, y + row_h/2, "  WGS density",
+    ax.text(0.01, y + bh/2, "  WGS density",
             ha="left", va="center", color="white",
             fontsize=11, fontweight="bold")
 
@@ -262,10 +282,10 @@ def render_amr_png(rows):
 
     # -------- Chip band label row
     chip_hdr_i = 3 + len(wgs_rows)
-    y = row_y(chip_hdr_i)
-    ax.add_patch(plt.Rectangle((0, y), 1.0, row_h,
+    y = row_y(chip_hdr_i); bh = row_h_of(chip_hdr_i)
+    ax.add_patch(plt.Rectangle((0, y), 1.0, bh,
                                facecolor=NAVY, edgecolor="none"))
-    ax.text(0.01, y + row_h/2, "  GSA chip density (unimputed)",
+    ax.text(0.01, y + bh/2, "  GSA chip density (unimputed)",
             ha="left", va="center", color="white",
             fontsize=11, fontweight="bold")
 
@@ -286,7 +306,7 @@ def render_amr_png(rows):
             fontsize=9, color="#555", style="italic")
 
     out = OUT_P / "publication_table_amr.png"
-    fig.savefig(out, bbox_inches="tight")
+    fig.savefig(out, bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
     print(f"wrote {out}")
 
