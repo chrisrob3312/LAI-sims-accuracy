@@ -25,14 +25,22 @@ REPO = Path(__file__).resolve().parent.parent
 FIGDIR = REPO / "slides" / "figures"
 OUT    = REPO / "slides" / "thesis_committee_slides.pptx"
 
-# palette lifted from the Spring TAC deck feel
-NAVY   = RGBColor(0x1F, 0x3A, 0x5F)
+# palette matches the Spring TAC theme (theme3.xml)
+NAVY   = RGBColor(0x0E, 0x28, 0x41)   # dk2
 INK    = RGBColor(0x1A, 0x1A, 0x1A)
 MUTED  = RGBColor(0x66, 0x66, 0x66)
-ACCENT = RGBColor(0xC9, 0x4A, 0x53)   # MXB red
-BLUE   = RGBColor(0x3E, 0x6B, 0xB0)
-GREEN  = RGBColor(0x4C, 0x9F, 0x70)
-PILL   = RGBColor(0xEE, 0xE9, 0xE0)   # cream pill for tags
+TEAL   = RGBColor(0x15, 0x60, 0x82)   # accent1
+ORANGE = RGBColor(0xE9, 0x71, 0x32)   # accent2
+FOREST = RGBColor(0x19, 0x6B, 0x24)   # accent3
+CYAN   = RGBColor(0x0F, 0x9E, 0xD5)   # accent4
+PLUM   = RGBColor(0xA0, 0x2B, 0x93)   # accent5
+LIME   = RGBColor(0x4E, 0xA7, 0x2E)   # accent6
+PILL   = RGBColor(0xE8, 0xE8, 0xE8)   # lt2
+
+# semantic aliases used in slide code below
+ACCENT = ORANGE
+BLUE   = TEAL
+GREEN  = FOREST
 
 prs = Presentation()
 prs.slide_width  = Inches(13.333)

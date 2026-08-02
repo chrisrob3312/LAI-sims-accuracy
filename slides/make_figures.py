@@ -36,17 +36,22 @@ wgs  = read_summary(REPO / "results/accuracy_pilot/accuracy_summary.tsv")
 chip = read_summary(REPO / "results/accuracy_pilot_chip_gsa/accuracy_summary.tsv")
 
 # ---------------------------------------------------------------- colors
-COL_NAT      = "#c94a53"     # NAT recall is the story
-COL_EUR      = "#4b78c9"
-COL_AFR      = "#d19b3b"
-COL_MEXICO   = "#c94a53"
-COL_HGDP     = "#7a7a7a"
-COL_PEL      = "#5d8f5d"
-COL_AMAZON   = "#8f6f4c"
-COL_HGDPMXB  = "#3e6bb0"
-COL_HGDPMXB_FULL = "#264f8f"
-COL_HOMOG    = "#7a5aa8"
-COL_PEL_EAS  = "#4e957f"
+# Palette matches the Spring TAC pptx theme accent scheme (theme3.xml):
+#   accent1 #156082 (teal)   accent2 #E97132 (orange)  accent3 #196B24 (forest)
+#   accent4 #0F9ED5 (cyan)   accent5 #A02B93 (plum)    accent6 #4EA72E (lime)
+#   dk2     #0E2841 (navy)
+NAVY   = "#0E2841"
+TEAL   = "#156082"
+ORANGE = "#E97132"
+FOREST = "#196B24"
+CYAN   = "#0F9ED5"
+PLUM   = "#A02B93"
+LIME   = "#4EA72E"
+TEAL_LT= "#91D9CE"
+
+# track colors used in every bar chart
+BRASA_COL = ORANGE   # Brazilian-like cohort
+MXB_COL   = TEAL     # Mexican-like cohort
 
 plt.rcParams.update({
     "font.family": "DejaVu Sans",
@@ -62,15 +67,15 @@ plt.rcParams.update({
 def fig_wgs_panels():
     # (friendly label, panel key)
     panels = [
-        ("HGDP + 1KG baseline",              "NAT_HGDP"),
-        ("+ 25 MX Biobank samples",          "NAT_HGDPMXB"),
-        ("+ 50 MX Biobank samples",          "NAT_HGDPMXB_FULL"),
-        ("All homogeneous samples (Q≥0.95)", "NAT_HOMOG"),
-        ("HGDP + Peruvian (1KG PEL)",        "NAT_PEL"),
-        ("HGDP + PEL + EAS outgroup",        "NAT_PEL_EAS"),
+        ("HGDP + 1KG",     "NAT_HGDP"),
+        ("+ 25 MXB",       "NAT_HGDPMXB"),
+        ("+ 50 MXB",       "NAT_HGDPMXB_FULL"),
+        ("Homog. Q≥0.95",  "NAT_HOMOG"),
+        ("+ PEL (Peru)",   "NAT_PEL"),
+        ("+ PEL + EAS",    "NAT_PEL_EAS"),
     ]
-    tracks = [("NAT",    "Brazilian-like (Brasa) admixed",  "#c94a53"),
-              ("NATMXB", "Mexican-like (MXB) admixed",      "#3e6bb0")]
+    tracks = [("NAT",    "Brazilian-like (Brasa) admixed",  BRASA_COL),
+              ("NATMXB", "Mexican-like (MXB) admixed",      MXB_COL)]
 
     fig, ax = plt.subplots(figsize=(15, 7.2), dpi=180)
     # roomier left margin (y-label breathing room) + roomier bottom (x-labels + legend gap)
@@ -84,33 +89,27 @@ def fig_wgs_panels():
                       color=color, edgecolor="white", linewidth=0.7)
         for xi, v in zip(bars, vals):
             if not np.isnan(v):
-                ax.text(xi.get_x() + xi.get_width()/2, v + 0.003,
-                        f"{v:.3f}", ha="center", va="bottom",
-                        fontsize=10, color="#111", fontweight="semibold")
+                ax.text(xi.get_x() + xi.get_width()/2, v + 0.004,
+                        f"{v*100:.0f}%", ha="center", va="bottom",
+                        fontsize=11, color="#111", fontweight="bold")
 
-    # two-line tick labels: friendly on top, (panel_key) below
-    tick_labels = [f"{lab}\n({key.replace('NAT_', '')})" for lab, key in panels]
+    # single-line, concise tick labels; bold
     ax.set_xticks(x)
-    ax.set_xticklabels(tick_labels, fontsize=11)
+    ax.set_xticklabels([lab for lab, _ in panels], fontsize=11.5, fontweight="bold")
     for lbl in ax.get_xticklabels():
         lbl.set_multialignment("center")
-    ax.tick_params(axis="x", pad=8)             # gap between bars and x-labels
-    ax.tick_params(axis="y", pad=6, labelsize=11)  # gap between axis and y-tick numbers
+    ax.tick_params(axis="x", pad=8)
+    ax.tick_params(axis="y", pad=6, labelsize=11)
 
     ax.set_ylim(0.85, 1.00)
     ax.set_ylabel("Weighted NAT-ancestry recall\n(chr20-22, per-hap concordance)",
-                  fontsize=13, fontweight="bold", labelpad=16)  # push away from y-ticks
+                  fontsize=13, fontweight="bold", labelpad=16)
 
-    # graph title (bold, centered above plot)
     ax.set_title("Local Ancestry Inference Simulation Accuracy (AMR tracts)",
                  loc="center", fontweight="bold", fontsize=14, pad=14)
 
-    # baseline reference lines
-    ax.axhline(wgs[("NAT", "NAT_HGDP", "NAT")], ls=":", color="#c94a53", lw=0.9)
-    ax.axhline(wgs[("NATMXB", "NAT_HGDP", "NAT")], ls=":", color="#3e6bb0", lw=0.9)
-
     # legend: below plot with clear gap from x-labels
-    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28),
+    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.24),
                     ncol=2, fontsize=13, frameon=False)
     for t in leg.get_texts():
         t.set_fontweight("bold")
@@ -132,9 +131,9 @@ def fig_chip_vs_wgs():
     x = np.arange(len(panels))
     w = 0.36
     b1 = ax.bar(x - w/2, wgs_v, w, label="WGS density",
-                color="#3e6bb0", edgecolor="white", linewidth=0.6)
+                color=TEAL, edgecolor="white", linewidth=0.6)
     b2 = ax.bar(x + w/2, chip_v, w, label="Illumina GSA chip (~385k autosomal)",
-                color="#9db8db", edgecolor="white", linewidth=0.6)
+                color=TEAL_LT, edgecolor="white", linewidth=0.6)
     for bars, vals in ((b1, wgs_v), (b2, chip_v)):
         for xi, v in zip(bars, vals):
             if not np.isnan(v):
@@ -165,7 +164,7 @@ def fig_amr_disparity():
     ax1 = fig.add_subplot(gs[0, 0])
     groups = ["EAS", "AFR", "EUR", "SAS", "AMR\n(HGDP+1KG)", "AMR\n+MXB (this study)"]
     counts = [ 667,   634,   620,   48,   88,               138]
-    colors = ["#3e6bb0","#d19b3b","#5d8f5d","#7a7a7a","#c94a53","#c94a53"]
+    colors = [TEAL, ORANGE, FOREST, CYAN, PLUM, PLUM]
     alphas = [1,1,1,1,0.55,1.0]
     bars = ax1.bar(groups, counts, color=colors, alpha=None)
     for b, c, a in zip(bars, colors, alphas):
@@ -186,7 +185,7 @@ def fig_amr_disparity():
              "Peru (PEL)",
              "Amazonia + Colombia (HGDP)"]
     sizes = [50, 13, 9, 16]
-    cols  = ["#c94a53", "#e4a1a6", "#5d8f5d", "#8f6f4c"]
+    cols  = [PLUM, "#c68abd", FOREST, ORANGE]
     wedges, txts, autotxt = ax2.pie(
         sizes, labels=None, colors=cols, autopct="%1.0f%%",
         startangle=90, pctdistance=0.72,
@@ -224,8 +223,11 @@ def fig_pipeline():
         ("Module 7\nAncestry", "GRAF-anc\nADMIXTURE\nRFMix / FLARE"),
         ("Module 8\nBenchmark", "truth vs imp\nsimulation"),
     ]
-    colors = ["#e0e7f5","#c6d5f2","#e0e7f5","#c6d5f2",
-              "#e0e7f5","#c6d5f2","#f5d9d9","#f5d9d9"]
+    # cool tones for QC / imputation modules, warm accent for LAI + benchmark
+    _cool_a, _cool_b = "#d6e6ee", "#b6d1de"           # tints of TEAL
+    _warm_a, _warm_b = "#f8dccb", "#f0c1a0"           # tints of ORANGE
+    colors = [_cool_a, _cool_b, _cool_a, _cool_b,
+              _cool_a, _cool_b, _warm_a, _warm_a]
 
     n = len(modules)
     w = 1.35; h = 2.0
@@ -234,7 +236,7 @@ def fig_pipeline():
     for i, ((head, body), c) in enumerate(zip(modules, colors)):
         x = x0 + i * (w + gap)
         y = 1.0
-        rect = plt.Rectangle((x, y), w, h, facecolor=c, edgecolor="#3a3a3a",
+        rect = plt.Rectangle((x, y), w, h, facecolor=c, edgecolor=NAVY,
                              linewidth=0.8, zorder=2)
         ax.add_patch(rect)
         ax.text(x + w/2, y + h - 0.35, head, ha="center", va="top",
@@ -250,10 +252,10 @@ def fig_pipeline():
     hi_x = x0 + 6 * (w + gap) - 0.15
     hi_w = w * 2 + gap + 0.30
     ax.add_patch(plt.Rectangle((hi_x, 0.55), hi_w, h + 0.85,
-                               facecolor="none", edgecolor="#c94a53",
+                               facecolor="none", edgecolor=ORANGE,
                                linewidth=1.6, linestyle="--", zorder=1))
     ax.text(hi_x + hi_w/2, 0.30, "LAI accuracy validated in this thesis (Modules 7–8)",
-            ha="center", fontsize=9, color="#c94a53", fontweight="bold")
+            ha="center", fontsize=9, color=ORANGE, fontweight="bold")
 
     ax.text(0.05, 3.85, "8-module Nextflow preprocessing pipeline",
             fontsize=13, fontweight="bold")
@@ -276,8 +278,8 @@ def fig_wgs_all_ancestry():
         ("+ MXB",        "NAT_HGDPMXB"),
         ("+ PEL (Peru)", "NAT_PEL"),
     ]
-    tracks = [("NAT",    "Brazilian-like cohort", "#c94a53"),
-              ("NATMXB", "Mexican-like cohort",   "#3e6bb0")]
+    tracks = [("NAT",    "Brazilian-like cohort", BRASA_COL),
+              ("NATMXB", "Mexican-like cohort",   MXB_COL)]
     ancestries = [("NAT", "AMR"),
                   ("EUR", "EUR"),
                   ("AFR", "AFR")]
