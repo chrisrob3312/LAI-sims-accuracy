@@ -137,12 +137,15 @@ def fig_chip_vs_wgs():
     for bars, vals in ((b1, wgs_v), (b2, chip_v)):
         for xi, v in zip(bars, vals):
             if not np.isnan(v):
-                ax.text(xi.get_x() + xi.get_width()/2, v + 0.002,
-                        f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
+                ax.text(xi.get_x() + xi.get_width()/2, v + 0.003,
+                        f"{v:.3f}", ha="center", va="bottom",
+                        fontsize=11, color="#111", fontweight="bold")
 
     ax.set_xticks(x)
     ax.set_xticklabels([p.replace("NAT_", "").replace("_", "\n")
-                        for p in panels], fontsize=10)
+                        for p in panels], fontsize=11, fontweight="bold")
+    for lbl in ax.get_xticklabels():
+        lbl.set_multialignment("center")
     ax.set_ylim(0.85, 0.96)
     ax.set_ylabel("Weighted NAT-ancestry recall",
                   fontsize=12, fontweight="bold", labelpad=12)
@@ -165,13 +168,13 @@ def fig_chip_vs_wgs():
 
 # ---------------------------------------------------------------- FIG 3: gap
 def fig_amr_disparity():
-    fig = plt.figure(figsize=(12, 5.2), dpi=180)
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.55, 1.0], wspace=0.28)
+    fig = plt.figure(figsize=(13.5, 5.6), dpi=180)
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.65, 1.0], wspace=0.32)
 
     # left: bars, samples per continental group in public references
     ax1 = fig.add_subplot(gs[0, 0])
-    groups = ["EAS", "AFR", "EUR", "SAS", "AMR\n(HGDP+1KG)", "AMR\n+MXB (this study)"]
-    counts = [ 667,   634,   620,   48,   38,               88]
+    groups = ["EAS", "AFR", "EUR", "SAS", "AMR\nHGDP+1KG", "AMR\n+MXB"]
+    counts = [ 667,   634,   620,   48,   38,             88]
     colors = [TEAL, ORANGE, FOREST, CYAN, PLUM, PLUM]
     alphas = [1,1,1,1,0.55,1.0]
     bars = ax1.bar(groups, counts, color=colors, alpha=None)
@@ -185,7 +188,10 @@ def fig_amr_disparity():
     ax1.set_ylim(0, 760)
     ax1.set_title("Available Homogeneous Sample Counts in 1KG-HGDP-MXB",
                   loc="center", fontweight="bold", fontsize=13, pad=12)
-    ax1.tick_params(axis="x", labelsize=9.5)
+    ax1.tick_params(axis="x", labelsize=10.5, pad=6)
+    for lbl in ax1.get_xticklabels():
+        lbl.set_fontweight("bold")
+        lbl.set_multialignment("center")
 
     # right: within-AMR pie showing geographic gaps
     ax2 = fig.add_subplot(gs[0, 1])
@@ -314,7 +320,7 @@ def fig_wgs_all_ancestry():
 
         ax.set_title(anc_label, fontweight="bold", fontsize=15, pad=10)
         ax.set_xticks(x)
-        ax.set_xticklabels([lab for lab, _ in panels], fontsize=11)
+        ax.set_xticklabels([lab for lab, _ in panels], fontsize=11, fontweight="bold")
         for lbl in ax.get_xticklabels():
             lbl.set_multialignment("center")
         ax.tick_params(axis="y", labelsize=10)
