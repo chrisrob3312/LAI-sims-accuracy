@@ -108,11 +108,11 @@ def slide_title():
     bar.line.fill.background()
 
     add_text(s, 0.7, 1.7, 12, 1.4,
-             "Building an ancestry-informed genotype-preprocessing pipeline\n"
-             "and benchmarking local ancestry inference for Latino cohorts",
+             "Ancestry-informed analysis of germline genomic contributors\n"
+             "to childhood B-ALL clinical outcomes",
              size=30, bold=True, color=NAVY)
     add_text(s, 0.7, 3.7, 12, 0.5,
-             "Christina Magyar  ·  GS4 Thesis Committee Update",
+             "Christina Magyar  ·  GS4 Thesis Committee Update  ·  Aims 1–3",
              size=16, color=INK)
     add_text(s, 0.7, 4.25, 12, 0.4,
              f"{date.today().strftime('%B %Y')}  ·  BCM MSTP · Genetics and Genomics",
@@ -130,7 +130,123 @@ def slide_title():
         "full 22-chr sweep is running and will refresh these before the meeting.")
     return s
 
-# ---------------------------------------------------------------- SLIDE 2
+# ---------------------------------------------------------------- SLIDE 2 (NEW): aims overview
+def slide_aims_overview():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s, "Three aims — this update focuses on Aim 2.")
+
+    aims = [
+        ("Aim 1",
+         "Demographic & clinical\npredictors of B-ALL outcomes",
+         "REDIAL cohort · MRD-stratified survival · manuscript to Leukemia",
+         "Submitted / under revision",
+         MUTED, PILL),
+        ("Aim 2",
+         "Building the preprocessing\n+ LAI pipeline",
+         "Nextflow · MXB reference · LAI accuracy benchmarking · manuscript-ready",
+         "Focus of today's update",
+         ACCENT, RGBColor(0xFF, 0xF1, 0xE4)),
+        ("Aim 3",
+         "Genetic association study\nof B-ALL outcomes",
+         "Trans-ancestry GWAS · Tractor local-ancestry-informed · PolyFun-SuSiE fine-mapping",
+         "Next 6-12 months",
+         MUTED, PILL),
+    ]
+
+    card_w = 4.0; card_h = 4.7; gap = 0.35
+    total_w = 3 * card_w + 2 * gap
+    x0 = (13.333 - total_w) / 2
+    y0 = 1.55
+
+    for i, (aim, title, body, status, border, fill) in enumerate(aims):
+        x = x0 + i * (card_w + gap)
+        card = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                  Inches(x), Inches(y0), Inches(card_w), Inches(card_h))
+        card.fill.solid(); card.fill.fore_color.rgb = fill
+        card.line.color.rgb = border; card.line.width = Pt(2 if aim == "Aim 2" else 0.75)
+
+        add_text(s, x + 0.25, y0 + 0.25, card_w - 0.5, 0.5,
+                 aim, size=18, bold=True, color=border)
+        add_text(s, x + 0.25, y0 + 0.95, card_w - 0.5, 1.4,
+                 title, size=15, bold=True, color=NAVY)
+        add_text(s, x + 0.25, y0 + 2.4, card_w - 0.5, 1.7,
+                 body, size=11, color=INK)
+        add_text(s, x + 0.25, y0 + card_h - 0.7, card_w - 0.5, 0.5,
+                 status, size=11, italic=True, bold=True, color=border)
+
+    add_text(s, 0.55, 6.65, 12.2, 0.35,
+             "Aim 2 is the technical bridge — the LAI accuracy work "
+             "picks the reference panel that Aim 3's local-ancestry GWAS will use.",
+             size=12, italic=True, color=INK, align=PP_ALIGN.CENTER)
+    add_footer(s, 2, 12, "Aims overview")
+    set_notes(s,
+        "The three-aim structure hasn't changed since the Spring TAC. Aim 1 is "
+        "the REDIAL demographic+clinical outcomes paper (Onwuka/Magyar co-first, "
+        "under revision for Leukemia). Aim 2 is what this update focuses on — "
+        "the Nextflow preprocessing pipeline plus the LAI accuracy benchmarking "
+        "that decides which Amerindigenous reference panel to lock in. Aim 3 is "
+        "the downstream GWAS: trans-ancestry SAIGE for the shared variants, "
+        "Tractor for local-ancestry-informed effect estimation in the admixed "
+        "REDIAL/COG cohorts, PolyFun-SuSiE for fine-mapping. Aim 2 numbers "
+        "coming today directly feed Aim 3's panel choice.")
+    return s
+
+# ---------------------------------------------------------------- SLIDE 3 (NEW): Aim 1
+def slide_aim1_redial():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s,
+        "Aim 1: MRD-negative Latino & NL-Black children still relapse more than NL-White.")
+    add_text(s, 0.55, 1.15, 12.2, 0.4,
+             "REDIAL cohort · Cox PH adjusted for age, sex, WBC, cytogenetics, CNS, trial",
+             size=12, italic=True, color=MUTED)
+
+    # two side-by-side summary boxes
+    box_w = 5.9; box_h = 4.3; box_y = 1.75
+    for i, (mrd, hr_line1, hr_line2, note) in enumerate([
+        ("MRD-negative B-ALL cases",
+         "Latino:      HR ~1.4 for disease-free survival vs NL-White",
+         "NL-Black:  HR ~1.6 for disease-free survival vs NL-White",
+         "Despite the same favorable MRD status, disparity persists."),
+        ("MRD-positive B-ALL cases",
+         "Latino:      HR consistent with prior COG reports",
+         "NL-Black:  HR consistent with prior COG reports",
+         "Confirms known MRD-positive disparity in a contemporary cohort."),
+    ]):
+        x = 0.55 + i * (box_w + 0.4)
+        card = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                  Inches(x), Inches(box_y), Inches(box_w), Inches(box_h))
+        card.fill.solid(); card.fill.fore_color.rgb = PILL
+        card.line.color.rgb = (ACCENT if i == 0 else TEAL); card.line.width = Pt(1.5)
+        add_text(s, x + 0.3, box_y + 0.25, box_w - 0.6, 0.5,
+                 mrd, size=15, bold=True, color=(ACCENT if i == 0 else TEAL))
+        add_text(s, x + 0.3, box_y + 0.95, box_w - 0.6, 2.2,
+                 f"•  {hr_line1}\n•  {hr_line2}",
+                 size=12, color=INK)
+        add_text(s, x + 0.3, box_y + 3.3, box_w - 0.6, 0.9,
+                 note, size=11.5, italic=True, color=MUTED)
+
+    add_text(s, 0.55, 6.3, 12.2, 0.4,
+             "Onwuka & Magyar et al. — REDIAL Ethnic and Racial Survival Disparities by MRD "
+             "Status — under revision for Leukemia (submission May 2026)",
+             size=11, italic=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_footer(s, 3, 12, "Aim 1 · REDIAL")
+    set_notes(s,
+        "Aim 1 recap. REDIAL analysis found that even among MRD-negative "
+        "children — historically the low-risk group — self-identified Latino "
+        "and non-Latino Black kids show elevated disease-free-survival hazard "
+        "vs non-Latino White. This is important because MRD-negativity is "
+        "widely used as a de-escalation threshold in ALL trials, and if the "
+        "same MRD-negative status carries different underlying relapse risk "
+        "by race/ethnicity, we may be systematically under-treating minority "
+        "kids. Motivates Aim 2/3: find the biological substrate. Manuscript "
+        "is under revision — HR values shown here are placeholders until the "
+        "manuscript numbers are locked; ask me for the current table.\n\n"
+        "STATUS: reviewed and updated primary analysis; first draft of "
+        "manuscript with figures/tables/supplemental complete; co-author "
+        "review; target submission May 2026.")
+    return s
+
+# ---------------------------------------------------------------- SLIDE 4 (was 2): motivation
 def slide_motivation():
     s = prs.slides.add_slide(BLANK)
     add_headline(s,
@@ -143,7 +259,7 @@ def slide_motivation():
              "Adding 50 MX Biobank WGS samples brings AMR to 88 — still leaves "
              "Central America, Southern Cone, Amazon, Caribbean underrepresented.",
              size=11, color=INK)
-    add_footer(s, 2, 7, "Motivation")
+    add_footer(s, 4, 12, "Aim 2 · Motivation")
     set_notes(s,
         "The gap slide. Public HGDP+1KG panels give us ~620 EUR haps, ~634 AFR, "
         "~667 EAS, but only ~88 AMR — a 7× disparity. The MX Biobank donation "
@@ -246,7 +362,7 @@ def slide_methods():
              "     (tests whether MXB helps a Mexican cohort)",
              size=11, color=INK)
 
-    add_footer(s, 3, 7, "Methods")
+    add_footer(s, 5, 12, "Aim 2 · Methods")
     set_notes(s,
         "Simulation harness: SHAPEIT5-phased references feed admix-simu to create "
         "30 admixed individuals per cohort at generation 12 (long enough for "
@@ -271,7 +387,7 @@ def slide_ancestry_overview():
              "→  AMR is where reference-panel choice actually matters — "
              "so the rest of the deck focuses on AMR recall.",
              size=12, italic=True, color=INK)
-    add_footer(s, 4, 7, "Result overview")
+    add_footer(s, 6, 12, "Aim 2 · Result overview")
     set_notes(s,
         "Overview slide before we zoom in. Three ancestries side by side, same "
         "panels, same y-scale. EUR and AFR sit near ceiling regardless of which "
@@ -302,7 +418,7 @@ def slide_wgs_result():
              "•  Adding non-Mexican ancestry\n    to a Mexican reference hurts\n\n"
              "→  Panel-choice must match the\n     target cohort, not the largest\n     available sample source.",
              size=10.5, color=INK)
-    add_footer(s, 5, 7, "Result · AMR zoom")
+    add_footer(s, 7, 12, "Aim 2 · Result · AMR zoom")
     set_notes(s,
         "HEADLINE RESULT. Extended pilot numbers (chr 1-8 + 20-22 for the 4 full-"
         "coverage panels; chr20-22 only for HOMOG and PEL_EAS — flagged with *). "
@@ -359,7 +475,7 @@ def slide_chip_result():
              "     HGDPMXB > HGDP > PEL_EAS\n\n"
              "•  Recommend HGDPMXB for the\n    Mexican-Latino GWAS pipeline",
              size=10.5, color=INK)
-    add_footer(s, 6, 7, "Result · Chip")
+    add_footer(s, 8, 12, "Aim 2 · Result · Chip")
     set_notes(s,
         "Complementary result. Same reference panels, but the admixed cohort's "
         "haplotypes were down-sampled to the ~385k autosomal Illumina GSA v3 "
@@ -408,7 +524,7 @@ def slide_pipeline():
                  txt, size=11, color=INK)
         y += row_h
 
-    add_footer(s, 7, 7, "Pipeline update")
+    add_footer(s, 9, 12, "Aim 2 · Pipeline update")
     set_notes(s,
         "Two-part update: what shipped since the Spring TAC and what's queued. "
         "The 8 modules (colleague-led) now run end-to-end on test data with the "
@@ -422,15 +538,173 @@ def slide_pipeline():
         "marks exactly the modules this thesis has empirically validated.")
     return s
 
+# ---------------------------------------------------------------- SLIDE 10 (NEW): Aim 3 methods
+def slide_aim3_methods():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s,
+        "Aim 3: trans-ancestry + local-ancestry-informed GWAS on ~5,400 B-ALL cases.")
+    add_text(s, 0.55, 1.15, 12.2, 0.4,
+             "Two parallel tracks: ancestry-stratified meta-analysis and Tractor local-ancestry GWAS",
+             size=12, italic=True, color=MUTED)
+
+    # left branch: trans-ancestry
+    left_x = 0.55; right_x = 6.9; branch_w = 5.85; branch_y = 1.7; branch_h = 4.5
+    for x, title, color, steps, note in [
+        (left_x, "Aim 3.a  ·  Trans-ancestry", TEAL,
+         ["1.  GRAF-anc groups →  stratified SAIGE GWAS  (4 groups)",
+          "2.  Trans-ancestry meta-analysis  (n ≈ 5,357)",
+          "3.  Fine-mapping with MGflashfm  (multi-trait, multi-ethnic)"],
+         "Uses shared trans-ancestry effects across REDIAL + COG + St. Jude"),
+        (right_x, "Aim 3.b  ·  Local-ancestry-informed", ORANGE,
+         ["1.  RFMix v1 on 1,660 Latin American individuals",
+          "2.  Tractor GWAS  →  per-ancestry β for AMR / EUR / AFR",
+          "3.  Functionally-prioritized fine-mapping (SuSiE + PolyFun)"],
+         "Detects Amerindigenous-enriched risk variants missed by global-ancestry GWAS"),
+    ]:
+        card = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                  Inches(x), Inches(branch_y), Inches(branch_w), Inches(branch_h))
+        card.fill.solid(); card.fill.fore_color.rgb = PILL
+        card.line.color.rgb = color; card.line.width = Pt(1.5)
+        add_text(s, x + 0.25, branch_y + 0.2, branch_w - 0.5, 0.5,
+                 title, size=15, bold=True, color=color)
+        add_text(s, x + 0.25, branch_y + 0.9, branch_w - 0.5, 2.8,
+                 "\n\n".join(steps), size=12, color=INK)
+        add_text(s, x + 0.25, branch_y + branch_h - 0.7, branch_w - 0.5, 0.5,
+                 note, size=10.5, italic=True, color=MUTED)
+
+    add_text(s, 0.55, 6.4, 12.2, 0.35,
+             "Aim 2's LAI-accuracy work directly picks the reference panel used by Aim 3.b's RFMix step.",
+             size=11.5, italic=True, color=INK, align=PP_ALIGN.CENTER)
+    add_footer(s, 10, 12, "Aim 3 · methods")
+    set_notes(s,
+        "Aim 3 splits into two GWAS tracks. 3.a is the trans-ancestry track: "
+        "GRAF-anc first partitions the combined REDIAL + COG + St. Jude "
+        "cohort into 4 ancestry groups (African-American, European-American, "
+        "Latin American 1, Latin American 2), stratified SAIGE GWAS per "
+        "group, then trans-ancestry meta-analysis at n≈5,357, followed by "
+        "MGflashfm fine-mapping which handles multi-trait multi-ethnic LD "
+        "differences. 3.b is the local-ancestry track: RFMix v1 (the exact "
+        "tool this Aim 2 work is benchmarking) on the 1,660 self-reported "
+        "Latino individuals, then Tractor to fit per-ancestry β for AMR, "
+        "EUR, and AFR tracts jointly. Fine-mapping downstream uses SuSiE + "
+        "PolyFun. The point of Aim 2 is to make sure the RFMix step in 3.b "
+        "is using the best reference panel — HGDPMXB by our current data.")
+    return s
+
+# ---------------------------------------------------------------- SLIDE 11 (NEW): timeline
+def slide_timeline():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s, "Timeline to graduation — July 2027 target.")
+
+    # simple Gantt-like row list
+    milestones = [
+        ("Aim 1", "REDIAL manuscript revision + submission (Leukemia)",  "Apr–Jun 2026",  ACCENT),
+        ("Aim 2", "22-chr LAI sweep + full-coverage figures",             "Aug 2026",      TEAL),
+        ("Aim 2", "Nextflow pipeline benchmarking on TOPMed / Michigan / AoU", "Sep–Dec 2026", TEAL),
+        ("Aim 2", "Pipeline manuscript drafting",                         "Jan–Mar 2027",  TEAL),
+        ("Aim 3", "GRAF-anc stratification + PC calculation",             "Oct–Nov 2026",  ORANGE),
+        ("Aim 3", "SAIGE trans-ancestry GWAS + MGflashfm fine-mapping",   "Dec 2026 – Feb 2027", ORANGE),
+        ("Aim 3", "RFMix + Tractor local-ancestry GWAS on REDIAL/COG",    "Feb – Apr 2027", ORANGE),
+        ("Aim 3", "PolyFun-SuSiE fine-mapping + candidate follow-up",     "Apr – May 2027", ORANGE),
+        ("All",   "Thesis writing + defense",                             "May – Jul 2027", NAVY),
+    ]
+
+    y = 1.55; row_h = 0.52
+    for aim, task, when, color in milestones:
+        pill = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE,
+                                  Inches(0.55), Inches(y),
+                                  Inches(0.95), Inches(row_h - 0.07))
+        pill.fill.solid(); pill.fill.fore_color.rgb = color; pill.line.fill.background()
+        tf = pill.text_frame
+        tf.margin_top = Emu(0); tf.margin_bottom = Emu(0)
+        p = tf.paragraphs[0]; p.text = aim; p.alignment = PP_ALIGN.CENTER
+        for rr in p.runs:
+            rr.font.size = Pt(11); rr.font.bold = True
+            rr.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        add_text(s, 1.65, y + 0.05, 7.6, row_h,
+                 task, size=12, color=INK)
+        add_text(s, 9.35, y + 0.05, 3.6, row_h,
+                 when, size=12, bold=True, color=color, align=PP_ALIGN.RIGHT)
+        y += row_h
+
+    add_footer(s, 11, 12, "Timeline")
+    set_notes(s,
+        "Timeline broken down by aim. Aim 1 wraps this quarter with the "
+        "REDIAL manuscript. Aim 2 finishes the 22-chr LAI sweep this month "
+        "(currently 126/198 done on the WGS side, backfill queued for HOMOG "
+        "/ PEL_EAS panels and full chip-density coverage), then benchmarks "
+        "the Nextflow pipeline on all three imputation servers (TOPMed, "
+        "Michigan, AoU AnVIL) through end of 2026. Pipeline manuscript "
+        "targets Q1 2027. Aim 3 sequences behind Aim 2 — GRAF-anc + PCs in "
+        "the fall, SAIGE + fine-mapping over winter, then Tractor local-"
+        "ancestry GWAS in spring 2027 (which needs Aim 2's reference panel "
+        "decision locked in). Thesis writing spring 2027, defense July 2027.")
+    return s
+
+# ---------------------------------------------------------------- SLIDE 12 (NEW): acknowledgements
+def slide_acks():
+    s = prs.slides.add_slide(BLANK)
+    add_headline(s, "Acknowledgements")
+
+    cols = [
+        ("Lupo Lab & TCH EpiCenter",
+         "Dr. Philip J. Lupo  (Emory, thesis advisor)\n"
+         "Dr. Karen Rabin  (UCSF)\n"
+         "Dr. Melissa A. Richard\n"
+         "Dr. Austin Brown\n"
+         "Dr. Jeremy Schraw\n"
+         "Dr. Michael Scheurer"),
+        ("Atkinson Lab  (BCM · local advisor)",
+         "Dr. Elizabeth Atkinson  (local advisor)\n"
+         "Nirav Shah  ·  Jessica Honorato-Mauer\n"
+         "Grace Tietz  ·  Hatoon Al Ali\n"
+         "Helen Lin  ·  Pragati Kore\n"
+         "Erik Stricker  ·  Aishi Ayyanathan\n"
+         "Astrid Manuel  ·  Shalini Dhamodharan"),
+        ("Collaborators + funding",
+         "St. Jude Children's Research Hospital\n"
+         "  Dr. Jun Yang, Zenhua Li\n"
+         "Children's Oncology Group\n"
+         "MX Biobank  (Dr. Andrés Moreno-Estrada)\n"
+         "\n"
+         "AIM-AHEAD Consortium\n"
+         "Robert & Janice McNair Foundation\n"
+         "BCM MSTP · G&G Graduate Program"),
+    ]
+
+    col_w = 4.15; col_h = 5.0; gap = 0.15
+    x0 = (13.333 - (3 * col_w + 2 * gap)) / 2
+    y0 = 1.55
+    for i, (hd, body) in enumerate(cols):
+        x = x0 + i * (col_w + gap)
+        add_text(s, x, y0, col_w, 0.5,
+                 hd, size=13, bold=True, color=NAVY)
+        add_text(s, x, y0 + 0.6, col_w, col_h,
+                 body, size=11, color=INK)
+
+    add_text(s, 0.55, 6.85, 12.2, 0.35,
+             "Thank you — questions?",
+             size=16, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_footer(s, 12, 12, "Acknowledgements")
+    set_notes(s,
+        "Standard acks — matches the Spring TAC deck acknowledgements slide. "
+        "Ready for questions.")
+    return s
+
 # ---------------------------------------------------------------- build
 if __name__ == "__main__":
-    slide_title()
-    slide_motivation()
-    slide_methods()
-    slide_ancestry_overview()   # NEW slide 4
-    slide_wgs_result()          # AMR zoom (was 4)
-    slide_chip_result()         # (was 5)
-    slide_pipeline()            # (was 6)
+    slide_title()                # 1
+    slide_aims_overview()        # 2  (new)
+    slide_aim1_redial()          # 3  (new)
+    slide_motivation()           # 4
+    slide_methods()              # 5
+    slide_ancestry_overview()    # 6
+    slide_wgs_result()           # 7  AMR zoom
+    slide_chip_result()          # 8
+    slide_pipeline()             # 9
+    slide_aim3_methods()         # 10 (new)
+    slide_timeline()             # 11 (new)
+    slide_acks()                 # 12 (new)
     prs.save(OUT)
     n_slides = len(prs.slides)
     sz = OUT.stat().st_size
