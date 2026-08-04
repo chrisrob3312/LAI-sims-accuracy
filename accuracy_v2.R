@@ -131,10 +131,21 @@ score_one <- function(track, panel, chr) {
                                        track, panel, GEN, chr))
   done_f <- file.path(WORKDIR, sprintf("%s.%s.gen%s_chr%d.done",
                                        track, panel, GEN, chr))
-  # Silently skip anything without a .done marker so partial runs (e.g. 55/198)
-  # produce clean output for whatever finished.
-  if (!file.exists(hanc_f) || !file.exists(lat3_f) || !file.exists(done_f))
+  # Skip anything without a .done marker so partial runs (e.g. 55/198)
+  # produce clean output for whatever finished. Emit a message() (not
+  # warning) so it's visible in the run log without polluting the summary
+  # -- these are expected during partial pilots but hide silent bugs (e.g.
+  # missing .hanc truth files for a chr range) if not surfaced.
+  missing <- c(
+    hanc = !file.exists(hanc_f),
+    lat3 = !file.exists(lat3_f),
+    done = !file.exists(done_f))
+  if (any(missing)) {
+    message(sprintf("      [SKIP %s/%s chr%d] missing: %s",
+                    track, panel, chr,
+                    paste(names(missing)[missing], collapse = ",")))
     return(NULL)
+  }
 
   truth <- read_hanc(hanc_f)                 # n_sites_truth x n_haps
   tpos  <- read_truth_pos(chr)               # length n_sites_truth
