@@ -429,10 +429,13 @@ def slide_wgs_result():
         "0.990), so F1 is roughly flat. +50 MXB (HGDPMXB_FULL) costs more "
         "recall (0.902) with only marginal F1 benefit — 25 MXB is the sweet "
         "spot. PEL matches or beats HGDP on the Brazilian cohort. NAT_HOMOG "
-        "(Q≥0.95 filter, donor-safe) performs comparably to HGDPMXB in the "
-        "3-chr subset we have — worth re-running with full coverage. Punchline: "
-        "adding MXB is a clear win for a Mexican-cohort GWAS; matched-source "
-        "reference (PEL for Brazilian) matters more than panel size.\n\n"
+        "(HGDP + 1KG + MXB jointly filtered to Q≥0.95 by supervised "
+        "ADMIXTURE — includes MXB samples but excludes admixed individuals) "
+        "matches HGDPMXB on Mexican-cohort F1 (0.972) with full coverage. "
+        "Punchline: adding MXB is a clear win for a Mexican-cohort GWAS; "
+        "matched-source reference (PEL for Brazilian) matters more than "
+        "panel size; HOMOG is the principled alternative when we want a "
+        "stricter homogeneity criterion.\n\n"
         "──────── METRICS CHEAT SHEET ────────\n"
         "• TP / FP / FN: sites where called ancestry matches truth (TP), calls "
         "were wrong-class (FP), or truth was this class but we missed (FN). "
@@ -485,7 +488,7 @@ def slide_chip_result():
         "chip-genotyped, not WGS — so the WGS result generalizes. Michigan/1KG "
         "imputation is the post-committee validation step; today we can already "
         "recommend HGDPMXB (+25 MXB) for the Mexican-Latino LAI pipeline. "
-        "NAT_HOMOG is a donor-safe backup that performs equivalently.")
+        "NAT_HOMOG (Q≥0.95 across HGDP+1KG+MXB joint) matches HGDPMXB.")
     return s
 
 # ---------------------------------------------------------------- SLIDE 6
