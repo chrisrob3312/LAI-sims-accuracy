@@ -36,9 +36,11 @@ echo "=================================================================="
 # ---------- 1. WGS pilot ----------
 echo
 echo ">>> [1/3] WGS pilot"
+WGS_REVIEW="$REPO_DIR/results/accuracy_pilot"
 CHRS="$CHRS" \
 PROJECT_ROOT="$PROJECT_ROOT" ADMIX_POP="$ADMIX_POP" GEN="$GEN" \
 WORKDIR="$WGS_WD" OUTDIR="${PROJECT_ROOT}/04_accuracy" \
+REVIEW_DIR="$WGS_REVIEW" \
 bash "$REPO_DIR/run_accuracy_pilot.sh"
 
 # ---------- 2. Chip pilot (writes to /tmp then copies) ----------
@@ -47,17 +49,15 @@ echo ">>> [2/3] Chip-GSA pilot"
 CHIP_OUT=/tmp/accuracy_chip_gsa_expanded
 CHIP_REVIEW="$REPO_DIR/results/accuracy_pilot_chip_gsa"
 
+# clear the chip review dir first so we don't merge stale plots
+rm -rf "$CHIP_REVIEW"
+mkdir -p "$CHIP_REVIEW/plots"
+
 CHRS="$CHRS" \
 PROJECT_ROOT="$PROJECT_ROOT" ADMIX_POP="$ADMIX_POP" GEN="$GEN" \
 WORKDIR="$CHIP_WD" OUTDIR="$CHIP_OUT" \
+REVIEW_DIR="$CHIP_REVIEW" \
 bash "$REPO_DIR/run_accuracy_pilot.sh"
-
-# copy chip artifacts into the chip review dir (run_accuracy_pilot.sh writes
-# into results/accuracy_pilot; we redirect chip outputs to a separate slot)
-rm -rf "$CHIP_REVIEW"
-mkdir -p "$CHIP_REVIEW/plots"
-cp "$CHIP_OUT/"*.tsv                       "$CHIP_REVIEW/" || true
-cp "$CHIP_OUT/plots/"*.pdf                 "$CHIP_REVIEW/plots/" || true
 
 # also replace the top-level review README so it labels chip vs wgs
 n_chip=$(ls "$CHIP_WD"/*.gen${GEN}_chr*.done 2>/dev/null | wc -l)
@@ -74,11 +74,13 @@ CHRS = ${CHRS}
 EOF
 
 # ---------- 3. Regenerate slide artifacts ----------
+# Unset PYTHONHOME/PYTHONPATH so the shapeit5 conda env's python doesn't pull
+# in the system anaconda's stdlib and blow up with "SRE module mismatch".
 echo
 echo ">>> [3/3] Regenerating figures, tables, and pptx"
-python3 "$REPO_DIR/slides/make_figures.py"
-python3 "$REPO_DIR/slides/make_metrics_table.py"
-python3 "$REPO_DIR/slides/build_committee_deck.py"
+env -u PYTHONHOME -u PYTHONPATH python3 "$REPO_DIR/slides/make_figures.py"
+env -u PYTHONHOME -u PYTHONPATH python3 "$REPO_DIR/slides/make_metrics_table.py"
+env -u PYTHONHOME -u PYTHONPATH python3 "$REPO_DIR/slides/build_committee_deck.py"
 
 echo
 echo "=================================================================="
