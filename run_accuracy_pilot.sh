@@ -23,7 +23,9 @@ ADMIX_POP="${ADMIX_POP:-Brasa}"
 GEN="${GEN:-12}"
 WORKDIR="${WORKDIR:-${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}}"
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/04_accuracy}"
-REVIEW_DIR="${REPO_DIR}/results/accuracy_pilot"
+# REVIEW_DIR now honors an env override so a wrapper can point each run at a
+# distinct in-repo review slot (WGS vs chip). Default keeps prior behavior.
+REVIEW_DIR="${REVIEW_DIR:-${REPO_DIR}/results/accuracy_pilot}"
 
 # Force R to see the conda-provided library first. /opt/biobuilds-2016.04 is
 # system-wide at path priority 1 and shadows conda's modern tidyverse install
