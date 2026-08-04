@@ -27,6 +27,15 @@ MAX_CHR="${MAX_CHR:-19}"
 THROTTLE="${THROTTLE:-15}"
 DRY_RUN="${DRY_RUN:-}"
 
+# Chip identity: the chip fork scripts default CHIP_NAME=wgs, which puts
+# outputs in chip_wgs/ AND runs at full-WGS density (no chip SNP filter).
+# We must export both CHIP_NAME and CHIP_SNPS_TPL so outputs land in
+# chip_gsa_jessica/ and the admixed haps get chip-filtered.
+CHIP_NAME_DEFAULT="gsa_jessica"
+CHIP_SNPS_TPL_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reference_ids/chip_gsa_jessica/chr%d.snps"
+CHIP_NAME="${CHIP_NAME:-$CHIP_NAME_DEFAULT}"
+CHIP_SNPS_TPL="${CHIP_SNPS_TPL:-$CHIP_SNPS_TPL_DEFAULT}"
+
 # Combos per panel-set (must match the combo grid in each script):
 #   HOMOG fork:       NAT + NATMXB × HOMOG only          => 2 combos
 #   PEL_EAS-only run: NAT + NATMXB × PEL_EAS only        => 2 combos
@@ -63,9 +72,11 @@ submit() {
 
 echo "=========================================================="
 echo "gap-fill submitter"
-echo "  MAX_CHR = $MAX_CHR   (chr20-22 already have full coverage)"
-echo "  THROTTLE = %${THROTTLE}"
-echo "  DRY_RUN  = ${DRY_RUN:-off}"
+echo "  MAX_CHR       = $MAX_CHR   (chr20-22 already have full coverage)"
+echo "  THROTTLE      = %${THROTTLE}"
+echo "  CHIP_NAME     = $CHIP_NAME  (must NOT default to 'wgs')"
+echo "  CHIP_SNPS_TPL = $CHIP_SNPS_TPL"
+echo "  DRY_RUN       = ${DRY_RUN:-off}"
 echo "=========================================================="
 
 # ---- 1) WGS HOMOG over chr 1-MAX_CHR -----------------------------------------
@@ -80,12 +91,16 @@ J2=$(submit "wgs-pel-eas" "$(n_task_2)" ./3b_wgs-rfmix-jointcall_clm.sh \
      --export=ALL,PANELS_TO_RUN=NAT_PEL_EAS)
 
 # ---- 3) chip main over chr 1-MAX_CHR -----------------------------------------
+# Must export CHIP_NAME + CHIP_SNPS_TPL, otherwise defaults land in chip_wgs/
+# and run at full-WGS density (not chip-filtered).
 J3=$(submit "chip-main" "$(n_task_9)" ./3b_chip_wgs-rfmix-jointcall_clm.sh \
-     --dependency=afterany:${J2})
+     --dependency=afterany:${J2} \
+     --export="ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}")
 
 # ---- 4) chip HOMOG over chr 1-MAX_CHR ----------------------------------------
 J4=$(submit "chip-homog" "$(n_task_2)" ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh \
-     --dependency=afterany:${J3})
+     --dependency=afterany:${J3} \
+     --export="ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}")
 
 echo
 echo "=========================================================="
