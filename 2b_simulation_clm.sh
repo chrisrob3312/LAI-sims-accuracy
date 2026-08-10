@@ -3,8 +3,10 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=2b_simu
-#SBATCH --partition=short
-#SBATCH --time=08:00:00
+#SBATCH --partition=atkinson,mhgcp
+#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=00:15:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-22
@@ -52,9 +54,9 @@ PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
 # Sample-ID lists (in repo)
-REFS="${REFS:-reference_ids}"
+REFS="${REFS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/reference_ids}"
 NAT_HGDP_SIMU="${NAT_HGDP_SIMU:-${REFS}/amr_simulation.txt}"
-NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simu.txt}"
+NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simulation.txt}"
 EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"
 AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 
@@ -62,8 +64,8 @@ AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
+GMAP_DIR="${GMAP_DIR:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/resources/gmap_hg38}"
+GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.hg38.gmap.txt}"
 
 # Simulation model
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
@@ -98,7 +100,13 @@ cd "$WORKDIR"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # ----------------------------------------------------------------------------
 # Helper: extract a per-pop .haps/.sample (SHAPEIT format) from the merged
