@@ -98,6 +98,10 @@ THREADS=${SLURM_CPUS_PER_TASK:-32}
 GMAP="${GMAP_DIR}/chr${CHR}.b38.gmap.gz"
 TMPDIR="${OUTDIR}/tmp/chr${CHR}"
 MXB_LIFTED="${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
+# SGDP prepped BCF from 1c_prep_sgdp_clm.sh. OPTIONAL: if present and
+# non-empty it is merged into the panel alongside HGDP+1KG and MXB. If
+# absent the merge proceeds with just HGDP+1KG + MXB (backwards compatible).
+SGDP_PREPPED="${SGDP_PREPPED:-${OUTDIR}/sgdp_prepped.chr${CHR}.bcf}"
 mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 
 [[ -s "$MXB_LIFTED"     ]] || { echo "ERROR: missing $MXB_LIFTED. Run 1a_prep-mxb-liftover_clm.sh first."; exit 1; }
@@ -176,11 +180,55 @@ else
     exit 1
 fi
 
-# 2. Merge HGDP+1KG (chr$CHR) with lifted MXB (chr$CHR) -- column-wise sample join
-echo "[$(date +%T)] [chr${CHR}] bcftools merge"
+# 2. Merge HGDP+1KG (chr$CHR) + lifted MXB (chr$CHR) [+ SGDP if present]
+#    -- column-wise sample join. SGDP contigs are renamed to chr-prefixed
+#    if the prepped BCF came from a bare-numeric source, matching the
+#    HGDP+1KG/MXB convention so the merge and SHAPEIT5 --region line up.
+MERGE_INPUTS=("$HGDP1KG_CHR" "$MXB_LIFTED")
+
+if [[ -s "$SGDP_PREPPED" ]]; then
+    NSAMP_SGDP=$(bcftools query -l "$SGDP_PREPPED" | wc -l)
+    echo "[$(date +%T)] [chr${CHR}] SGDP present: ${NSAMP_SGDP} samples -> merge"
+    if bcftools view -h "$SGDP_PREPPED" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+        SGDP_CHR="$SGDP_PREPPED"
+    elif bcftools view -h "$SGDP_PREPPED" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+        echo "[$(date +%T)] [chr${CHR}] rename SGDP contigs to chr-prefixed"
+        SGDP_RENAME_TXT="${TMPDIR}/sgdp_rename_to_chr.txt"
+        : > "$SGDP_RENAME_TXT"
+        for c in {1..22} X Y MT; do echo "$c chr$c" >> "$SGDP_RENAME_TXT"; done
+        SGDP_CHR="${TMPDIR}/sgdp_chr${CHR}.rechr.bcf"
+        bcftools annotate --rename-chrs "$SGDP_RENAME_TXT" \
+            --threads "$THREADS" -Ob -o "$SGDP_CHR" "$SGDP_PREPPED"
+        bcftools index "$SGDP_CHR"
+    else
+        echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $SGDP_PREPPED header"
+        exit 1
+    fi
+    # Guard against sample-ID collisions between SGDP and HGDP+1KG/MXB:
+    # bcftools merge aborts on duplicate sample names. Drop any SGDP sample
+    # already present in the HGDP+1KG prep (e.g. an LP ID in both releases).
+    DUP_IDS="${TMPDIR}/sgdp_dup_ids.chr${CHR}.txt"
+    comm -12 \
+        <(bcftools query -l "$SGDP_CHR"       | sort -u) \
+        <(bcftools query -l "$HGDP1KG_PREP"   | sort -u) > "$DUP_IDS" || true
+    if [[ -s "$DUP_IDS" ]]; then
+        NDUP=$(wc -l < "$DUP_IDS")
+        echo "[$(date +%T)] [chr${CHR}] dropping ${NDUP} SGDP samples already in HGDP+1KG"
+        SGDP_DEDUP="${TMPDIR}/sgdp_chr${CHR}.dedup.bcf"
+        bcftools view -S "^${DUP_IDS}" --force-samples \
+            --threads "$THREADS" -Ob -o "$SGDP_DEDUP" "$SGDP_CHR"
+        bcftools index "$SGDP_DEDUP"
+        SGDP_CHR="$SGDP_DEDUP"
+    fi
+    MERGE_INPUTS+=("$SGDP_CHR")
+else
+    echo "[$(date +%T)] [chr${CHR}] no SGDP prepped BCF at $SGDP_PREPPED -- HGDP+1KG+MXB only"
+fi
+
+echo "[$(date +%T)] [chr${CHR}] bcftools merge (${#MERGE_INPUTS[@]} inputs)"
 bcftools merge --threads "$THREADS" \
     -Ob -o "$MERGED" \
-    "$HGDP1KG_CHR" "$MXB_LIFTED"
+    "${MERGE_INPUTS[@]}"
 bcftools index "$MERGED"
 
 # 3. plink2 site QC -- biallelic SNPs, ACGT only, dedup, missing-var-ids.
