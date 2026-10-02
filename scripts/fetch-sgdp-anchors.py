@@ -162,12 +162,22 @@ def download_metadata(dst_path: str) -> None:
         "and pass it with --metadata-tsv sgdp_metadata.tsv")
 
 
-def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
+def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool,
+                   bcf_suffix: str = ".DG"):
     """Yield sample dict rows from SGDP metadata TSV, respecting tier filters.
 
     SGDP header line starts with '#Sequencing_Panel' -- treat it as the header,
     not a comment. Tier is the 'Embargo' column with values FullyPublic,
-    SignedLetterNoDelay, SignedLetterDelay (or DO_NOT_USE)."""
+    SignedLetterNoDelay, SignedLetterDelay (or DO_NOT_USE).
+
+    CRITICAL -- sample IDs must match the phased_data2021 BCF headers, which
+    name samples with the SGDP reich ID plus a data-freeze suffix:
+        SGDP_ID = 'B_Karitiana-3'  ->  BCF sample = 'B_Karitiana-3.DG'
+    Confirmed 2026-10-02: all 278 public phased_data2021 samples carry the
+    .DG suffix (16 'B_', 262 'S_'). We therefore emit SGDP_ID + bcf_suffix,
+    NOT the 'Sample_ID' alias column (ALB212/HGDP01015/...), which has no
+    relationship to the BCF names and silently matches nothing under
+    `bcftools view -S`. The alias is kept in the manifest for provenance."""
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = [ln.rstrip("\n") for ln in f if ln.strip()]
         if not lines:
@@ -177,13 +187,14 @@ def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
             lines[0] = lines[0][1:]
         reader = csv.DictReader(lines, delimiter="\t")
         for row in reader:
-            # Real SGDP columns: Sample_ID, Population_ID, Region, Gender, Embargo, ...
-            sample = (row.get("Sample_ID") or row.get("SGDP_ID")
-                      or row.get("SampleID") or row.get("Illumina_ID"))
+            # SGDP_ID (col 5, e.g. 'B_Karitiana-3') is the BCF-native stem.
+            sgdp_id = (row.get("SGDP_ID") or "").strip()
+            alias   = (row.get("Sample_ID") or row.get("Sample_ID(Aliases)")
+                       or row.get("Illumina_ID") or "").strip()
             pop    = row.get("Population_ID") or row.get("Population")
             region = row.get("Region")
             embargo = (row.get("Embargo") or "").strip()
-            if not sample or not pop or not region:
+            if not sgdp_id or not pop or not region:
                 continue
             if embargo == "DO_NOT_USE":
                 continue
@@ -192,7 +203,9 @@ def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
             if embargo == "SignedLetterDelay" and not (include_signed_letter and include_fan):
                 continue
             yield {
-                "sample": sample.strip(),
+                "sample": sgdp_id + bcf_suffix,   # BCF-native ID (matches .fam)
+                "sgdp_id": sgdp_id,
+                "alias": alias,
                 "population": pop.strip(),
                 "region": region.strip(),
                 "sequencing_source": embargo,
@@ -245,6 +258,10 @@ def main():
                     help="Include the 21-sample signed-letter tier.")
     ap.add_argument("--include-fan", action="store_true",
                     help="Include the 44 Fan release samples.")
+    ap.add_argument("--bcf-suffix", default=".DG",
+                    help="Data-freeze suffix appended to SGDP_ID to form the "
+                         "BCF-native sample ID (default: .DG, matches "
+                         "phased_data2021). Use '' to emit bare SGDP_ID.")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -256,8 +273,10 @@ def main():
 
     rows = list(parse_metadata(tsv,
                                include_signed_letter=args.include_signed_letter,
-                               include_fan=args.include_fan))
-    print(f"[fetch] parsed {len(rows)} eligible SGDP rows", file=sys.stderr)
+                               include_fan=args.include_fan,
+                               bcf_suffix=args.bcf_suffix))
+    print(f"[fetch] parsed {len(rows)} eligible SGDP rows "
+          f"(IDs = SGDP_ID + '{args.bcf_suffix}', BCF-native)", file=sys.stderr)
 
     buckets = bucket(rows, cap_per_pop=args.per_pop_cap)
 
@@ -280,8 +299,10 @@ def main():
 
     # Combined manifest for provenance.
     manifest_path = os.path.join(args.outdir, "sgdp_manifest.tsv")
-    fields = ["super_pop", "sample", "population", "region", "country",
-              "sex", "latitude", "longitude", "sequencing_source"]
+    # 'sample' is the BCF-native ID (SGDP_ID + suffix); 'sgdp_id' + 'alias'
+    # are kept for provenance / cross-referencing the metadata.
+    fields = ["super_pop", "sample", "sgdp_id", "alias", "population", "region",
+              "country", "sex", "latitude", "longitude", "sequencing_source"]
     all_superpops = ("SAS", "OCE", "MEN", "AMR", "AFR", "EUR", "EAS")
     with open(manifest_path, "w") as g:
         g.write("\t".join(fields) + "\n")
