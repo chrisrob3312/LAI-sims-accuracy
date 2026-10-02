@@ -19,14 +19,19 @@ Sources:
       the SAMPLE-ID list; you handle FTP/download separately or point to a
       local reprocessed release).
 
-Output:
-  reference_ids/sgdp_sas_anchors.txt        SAS samples (per subpopulation majority)
-  reference_ids/sgdp_oceania_anchors.txt    Papuan / Melanesian / Australian
-  reference_ids/sgdp_men_anchors.txt        Middle Eastern (Bedouin, Iranian, ...)
-  reference_ids/sgdp_amr_anchors.txt        Native American (Karitiana, Surui,
-                                            Mayan, Pima, Mixe, Zapotec, Piapoco...)
+Output (per-super-pop anchor lists; one sample ID per line):
+  reference_ids/sgdp_sas_anchors.txt        SAS (South Asia)
+  reference_ids/sgdp_oceania_anchors.txt    OCE (Papuan / Melanesian / Australian)
+  reference_ids/sgdp_men_anchors.txt        MEN (Middle Eastern: Bedouin, Iranian, ...)
+  reference_ids/sgdp_amr_anchors.txt        AMR (Karitiana, Surui, Mayan, Pima, Mixe,
+                                            Zapotec, Piapoco, Quechua, Chane)
+  reference_ids/sgdp_afr_anchors.txt        AFR (sub-Saharan African)
+  reference_ids/sgdp_eur_anchors.txt        EUR (WestEurasia minus MEN populations)
+  reference_ids/sgdp_eas_anchors.txt        EAS (EastAsia + CentralAsiaSiberia)
+  reference_ids/sgdp_combined_anchors.txt   union of all 7 — fed into
+                                            1c_prep_sgdp_clm.sh as the keep-list
   reference_ids/sgdp_manifest.tsv           full filtered metadata rows for all
-                                            four groups above -- provenance for
+                                            seven groups above -- provenance for
                                             the paper + easy re-download
 
 Companion sources (each needs its own ingestion script, not scraped here):
@@ -87,9 +92,13 @@ DEFAULT_METADATA_URL = (
 #   Africa, America, CentralAsiaSiberia, EastAsia, WestEurasia, SouthAsia, Oceania
 # "WestEurasia" is Europe + Middle East -> refine by Population_ID.
 # "America" is Native American -> whitelist homogeneous NAT-like populations.
+# "CentralAsiaSiberia" is bucketed into EAS (closer to EAS than SAS/EUR in PCA).
 SGDP_TO_SUPERPOP = {
-    "SouthAsia":         "SAS",
-    "Oceania":           "OCE",
+    "SouthAsia":           "SAS",
+    "Oceania":             "OCE",
+    "Africa":              "AFR",
+    "EastAsia":            "EAS",
+    "CentralAsiaSiberia":  "EAS",   # Siberian / Central Asian cluster w/ EAS
 }
 
 # SGDP "America" populations that are homogeneous NAT (per Reich lab curation
@@ -177,15 +186,22 @@ def parse_metadata(path: str, include_signed_letter: bool, include_fan: bool):
 
 
 def bucket(rows, cap_per_pop=None):
-    """Assign each row to SAS/OCE/MEN/AMR or drop. Optional per-population cap."""
+    """Assign each row to SAS/OCE/MEN/AMR/AFR/EUR/EAS or drop.
+
+    WestEurasia samples are split:
+      - populations in MEN_POPULATIONS -> MEN
+      - all other WestEurasia -> EUR (European)
+    America samples are kept only if population is in AMR_POPULATIONS
+    (homogeneous NAT per Mallick 2016; drops admixed Mex-Am etc.).
+    """
     per_pop_seen = Counter()
     buckets = defaultdict(list)
     for r in rows:
         region = r["region"]; pop = r["population"]
         super_pop = SGDP_TO_SUPERPOP.get(region)
         if super_pop is None:
-            if region == "WestEurasia" and pop in MEN_POPULATIONS:
-                super_pop = "MEN"
+            if region == "WestEurasia":
+                super_pop = "MEN" if pop in MEN_POPULATIONS else "EUR"
             elif region == "America" and pop in AMR_POPULATIONS:
                 super_pop = "AMR"
             else:
@@ -231,7 +247,10 @@ def main():
     for sp_key, out_name in [("SAS", "sgdp_sas_anchors.txt"),
                              ("OCE", "sgdp_oceania_anchors.txt"),
                              ("MEN", "sgdp_men_anchors.txt"),
-                             ("AMR", "sgdp_amr_anchors.txt")]:
+                             ("AMR", "sgdp_amr_anchors.txt"),
+                             ("AFR", "sgdp_afr_anchors.txt"),
+                             ("EUR", "sgdp_eur_anchors.txt"),
+                             ("EAS", "sgdp_eas_anchors.txt")]:
         out_path = os.path.join(args.outdir, out_name)
         samples = sorted({r["sample"] for r in buckets.get(sp_key, [])})
         with open(out_path, "w") as g:
@@ -245,13 +264,26 @@ def main():
     manifest_path = os.path.join(args.outdir, "sgdp_manifest.tsv")
     fields = ["super_pop", "sample", "population", "region", "country",
               "sex", "latitude", "longitude", "sequencing_source"]
+    all_superpops = ("SAS", "OCE", "MEN", "AMR", "AFR", "EUR", "EAS")
     with open(manifest_path, "w") as g:
         g.write("\t".join(fields) + "\n")
-        for sp_key in ("SAS", "OCE", "MEN", "AMR"):
+        for sp_key in all_superpops:
             for r in sorted(buckets.get(sp_key, []),
                             key=lambda x: (x["population"], x["sample"])):
                 g.write("\t".join(str(r.get(k, "")) for k in fields) + "\n")
     print(f"[fetch] wrote manifest -> {manifest_path}", file=sys.stderr)
+
+    # Combined anchor list — union across all 7 super-pops, deduped + sorted.
+    # 1c_prep_sgdp_clm.sh reads this as the keep-list for sample-filtering the
+    # downloaded SGDP VCFs.
+    combined_path = os.path.join(args.outdir, "sgdp_combined_anchors.txt")
+    all_samples = sorted({r["sample"]
+                          for sp_key in all_superpops
+                          for r in buckets.get(sp_key, [])})
+    with open(combined_path, "w") as g:
+        g.write("\n".join(all_samples) + ("\n" if all_samples else ""))
+    print(f"[fetch] wrote combined anchor list ({len(all_samples)} samples) "
+          f"-> {combined_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
