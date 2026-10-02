@@ -198,19 +198,36 @@ samples = [l.split()[1] for l in open(fam_f)]
 Qu = [list(map(float, l.split())) for l in open(qu_f)]
 assert len(samples) == len(Qu), f"{len(samples)} fam != {len(Qu)} Q rows"
 
-# Majority vote: each cluster -> the super-pop whose exemplars peak there.
-# Greedy by descending vote mass so no two super-pops claim one cluster.
-votes = defaultdict(Counter)  # super-pop -> Counter(cluster)
+# Match clusters to super-pop NAMES using the KNOWN labels (exemplars), by
+# MEAN Q-loading with a one-to-one (greedy-by-max-cell) assignment. This
+# replaces the old argmax-majority-vote, which processed super-pops by
+# descending exemplar count and let the biggest (EUR/AMR) grab clusters first.
+# That misassigns the poorly-separated OCE/MEN: a MEN sample can argmax onto
+# the EUR cluster even when MEN forms its own weaker cluster, so a count-based
+# plurality lands MEN on the wrong (taken) cluster. Mean-Q is robust to that
+# argmax-splitting: MEN claims the cluster where MEN exemplars load highest on
+# AVERAGE, even if individual MEN argmaxes scatter into adjacent EUR/SAS.
+SPS = ["EUR", "AFR", "AMR", "EAS", "SAS", "OCE", "MEN"]
+sums = {sp: [0.0] * K for sp in SPS}; cnts = {sp: 0 for sp in SPS}
 for s, q in zip(samples, Qu):
     sp = exemplars.get(s)
     if sp is None: continue
-    votes[sp][q.index(max(q))] += 1
-cluster_of_sp = {}; used = set()
-for sp, ctr in sorted(votes.items(), key=lambda kv: -sum(kv[1].values())):
-    for cl, _ in ctr.most_common():
-        if cl not in used:
-            cluster_of_sp[sp] = cl; used.add(cl); break
-print(f"[discover] unsup cluster map: {cluster_of_sp}", file=sys.stderr)
+    cnts[sp] += 1
+    for c in range(K): sums[sp][c] += q[c]
+meanQ = {sp: [(sums[sp][c] / cnts[sp] if cnts[sp] else 0.0) for c in range(K)] for sp in SPS}
+cells = sorted(((meanQ[sp][c], sp, c) for sp in SPS for c in range(K)), reverse=True)
+cluster_of_sp = {}; used_cl = set(); used_sp = set()
+for val, sp, c in cells:
+    if sp in used_sp or c in used_cl: continue
+    cluster_of_sp[sp] = c; used_sp.add(sp); used_cl.add(c)
+print(f"[discover] cluster map (by mean-Q): {cluster_of_sp}", file=sys.stderr)
+for sp in SPS:
+    if sp in cluster_of_sp:
+        c = cluster_of_sp[sp]
+        runner = sorted((meanQ[sp][cc], cc) for cc in range(K))[-2]
+        print(f"[discover]   {sp:3s} -> cluster {c} "
+              f"(meanQ={meanQ[sp][c]:.3f}, n_exemplar={cnts[sp]}, "
+              f"2nd-best cluster {runner[1]} @ {runner[0]:.3f})", file=sys.stderr)
 
 def discover(cand_f, sp, out):
     if sp not in cluster_of_sp:
@@ -347,20 +364,29 @@ Qu = [list(map(float, l.split())) for l in open(qu_f)]
 anchors = [l.strip() for l in open(pop_f)]
 assert len(samples) == len(Qs) == len(Qu) == len(anchors)
 
-def majority_vote_map(anchors, Q, K):
-    votes = defaultdict(Counter)
-    for a, q in zip(anchors, Q):
+def assign_map(anchor_labels, Q, K):
+    # Match clusters -> super-pop names by MEAN Q-loading of labeled anchors,
+    # one-to-one greedy-by-max-cell. Robust to argmax-splitting for the
+    # poorly-separated OCE/MEN clusters (see discovery-stage note). Same method
+    # for supervised (anchors fixed ~1.0 on own component -> trivially correct)
+    # and unsupervised Q.
+    sps = sorted({a for a in anchor_labels if a != "-"})
+    sums = {sp: [0.0] * K for sp in sps}; cnts = {sp: 0 for sp in sps}
+    for a, q in zip(anchor_labels, Q):
         if a == "-": continue
-        votes[a][q.index(max(q))] += 1
-    m = {}; used = set()
-    for sp, ctr in sorted(votes.items(), key=lambda kv: -sum(kv[1].values())):
-        for cl, _ in ctr.most_common():
-            if cl not in used: m[cl] = sp; used.add(cl); break
+        cnts[a] += 1
+        for c in range(K): sums[a][c] += q[c]
+    meanQ = {sp: [(sums[sp][c] / cnts[sp] if cnts[sp] else 0.0) for c in range(K)] for sp in sps}
+    cells = sorted(((meanQ[sp][c], sp, c) for sp in sps for c in range(K)), reverse=True)
+    m = {}; used_cl = set(); used_sp = set()
+    for val, sp, c in cells:
+        if sp in used_sp or c in used_cl: continue
+        m[c] = sp; used_sp.add(sp); used_cl.add(c)
     for cl in range(K): m.setdefault(cl, f"UNKc{cl+1}")
     return m
 
-sup_cluster_to_sp   = majority_vote_map(anchors, Qs, K)
-unsup_cluster_to_sp = majority_vote_map(anchors, Qu, K)
+sup_cluster_to_sp   = assign_map(anchors, Qs, K)
+unsup_cluster_to_sp = assign_map(anchors, Qu, K)
 sup_sp_to_cluster   = {v: k for k, v in sup_cluster_to_sp.items()}
 unsup_sp_to_cluster = {v: k for k, v in unsup_cluster_to_sp.items()}
 print(f"sup_cluster_pop_map   = {sup_cluster_to_sp}",   file=sys.stderr)
