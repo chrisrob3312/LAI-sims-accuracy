@@ -11,8 +11,9 @@
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 13 keep-list
 #            samples that were previously filtered as "related" + merge
 #            with SGDP + rephase (sbatch 1b_phasing-jointcall_clm.sh)
-#   Stage 3: Supervised ADMIXTURE Q>=0.95 homogeneity filter across all
-#            7 super-pops (sbatch 4a_build_homogeneity_panel_clm.sh)
+#   Stage 3: K=7 homogeneity filter with SGDP OCE/MEN anchor discovery,
+#            unsupervised->supervised ADMIXTURE, Q>=0.95
+#            (sbatch 4a_build_homogeneity_panel_k7_clm.sh)
 #   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
 #   Stage 5: Full RFMix sweep — WGS main + HOMOG fork, chip main + HOMOG fork
 #            (sbatch 3b_*.sh — 4 arrays)
@@ -100,7 +101,7 @@ echo "=========================================================="
 for s in scripts/fetch-sgdp-anchors.py \
          1c_prep_sgdp_clm.sh \
          1b_phasing-jointcall_clm.sh \
-         4a_build_homogeneity_panel_clm.sh \
+         4a_build_homogeneity_panel_k7_clm.sh \
          2b_simulation_clm.sh \
          3b_wgs-rfmix-jointcall_clm.sh \
          3b_homog_wgs-rfmix-jointcall_clm.sh \
@@ -132,11 +133,14 @@ if [[ -z "$DRY_RUN" ]]; then
 fi
 
 # ---------------------------------------------------------------- STAGE 1
-# SGDP acquisition — downloads each chr's phased SGDP VCF from the Reich lab
-# public mirror and emits sgdp_prepped.chr${CHR}.bcf for the merge step.
+# SGDP acquisition — downloads each chr's phased SGDP BCF (phased_data2021,
+# hg19) from the Reich lab public share, filters to the candidate pool, lifts
+# hg19->hg38, and emits sgdp_prepped.chr${CHR}.bcf for the merge step.
 #
-# WARNING: 1c_prep_sgdp_clm.sh ships with a PLACEHOLDER SGDP_URL_TPL. Confirm
-# the URL works with  curl -kI "${SGDP_URL_TPL//__CHR__/22}"  before running.
+# URL is now pinned to the confirmed layout
+# (.../phased_data2021/chr.sgdp.pub.N.bcf). 1c aborts loudly if the candidate
+# IDs don't match the BCF sample-ID scheme, so a mismatch can't silently
+# produce an empty SGDP panel.
 echo
 echo "============ STAGE 1: SGDP download + prep ============"
 J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE}" ./1c_prep_sgdp_clm.sh)
@@ -179,19 +183,19 @@ J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:
      ./1b_phasing-jointcall_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 3
-# Supervised ADMIXTURE K=5 (EUR/AFR/EAS/SAS/AMR) + Q>=0.95 homogeneity
-# filter across the full merged+phased panel (now with SGDP + 13 restored).
-#
-# NOTE: 4a is K=5 by default. MEN and OCE SGDP samples will be in the panel
-# but will NOT be anchor labels — they'll receive Q from the K=5 model and
-# will be dropped unless max(Q) >= 0.95 on one of the 5 existing super-pops
-# (which is roughly the correct behavior: MEN as EUR-adjacent, OCE as
-# EAS-adjacent). If you want MEN/OCE as their own classes, extend 4a to K=7
-# as a separate task — not needed for the 3-way (EUR/AFR/AMR) accuracy test
-# the current simulation uses.
+# K=7 homogeneity filter with SGDP OCE/MEN anchor DISCOVERY.
+#   STAGE A: unsupervised ADMIXTURE K=7 -> discover OCE/MEN anchors from the
+#            unsupervised Q (candidates sorted by cluster-Q, kept if >=0.95)
+#            -> reference_ids/{oce,men}_rfmix.txt.
+#   STAGE B: supervised ADMIXTURE K=7 with the full 7-way prior.
+#   STAGE C: included iff supervised max_Q >= 0.95 AND argmax==assigned.
+# Writes k7 outputs (admixture_k7/, homog_7pop/, lai_ref_panel_samples.k7.tsv)
+# and never clobbers the proven K=5 outputs. The EUR/AFR/AMR 3-way accuracy
+# test benefits because AMR homogeneity is now resolved at the strict 0.95 cut
+# with SGDP-AMR (Karitiana/Surui/...) reinforcing the Amerindigenous centroid.
 echo
-echo "============ STAGE 3: homogeneity filter ============"
-J3=$(submit "stage3_homog" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_clm.sh)
+echo "============ STAGE 3: homogeneity filter (K=7 + SGDP discovery) ============"
+J3=$(submit "stage3_homog_k7" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_k7_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 4
 # Re-simulate admixed cohorts against the new panel. Simulation DONORS come
