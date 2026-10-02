@@ -1,0 +1,234 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="Helvetica, Arial, sans-serif">
+  <!-- =================================================================== -->
+  <!-- Amerindigenous reference-panel geographic disparity                 -->
+  <!-- Mockup for BioRender tracing. Uses simplified Americas outline;    -->
+  <!-- BioRender has a real world-map illustration to swap in. Pies show   -->
+  <!-- MXB contribution (green) vs pre-MXB HGDP/1KG (blue) at each region. -->
+  <!-- =================================================================== -->
+
+  <defs>
+    <style>
+      .title      { font-size: 22px; font-weight: 700; fill: #222; }
+      .subtitle   { font-size: 14px; fill: #444; }
+      .region     { font-size: 13px; font-weight: 600; fill: #111; }
+      .n          { font-size: 12px; fill: #111; }
+      .gap        { font-size: 12px; font-weight: 700; fill: #b91c1c; }
+      .note       { font-size: 11px; fill: #555; font-style: italic; }
+      .caption    { font-size: 12px; fill: #333; }
+      .pie-mxb    { fill: #4C9F70; }         /* MXB addition (green)   */
+      .pie-legacy { fill: #4A7FB0; }         /* pre-existing HGDP/1KG  */
+      .land       { fill: #EFE9DC; stroke: #8B7C5C; stroke-width: 1; }
+      .ocean      { fill: #C8DFEC; }
+      .callout    { fill: none; stroke: #b91c1c; stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .gap-marker { fill: none; stroke: #b91c1c; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <!-- background / ocean -->
+  <rect x="0" y="0" width="1200" height="900" class="ocean"/>
+
+  <!-- title -->
+  <text x="20" y="35" class="title">Public reference panels underrepresent Amerindigenous ancestry — MX Biobank partly closes the Mexican gap</text>
+  <text x="20" y="58" class="subtitle">Homogeneous samples (supervised ADMIXTURE Q ≥ 0.95, K=5) available for local ancestry inference across the Americas</text>
+
+  <!-- ===================== PANEL A: Americas map ===================== -->
+  <!-- Simplified Americas landmass — BioRender will replace with real map -->
+  <g id="americas">
+    <!-- North America blob -->
+    <path d="M 90 130
+             Q 140 100, 240 110
+             Q 340 105, 380 150
+             Q 420 200, 405 260
+             Q 385 320, 330 350
+             Q 280 355, 240 340
+             Q 190 320, 175 300
+             Q 165 285, 155 265
+             Q 140 240, 128 220
+             Q 115 195, 105 175
+             Q 95 155, 90 130 Z"
+          class="land"/>
+    <!-- Central America (narrow) -->
+    <path d="M 285 355
+             L 305 380
+             L 320 415
+             L 340 445
+             L 355 470
+             L 370 490
+             L 385 500
+             L 390 490
+             L 375 470
+             L 360 445
+             L 340 415
+             L 320 385
+             L 305 358 Z"
+          class="land"/>
+    <!-- South America -->
+    <path d="M 380 505
+             Q 430 495, 470 510
+             Q 510 530, 530 570
+             Q 545 615, 545 665
+             Q 545 720, 525 760
+             Q 500 790, 470 800
+             Q 435 800, 410 780
+             Q 390 755, 380 720
+             Q 372 685, 370 650
+             Q 370 615, 372 585
+             Q 374 555, 378 530 Z"
+          class="land"/>
+  </g>
+
+  <!-- ============ PIE MARKERS at existing sample sources ============ -->
+  <!-- Format: two arcs per pie — MXB (green) and pre-MXB (blue).      -->
+  <!-- Numbers next to each pie show N samples and MXB fraction.       -->
+
+  <!-- Mexico (Central + Yucatán): BIG pie -->
+  <!-- 63 total = 50 MXB + 13 HGDP (Pima 6 + Maya 7). MXB = 79% -->
+  <g transform="translate(275, 300)">
+    <!-- MXB slice (79% = 284°). Start at top, sweep clockwise -->
+    <path d="M 0,-40 A 40 40 0 1 1 -39.4,-6.9 L 0 0 Z" class="pie-mxb"/>
+    <!-- Legacy slice (21% = 76°) -->
+    <path d="M -39.4,-6.9 A 40 40 0 0 1 0,-40 L 0 0 Z" class="pie-legacy"/>
+    <text x="0" y="60" text-anchor="middle" class="region">Mexico</text>
+    <text x="0" y="75" text-anchor="middle" class="n">N=63 (79% MXB)</text>
+  </g>
+
+  <!-- Peru (Andean): 1KG PEL, 9 samples, no MXB -->
+  <g transform="translate(410, 630)">
+    <circle r="20" class="pie-legacy"/>
+    <text x="0" y="35" text-anchor="middle" class="region">Peru</text>
+    <text x="0" y="50" text-anchor="middle" class="n">N=9 (1KG PEL)</text>
+  </g>
+
+  <!-- Colombia (HGDP Colombian): 5, no MXB -->
+  <g transform="translate(430, 540)">
+    <circle r="14" class="pie-legacy"/>
+    <text x="20" y="0" class="region">Colombia</text>
+    <text x="20" y="14" class="n">N=5 (HGDP)</text>
+  </g>
+
+  <!-- Amazon (Karitiana + Surui, Brazil): 11, no MXB -->
+  <g transform="translate(485, 640)">
+    <circle r="17" class="pie-legacy"/>
+    <text x="24" y="-2" class="region">Amazon</text>
+    <text x="24" y="12" class="n">N=11 (HGDP: Karitiana, Surui)</text>
+  </g>
+
+  <!-- =============== GAP CALLOUTS (regions with N=0) =============== -->
+
+  <!-- North America (all of the US + Canada — no public homog samples) -->
+  <g transform="translate(200, 180)">
+    <rect x="-95" y="-15" width="200" height="60" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="0" y="0" text-anchor="middle" class="gap">🚫 N = 0</text>
+    <text x="0" y="18" text-anchor="middle" class="callout" style="fill:#b91c1c">North America</text>
+    <text x="0" y="36" text-anchor="middle" class="note" fill="#b91c1c">Great Plains, SW, Pacific NW,</text>
+    <text x="0" y="50" text-anchor="middle" class="note" fill="#b91c1c">Alaska, Canadian First Nations</text>
+  </g>
+  <line x1="200" y1="200" x2="220" y2="220" class="callout"/>
+
+  <!-- Central America (below Mexico) -->
+  <g transform="translate(120, 470)">
+    <rect x="-95" y="-15" width="200" height="60" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="0" y="0" text-anchor="middle" class="gap">🚫 N = 0</text>
+    <text x="0" y="18" text-anchor="middle" class="callout" style="fill:#b91c1c">Central America</text>
+    <text x="0" y="36" text-anchor="middle" class="note" fill="#b91c1c">Guatemala Highland Maya,</text>
+    <text x="0" y="50" text-anchor="middle" class="note" fill="#b91c1c">Ch'orti', Q'eqchi', Miskitu, Bribri</text>
+  </g>
+  <line x1="220" y1="490" x2="340" y2="450" class="callout"/>
+
+  <!-- Southern Cone -->
+  <g transform="translate(650, 770)">
+    <rect x="-100" y="-15" width="210" height="60" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="0" y="0" text-anchor="middle" class="gap">🚫 N = 0</text>
+    <text x="0" y="18" text-anchor="middle" class="callout" style="fill:#b91c1c">Southern Cone</text>
+    <text x="0" y="36" text-anchor="middle" class="note" fill="#b91c1c">Mapuche, Selk'nam, Diaguita,</text>
+    <text x="0" y="50" text-anchor="middle" class="note" fill="#b91c1c">Aymara-Bolivian, Wichí</text>
+  </g>
+  <line x1="550" y1="790" x2="480" y2="770" class="callout"/>
+
+  <!-- Historical-context note for North America -->
+  <g transform="translate(30, 285)">
+    <rect x="0" y="0" width="230" height="66" rx="6" fill="#fff8ec" stroke="#c08a3e" stroke-width="1"/>
+    <text x="10" y="18" class="note" fill="#8a5a1a" font-weight="700">Historical &amp; ethical context</text>
+    <text x="10" y="34" class="note" fill="#8a5a1a">Cancer &amp; other health disparities are</text>
+    <text x="10" y="48" class="note" fill="#8a5a1a">documented; sample access limited by</text>
+    <text x="10" y="62" class="note" fill="#8a5a1a">justified research-integrity concerns.</text>
+  </g>
+
+  <!-- ================== PANEL B: The super-pop disparity ============ -->
+  <g transform="translate(720, 100)">
+    <text x="0" y="0" class="title" font-size="18">B. Super-population imbalance</text>
+    <text x="0" y="20" class="subtitle">Homogeneous samples per super-pop (K=5)</text>
+
+    <!-- Bars: EAS 667, AFR 634, EUR 620, SAS 48, AMR 88 -->
+    <!-- x scale: 0..700 samples -> 0..380 px -->
+    <g transform="translate(0, 40)">
+      <!-- EAS -->
+      <rect x="120" y="0"  width="362" height="24" fill="#8B5CF6"/>
+      <text x="0"   y="17" class="n">EAS</text>
+      <text x="490" y="17" class="n">667  (7.6× AMR)</text>
+
+      <!-- AFR -->
+      <rect x="120" y="34" width="344" height="24" fill="#10B981"/>
+      <text x="0"   y="51" class="n">AFR</text>
+      <text x="472" y="51" class="n">634  (7.2× AMR)</text>
+
+      <!-- EUR -->
+      <rect x="120" y="68" width="337" height="24" fill="#3B82F6"/>
+      <text x="0"   y="85" class="n">EUR</text>
+      <text x="465" y="85" class="n">620  (7.0× AMR)</text>
+
+      <!-- SAS -->
+      <rect x="120" y="102" width="26"  height="24" fill="#F59E0B"/>
+      <text x="0"   y="119" class="n">SAS</text>
+      <text x="152" y="119" class="n">48  (0.55× AMR)</text>
+
+      <!-- AMR (highlighted) -->
+      <rect x="120" y="136" width="48"  height="24" fill="#DC2626"/>
+      <text x="0"   y="153" class="n" font-weight="700">AMR</text>
+      <text x="174" y="153" class="n" font-weight="700">88  ← reference</text>
+    </g>
+  </g>
+
+  <!-- ================== PANEL C: Within-AMR composition ============= -->
+  <g transform="translate(720, 340)">
+    <text x="0" y="0" class="title" font-size="18">C. Within-AMR composition (n=88)</text>
+    <text x="0" y="20" class="subtitle">Mexican samples dominate (57%); no representation from many regions</text>
+
+    <!-- Horizontal stacked composition bar -->
+    <g transform="translate(0, 40)">
+      <!-- Total width 450px = 88 samples. 1 sample ≈ 5.1 px -->
+      <rect x="0"    y="0" width="256" height="30" fill="#4C9F70"/>   <!-- MXB 50 -->
+      <rect x="256"  y="0" width="66"  height="30" fill="#4A7FB0"/>   <!-- HGDP Mex 13 -->
+      <rect x="322"  y="0" width="46"  height="30" fill="#8FB7D8"/>   <!-- PEL 9 -->
+      <rect x="368"  y="0" width="56"  height="30" fill="#B69ACC"/>   <!-- Amazon+Colombia 11+5 -->
+      <text x="0"    y="50" class="n" font-weight="700">Mexico (MXB): 50  (57%)</text>
+      <text x="0"    y="66" class="n">Mexico (HGDP Pima+Maya): 13 (15%)</text>
+      <text x="0"    y="82" class="n">Peru (1KG PEL): 9 (10%)</text>
+      <text x="0"    y="98" class="n">Amazon + Colombia (HGDP): 16 (18%)</text>
+    </g>
+
+    <!-- Callout box -->
+    <g transform="translate(0, 165)">
+      <rect x="0" y="0" width="450" height="70" rx="6" fill="#FFF3F3" stroke="#DC2626" stroke-width="1.5"/>
+      <text x="10" y="18" class="gap">Numeric imbalance drives LAI accuracy bias</text>
+      <text x="10" y="36" class="note" fill="#111">Over-representing Mexican samples in a pan-Latin-American reference</text>
+      <text x="10" y="50" class="note" fill="#111">panel dilutes signal for non-Mexican Indigenous ancestries; MX Biobank</text>
+      <text x="10" y="64" class="note" fill="#111">closes the Mexican gap but leaves Central/South America under-served.</text>
+    </g>
+  </g>
+
+  <!-- ============== LEGEND ================= -->
+  <g transform="translate(50, 780)">
+    <rect x="0" y="0" width="14" height="14" class="pie-mxb"/>
+    <text x="20" y="12" class="caption">MX Biobank (this project's addition)</text>
+    <rect x="240" y="0" width="14" height="14" class="pie-legacy"/>
+    <text x="260" y="12" class="caption">Pre-existing HGDP / 1KG</text>
+    <rect x="440" y="0" width="14" height="14" fill="none" stroke="#b91c1c" stroke-width="2"/>
+    <text x="460" y="12" class="caption gap">N = 0 (public homogeneous samples)</text>
+  </g>
+
+  <text x="20" y="875" class="caption">
+    Panel A shows homogeneous AMR reference samples (Q_sup_AMR ≥ 0.95, sup/unsup agree) by geography.
+    Panels B–C quantify the disparity: AMR has ~7× fewer homogeneous samples than EUR/AFR/EAS, and within AMR, 72% originate in Mexico.
+  </text>
+</svg>
