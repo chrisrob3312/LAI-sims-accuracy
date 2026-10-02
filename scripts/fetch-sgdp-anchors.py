@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
 """
-Fetch SGDP (Simons Genome Diversity Project) metadata and emit anchor sample
-lists for underrepresented super-populations (SAS, Oceania, Middle East).
+Fetch SGDP (Simons Genome Diversity Project) metadata and emit CANDIDATE
+sample lists for underrepresented super-populations across all 7 regions.
+
+IMPORTANT -- these are CANDIDATES, not verified-homogeneous samples:
+  The lists this script writes are selected purely by SGDP population-label
+  majority from the public metadata (e.g. Region=SouthAsia -> SAS candidate,
+  Population_ID in AMR_POPULATIONS -> AMR candidate). That is a metadata
+  pick, NOT a genetic homogeneity test. Whether a given candidate actually
+  clears the Q>=0.95 homogeneity threshold is decided DOWNSTREAM, after these
+  are merged into the panel (1b) and run through supervised ADMIXTURE in
+  4a_build_homogeneity_panel_clm.sh (K=5 now; K=7 once OCE/MEN are added).
+  The final homogeneous reference set is whatever 4a marks included=1 -- it
+  will be a SUBSET of these candidates. Do not describe the lists below as
+  "the homogeneous SGDP set" in the methods; they are the pre-filter pool.
+
+  The name "anchors" refers only to their ROLE as known-population priors
+  that seed supervised ADMIXTURE -- it is not a homogeneity claim.
 
 Purpose:
-  Complementary anchors for a SECONDARY unsupervised-ADMIXTURE run on all
-  refs + additions -> global proportions for downstream cohorts that may
-  carry SAS/OCE/MEN ancestry. Not the primary LAI panel (that stays at K=5
-  HGDP+1KG+MXB).
+  Candidate priors for ADMIXTURE on all refs + additions -> global
+  proportions for downstream cohorts that may carry SAS/OCE/MEN ancestry.
+  Not the primary LAI panel (that stays at K=5 HGDP+1KG+MXB until 4a
+  re-decides inclusion over the merged panel).
 
 Sources:
   * SGDP public metadata TSV (Reich lab / Harvard Medical School)
@@ -19,7 +34,8 @@ Sources:
       the SAMPLE-ID list; you handle FTP/download separately or point to a
       local reprocessed release).
 
-Output (per-super-pop anchor lists; one sample ID per line):
+Output (per-super-pop CANDIDATE lists; one sample ID per line; each is a
+pre-homogeneity-filter pool, NOT the final homogeneous set):
   reference_ids/sgdp_sas_anchors.txt        SAS (South Asia)
   reference_ids/sgdp_oceania_anchors.txt    OCE (Papuan / Melanesian / Australian)
   reference_ids/sgdp_men_anchors.txt        MEN (Middle Eastern: Bedouin, Iranian, ...)
@@ -28,8 +44,10 @@ Output (per-super-pop anchor lists; one sample ID per line):
   reference_ids/sgdp_afr_anchors.txt        AFR (sub-Saharan African)
   reference_ids/sgdp_eur_anchors.txt        EUR (WestEurasia minus MEN populations)
   reference_ids/sgdp_eas_anchors.txt        EAS (EastAsia + CentralAsiaSiberia)
-  reference_ids/sgdp_combined_anchors.txt   union of all 7 — fed into
-                                            1c_prep_sgdp_clm.sh as the keep-list
+  reference_ids/sgdp_combined_anchors.txt   union of all 7 candidates — fed into
+                                            1c_prep_sgdp_clm.sh as the download
+                                            keep-list (who to pull from SGDP);
+                                            final inclusion decided later by 4a
   reference_ids/sgdp_manifest.tsv           full filtered metadata rows for all
                                             seven groups above -- provenance for
                                             the paper + easy re-download
@@ -257,7 +275,7 @@ def main():
             g.write("\n".join(samples) + ("\n" if samples else ""))
         pops = Counter(r["population"] for r in buckets.get(sp_key, []))
         pop_summary = ", ".join(f"{p}={n}" for p, n in pops.most_common())
-        print(f"[fetch] {sp_key:>3}: wrote {len(samples):3d} anchors "
+        print(f"[fetch] {sp_key:>3}: wrote {len(samples):3d} candidates "
               f"-> {out_path}  ({pop_summary or 'no matches'})", file=sys.stderr)
 
     # Combined manifest for provenance.
@@ -273,17 +291,21 @@ def main():
                 g.write("\t".join(str(r.get(k, "")) for k in fields) + "\n")
     print(f"[fetch] wrote manifest -> {manifest_path}", file=sys.stderr)
 
-    # Combined anchor list — union across all 7 super-pops, deduped + sorted.
+    # Combined candidate list — union across all 7 super-pops, deduped + sorted.
     # 1c_prep_sgdp_clm.sh reads this as the keep-list for sample-filtering the
-    # downloaded SGDP VCFs.
+    # downloaded SGDP VCFs. NOT the final homogeneous set: 4a's Q>=0.95 filter
+    # decides which of these actually make the published reference panel.
     combined_path = os.path.join(args.outdir, "sgdp_combined_anchors.txt")
     all_samples = sorted({r["sample"]
                           for sp_key in all_superpops
                           for r in buckets.get(sp_key, [])})
     with open(combined_path, "w") as g:
         g.write("\n".join(all_samples) + ("\n" if all_samples else ""))
-    print(f"[fetch] wrote combined anchor list ({len(all_samples)} samples) "
+    print(f"[fetch] wrote combined candidate list ({len(all_samples)} samples) "
           f"-> {combined_path}", file=sys.stderr)
+    print(f"[fetch] NOTE: these are population-majority CANDIDATES, not a "
+          f"verified homogeneous set — 4a (ADMIXTURE Q>=0.95) decides final "
+          f"inclusion downstream.", file=sys.stderr)
 
 
 if __name__ == "__main__":
