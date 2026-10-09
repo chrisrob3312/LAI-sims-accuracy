@@ -407,6 +407,7 @@ print(f"sup_cluster_pop_map   = {sup_cluster_to_sp}",   file=sys.stderr)
 print(f"unsup_cluster_pop_map = {unsup_cluster_to_sp}", file=sys.stderr)
 
 POP_ORDER = ["AFR", "AMR", "EAS", "EUR", "MEN", "OCE", "SAS"]
+VALID_SUPERPOPS = set(POP_ORDER)
 
 def cohort_of(s):
     if s in sgdp_sp: return "SGDP"
@@ -416,17 +417,70 @@ def cohort_of(s):
     return "OTHER"
 
 def super_pop_of(s):
+    # BUGFIX: the K=5 allowlist was ("AFR","AMR","EUR","EAS") -- only 4 values --
+    # while make_sample_groups.sh emits 8 (AFR AMR EUR EAS SAS CSA OCE MID->MEN).
+    # OCE and MEN therefore fell through to "NA" and were hard-excluded by
+    # `elif sp == "NA": included = 0`. At K=7 that silently discarded EVERY
+    # HGDP+1KG Oceanian and Middle Eastern sample AFTER discovering anchors for
+    # them -- the "argmax == assigned super_pop matched nothing" failure.
+    # The allowlist must cover the full K-way vocabulary.
     if s in mxb_pop: return "AMR"
     if s in sgdp_sp: return sgdp_sp[s]          # OCE/MEN/AFR/EUR/EAS/SAS/AMR
-    raw = sg.get(s, "NA")
-    if raw == "CSA": return "SAS" if s in sas_ids else "NA"
-    if raw in ("AFR", "AMR", "EUR", "EAS"): return raw
+    raw = (sg.get(s, "NA") or "NA").strip().upper()
+    # gnomAD folds 1KG-SAS into CSA. Map CSA -> SAS for ALL CSA samples, not
+    # just those in sas_rfmix.txt: gating membership on the ANCHOR file
+    # conflated "is a training exemplar" with "belongs to this super-pop" and
+    # dropped all 504 1KG SAS samples (BEB/GIH/ITU/PJL/STU) to NA.
+    if raw == "CSA": return "SAS"
+    if raw == "MID": return "MEN"               # defensive: pre-rename value
+    if raw in VALID_SUPERPOPS: return raw
     return "NA"
 
 def pop_of(s):
     if s in mxb_pop: return mxb_pop[s]
     if s in sgdp_pop: return sgdp_pop[s]
     return gnomad_pop.get(s, "NA")
+
+# --------------------------------------------------------------------------
+# LABEL-VOCABULARY CROSS-CHECK (the diagnostic that was missing).
+# included=1 requires `argmax_super_pop == assigned_super_pop`, a STRING
+# comparison between two independently-built vocabularies. If they diverge the
+# count silently collapses toward zero and the old per-super-pop summary could
+# not show it, because it filtered to included==1 -- the NA bucket was
+# invisible by construction. Print both sides, the NA census, and abort if the
+# overlap is empty or if a whole super-pop would be zeroed out.
+# --------------------------------------------------------------------------
+assigned_counts = Counter(super_pop_of(s) for s in samples)
+argmax_vocab = sorted(set(sup_cluster_to_sp.values()))
+assigned_vocab = sorted(k for k in assigned_counts if k != "NA")
+print("[labels] argmax vocabulary   : " + ", ".join(argmax_vocab), file=sys.stderr)
+print("[labels] assigned vocabulary : " + ", ".join(assigned_vocab), file=sys.stderr)
+print("[labels] assigned census     : "
+      + ", ".join(f"{k}={assigned_counts[k]}" for k in sorted(assigned_counts)),
+      file=sys.stderr)
+overlap = set(argmax_vocab) & set(assigned_vocab)
+only_argmax   = sorted(set(argmax_vocab)   - set(assigned_vocab))
+only_assigned = sorted(set(assigned_vocab) - set(argmax_vocab))
+if only_argmax:
+    print(f"[labels] WARNING: argmax-only labels (no sample assigned to them): "
+          f"{only_argmax}", file=sys.stderr)
+if only_assigned:
+    print(f"[labels] WARNING: assigned-only labels (no cluster carries them, so "
+          f"every such sample is excluded): {only_assigned}", file=sys.stderr)
+if not overlap:
+    print("[labels] FATAL: argmax and assigned vocabularies are DISJOINT. Every "
+          "sample would be excluded. Refusing to write a degenerate panel.",
+          file=sys.stderr)
+    sys.exit(4)
+n_na = assigned_counts.get("NA", 0)
+if n_na > 0.5 * len(samples):
+    print(f"[labels] FATAL: {n_na}/{len(samples)} samples have assigned "
+          f"super_pop=NA (>50%). super_pop_of() is dropping a vocabulary the "
+          f"upstream metadata emits. Refusing to continue.", file=sys.stderr)
+    sys.exit(5)
+if any(c in (f"UNKc{i+1}" for i in range(K)) for c in argmax_vocab):
+    print(f"[labels] WARNING: unclaimed clusters present {argmax_vocab} -- a "
+          f"super-pop failed to claim a cluster at K={K}.", file=sys.stderr)
 
 with open(out, "w") as g:
     hdr = ["sample", "cohort", "pop", "super_pop", "assigned"] \
@@ -461,8 +515,22 @@ PYEOF
 N_INCL=$(awk -F'\t' 'NR>1 && $NF==1' "$SAMPLES_TSV" | wc -l)
 N_TOT=$(awk 'NR>1' "$SAMPLES_TSV" | wc -l)
 echo "[$(date +%T)] included: ${N_INCL}/${N_TOT} samples"
-echo "  per super_pop (included only):"
+echo "  per super_pop (INCLUDED):"
 awk -F'\t' 'NR>1 && $NF==1 {print "    " $4}' "$SAMPLES_TSV" | sort | uniq -c
+# The old script printed only the included rows, which made a total label
+# mismatch invisible (NA never showed up). Always print the excluded census too.
+echo "  per super_pop (EXCLUDED):"
+awk -F'\t' 'NR>1 && $NF==0 {print "    " $4}' "$SAMPLES_TSV" | sort | uniq -c
+echo "  excluded reason breakdown (assigned vs argmax, top 15):"
+# Resolve columns by HEADER NAME, not by offset -- POP_ORDER length changes the
+# offsets, and an off-by-one here silently reports the wrong column.
+awk -F'\t' '
+  NR==1 { for (i=1; i<=NF; i++) h[$i]=i; next }
+  $h["included"]==0 {
+      # group on the label PAIR only -- adding max_Q would make every row
+      # unique and defeat the uniq -c aggregation.
+      print "    assigned=" $h["super_pop"] "  argmax=" $h["argmax_pop_sup"]
+  }' "$SAMPLES_TSV" | sort | uniq -c | sort -rn | head -15
 
 awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_7pop_samples.txt"
 
