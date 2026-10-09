@@ -35,7 +35,7 @@
 #   Picard LiftoverVcf hg19->hg38 -> norm -m- -> +fixref -m flip -d -> sort.
 #
 # NOTE -- "candidates", not the final homogeneous set:
-#   SGDP_ANCHORS is a population-majority candidate pool from SGDP metadata.
+#   SGDP_CANDIDATES is a population-majority candidate pool from SGDP metadata.
 #   Which of these actually clear Q>=0.95 is decided later by
 #   4a_build_homogeneity_panel_clm.sh over the merged panel.
 #
@@ -79,9 +79,11 @@ SGDP_URL_TPL="${SGDP_URL_TPL:-https://sharehost.hms.harvard.edu/genetics/reich_l
 SGDP_COMBINED_URL="${SGDP_COMBINED_URL:-}"
 
 # Combined candidate list (union of all 7 super-pops from fetch-sgdp-anchors.py).
-# One sample ID per line. This gates who gets pulled from SGDP into the panel.
-# NOTE: these are candidates, not the final homogeneous set (4a decides that).
-SGDP_ANCHORS="${SGDP_ANCHORS:-${REPO_DIR}/reference_ids/sgdp_combined_anchors.txt}"
+# One sample ID per line, in BCF-native IDs. This gates who gets pulled from
+# SGDP into the panel. NOTE: candidates, NOT anchors and NOT the final
+# homogeneous set -- 4a_k7 discovers anchors and decides homogeneity downstream.
+# (SGDP_ANCHORS kept as a back-compat alias for the old env var name.)
+SGDP_CANDIDATES="${SGDP_CANDIDATES:-${SGDP_ANCHORS:-${REPO_DIR}/reference_ids/sgdp_combined_candidates.txt}}"
 
 # --- hg19 -> hg38 liftover (identical recipe + files to 1a MXB liftover) ----
 # hg38 target reference for Picard + bcftools norm.
@@ -98,12 +100,12 @@ THREADS=${SLURM_CPUS_PER_TASK:-8}
 mkdir -p "$OUTDIR" "$SGDP_STAGE" "${OUTDIR}/tmp/chr${CHR}"
 TMPDIR="${OUTDIR}/tmp/chr${CHR}"
 
-[[ -s "$SGDP_ANCHORS" ]] || {
-    echo "ERROR: missing $SGDP_ANCHORS"
+[[ -s "$SGDP_CANDIDATES" ]] || {
+    echo "ERROR: missing $SGDP_CANDIDATES"
     echo "       Generate it with:"
     echo "         python3 scripts/fetch-sgdp-anchors.py --outdir reference_ids"
-    echo "         cat reference_ids/sgdp_{sas,oceania,men,amr}_anchors.txt \\"
-    echo "             | sort -u > reference_ids/sgdp_combined_anchors.txt"
+    echo "         cat reference_ids/sgdp_{sas,oceania,men,amr}_candidates.txt \\"
+    echo "             | sort -u > reference_ids/sgdp_combined_candidates.txt"
     exit 1
 }
 [[ -s "$HG38_FA" ]] || { echo "ERROR: missing $HG38_FA"; exit 1; }
@@ -176,7 +178,7 @@ fi
 #    Filtering FIRST keeps Picard fast (only ~277 samples to lift).
 # ---------------------------------------------------------------------------
 KEEP_IDS="${TMPDIR}/sgdp_keep_ids.chr${CHR}.txt"
-awk 'NF' "$SGDP_ANCHORS" > "$KEEP_IDS"
+awk 'NF' "$SGDP_CANDIDATES" > "$KEEP_IDS"
 N_ANCHORS=$(wc -l < "$KEEP_IDS")
 echo "[$(date +%T)] [chr${CHR}] candidate list: ${N_ANCHORS} SGDP samples requested"
 
@@ -188,7 +190,7 @@ PRESENT=$(bcftools query -l "$RAW" | grep -Fxf "$KEEP_IDS" | wc -l || true)
 echo "[$(date +%T)] [chr${CHR}] ${PRESENT}/${N_ANCHORS} candidate IDs present in BCF header"
 if [[ "$PRESENT" -eq 0 ]]; then
     echo "ERROR: none of the candidate IDs match the SGDP BCF sample names."
-    echo "       The BCF uses a different ID scheme than reference_ids/sgdp_combined_anchors.txt."
+    echo "       The BCF uses a different ID scheme than reference_ids/sgdp_combined_candidates.txt."
     echo "       Inspect with:  bcftools query -l '$RAW' | head"
     echo "       SGDP carries 3 parallel IDs (ena SAMEA..., Illumina LP6005...,"
     echo "       reich S_Population-N). Remap the anchor list to the header scheme."

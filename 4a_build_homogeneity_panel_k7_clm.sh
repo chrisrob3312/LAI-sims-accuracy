@@ -66,15 +66,25 @@ SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
 MXB_POPINFO="${MXB_POPINFO:-${REPO_DIR}/reference_ids/MXB50genomes_popinfo.tsv}"
 REFS="${REFS:-${REPO_DIR}/reference_ids}"
 
-# K=7 and strict 0.95 homogeneity (publication). Override via env if needed.
+# K=7. Two DISTINCT thresholds (do not conflate):
+#   ANCHOR_MIN_Q   = floor to QUALIFY as a discovered anchor in stage A
+#                    (unsupervised cluster-Q). Looser so small/clinal OCE/MEN
+#                    yield enough training exemplars.
+#   ANCHOR_CAP     = max anchors kept per super-pop (top-N by Q). Matches
+#                    build-anchors-from-koenig.py (cap 50).
+#   HOMOG_THRESHOLD= strict floor for FINAL inclusion in stage C
+#                    (supervised Q). This is the published homogeneity cut.
 K="${K:-7}"
+ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
+ANCHOR_CAP="${ANCHOR_CAP:-50}"
 HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.95}"
 
 # SGDP candidate pools (from scripts/fetch-sgdp-anchors.py). Used as exemplars
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
+# These are CANDIDATES, not anchors -- anchors are the top-N discovered here.
 SGDP_MANIFEST="${SGDP_MANIFEST:-${REFS}/sgdp_manifest.tsv}"
-SGDP_OCE_CAND="${SGDP_OCE_CAND:-${REFS}/sgdp_oceania_anchors.txt}"
-SGDP_MEN_CAND="${SGDP_MEN_CAND:-${REFS}/sgdp_men_anchors.txt}"
+SGDP_OCE_CAND="${SGDP_OCE_CAND:-${REFS}/sgdp_oceania_candidates.txt}"
+SGDP_MEN_CAND="${SGDP_MEN_CAND:-${REFS}/sgdp_men_candidates.txt}"
 
 # Discovered anchor outputs (written by STAGE A).
 OCE_ANCHORS="${OCE_ANCHORS:-${REFS}/oce_rfmix.txt}"
@@ -100,7 +110,7 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # ---------------------------------------------------------------------------
 # Verify required inputs.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] K=${K}, HOMOG_THRESHOLD=${HOMOG_THRESHOLD}"
+echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}  ANCHOR_CAP=${ANCHOR_CAP}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD}"
 echo "[$(date +%T)] verifying inputs"
 for CHR in {1..22}; do
     F="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
@@ -162,21 +172,22 @@ fi
 
 # ---------------------------------------------------------------------------
 # 4. STAGE A -- discover OCE/MEN anchors from the unsupervised Q.
-#    Map 7 clusters -> super-pop by exemplar majority vote (5 existing anchor
-#    sets + SGDP OCE/MEN candidate pools), then take the SGDP OCE/MEN
-#    candidates with cluster-Q >= threshold, sorted descending.
+#    Map 7 clusters -> super-pop by mean-Q (known labels); then for OCE/MEN
+#    take their candidates with cluster-Q >= ANCHOR_MIN_Q, SORTED descending,
+#    CAPPED at ANCHOR_CAP. This is the "top 25-50 >= 0.93-0.95" recipe used to
+#    build the original anchor sets, applied to the SGDP additions.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] discover OCE/MEN anchors from unsupervised K=${K}"
-python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$HOMOG_THRESHOLD" \
+echo "[$(date +%T)] discover OCE/MEN anchors from unsupervised K=${K} (top ${ANCHOR_CAP} >= ${ANCHOR_MIN_Q})"
+python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$ANCHOR_CAP" \
     "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
     "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" \
     "$SGDP_OCE_CAND" "$SGDP_MEN_CAND" "$MXB_POPINFO" \
     "$OCE_ANCHORS" "$MEN_ANCHORS" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
-(fam_f, qu_f, K, thresh, eur_f, afr_f, amr_f, eas_f, sas_f,
- oce_cand_f, men_cand_f, mxb_f, oce_out, men_out) = sys.argv[1:15]
-K = int(K); thresh = float(thresh)
+(fam_f, qu_f, K, thresh, cap, eur_f, afr_f, amr_f, eas_f, sas_f,
+ oce_cand_f, men_cand_f, mxb_f, oce_out, men_out) = sys.argv[1:16]
+K = int(K); thresh = float(thresh); cap = int(cap)
 
 def load(p): return set(open(p).read().split())
 mxb = set()
@@ -241,11 +252,14 @@ def discover(cand_f, sp, out):
         if s in cand and q[cl] >= thresh:
             picked.append((s, q[cl]))
     picked.sort(key=lambda x: -x[1])  # unsupervised sorted order, descending
+    n_pass = len(picked)
+    picked = picked[:cap]             # cap at top-N per super-pop
     with open(out, "w") as g:
         for s, _ in picked: g.write(s + "\n")
     n_cand_in_panel = sum(1 for s in samples if s in cand)
-    print(f"[discover] {sp}: cluster {cl}, {len(picked)}/{n_cand_in_panel} "
-          f"candidates-in-panel pass Q>={thresh} -> {out}", file=sys.stderr)
+    print(f"[discover] {sp}: cluster {cl}, {n_pass}/{n_cand_in_panel} "
+          f"candidates-in-panel pass Q>={thresh}; kept top {len(picked)} "
+          f"(cap {cap}) -> {out}", file=sys.stderr)
     if picked:
         print(f"           top: {picked[0][0]} Q={picked[0][1]:.4f} | "
               f"min kept Q={picked[-1][1]:.4f}", file=sys.stderr)

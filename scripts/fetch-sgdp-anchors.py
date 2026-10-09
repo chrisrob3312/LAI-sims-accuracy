@@ -34,23 +34,32 @@ Sources:
       the SAMPLE-ID list; you handle FTP/download separately or point to a
       local reprocessed release).
 
+Naming taxonomy (3 tiers -- do not conflate):
+  * CANDIDATES (this script): population-majority pool from metadata.
+    Files: sgdp_<sp>_candidates.txt, sgdp_combined_candidates.txt
+  * ANCHORS (built later): supervised-ADMIXTURE training exemplars.
+    Files: <sp>_rfmix.txt. OCE/MEN anchors are DISCOVERED in 4a_k7 stage A
+    (top-N of these candidates by unsupervised cluster-Q).
+  * HOMOGENEOUS (built last): final included set, supervised Q>=0.95.
+    Files: homog_7pop_samples.txt, lai_ref_panel_samples.k7.tsv (included=1).
+
 Output (per-super-pop CANDIDATE lists; one sample ID per line; each is a
-pre-homogeneity-filter pool, NOT the final homogeneous set):
-  reference_ids/sgdp_sas_anchors.txt        SAS (South Asia)
-  reference_ids/sgdp_oceania_anchors.txt    OCE (Papuan / Melanesian / Australian)
-  reference_ids/sgdp_men_anchors.txt        MEN (Middle Eastern: Bedouin, Iranian, ...)
-  reference_ids/sgdp_amr_anchors.txt        AMR (Karitiana, Surui, Mayan, Pima, Mixe,
-                                            Zapotec, Piapoco, Quechua, Chane)
-  reference_ids/sgdp_afr_anchors.txt        AFR (sub-Saharan African)
-  reference_ids/sgdp_eur_anchors.txt        EUR (WestEurasia minus MEN populations)
-  reference_ids/sgdp_eas_anchors.txt        EAS (EastAsia + CentralAsiaSiberia)
-  reference_ids/sgdp_combined_anchors.txt   union of all 7 candidates — fed into
-                                            1c_prep_sgdp_clm.sh as the download
-                                            keep-list (who to pull from SGDP);
-                                            final inclusion decided later by 4a
-  reference_ids/sgdp_manifest.tsv           full filtered metadata rows for all
-                                            seven groups above -- provenance for
-                                            the paper + easy re-download
+pre-homogeneity-filter pool, NOT anchors and NOT the final homogeneous set):
+  reference_ids/sgdp_sas_candidates.txt        SAS (South Asia)
+  reference_ids/sgdp_oceania_candidates.txt    OCE (Papuan / Melanesian / Australian)
+  reference_ids/sgdp_men_candidates.txt        MEN (Middle Eastern: Bedouin, Iranian, ...)
+  reference_ids/sgdp_amr_candidates.txt        AMR (Karitiana, Surui, Mayan, Pima, Mixe,
+                                               Zapotec, Piapoco, Quechua, Chane)
+  reference_ids/sgdp_afr_candidates.txt        AFR (sub-Saharan African)
+  reference_ids/sgdp_eur_candidates.txt        EUR (WestEurasia minus MEN populations)
+  reference_ids/sgdp_eas_candidates.txt        EAS (EastAsia + CentralAsiaSiberia)
+  reference_ids/sgdp_combined_candidates.txt   union of all 7 candidates — fed into
+                                               1c_prep_sgdp_clm.sh as the download
+                                               keep-list (who to pull from SGDP);
+                                               final inclusion decided later by 4a
+  reference_ids/sgdp_manifest.tsv              full filtered metadata rows for all
+                                               seven groups above -- provenance for
+                                               the paper + easy re-download
 
 Companion sources (each needs its own ingestion script, not scraped here):
   * Jimenez-Kaufmann et al. (Moreno-Estrada) rare-variant imputation reference
@@ -281,13 +290,13 @@ def main():
     buckets = bucket(rows, cap_per_pop=args.per_pop_cap)
 
     # Anchor lists (one sample per line, sorted for deterministic output).
-    for sp_key, out_name in [("SAS", "sgdp_sas_anchors.txt"),
-                             ("OCE", "sgdp_oceania_anchors.txt"),
-                             ("MEN", "sgdp_men_anchors.txt"),
-                             ("AMR", "sgdp_amr_anchors.txt"),
-                             ("AFR", "sgdp_afr_anchors.txt"),
-                             ("EUR", "sgdp_eur_anchors.txt"),
-                             ("EAS", "sgdp_eas_anchors.txt")]:
+    for sp_key, out_name in [("SAS", "sgdp_sas_candidates.txt"),
+                             ("OCE", "sgdp_oceania_candidates.txt"),
+                             ("MEN", "sgdp_men_candidates.txt"),
+                             ("AMR", "sgdp_amr_candidates.txt"),
+                             ("AFR", "sgdp_afr_candidates.txt"),
+                             ("EUR", "sgdp_eur_candidates.txt"),
+                             ("EAS", "sgdp_eas_candidates.txt")]:
         out_path = os.path.join(args.outdir, out_name)
         samples = sorted({r["sample"] for r in buckets.get(sp_key, [])})
         with open(out_path, "w") as g:
@@ -316,7 +325,7 @@ def main():
     # 1c_prep_sgdp_clm.sh reads this as the keep-list for sample-filtering the
     # downloaded SGDP VCFs. NOT the final homogeneous set: 4a's Q>=0.95 filter
     # decides which of these actually make the published reference panel.
-    combined_path = os.path.join(args.outdir, "sgdp_combined_anchors.txt")
+    combined_path = os.path.join(args.outdir, "sgdp_combined_candidates.txt")
     all_samples = sorted({r["sample"]
                           for sp_key in all_superpops
                           for r in buckets.get(sp_key, [])})

@@ -4,8 +4,9 @@
 #
 # One-shot orchestrator for the full publication-grade LAI simulation rerun:
 #
-#   Stage 0: Fetch SGDP metadata + build 7-super-pop anchor lists
-#            (scripts/fetch-sgdp-anchors.py)
+#   Stage 0: Fetch SGDP metadata + build 7-super-pop CANDIDATE lists
+#            (scripts/fetch-sgdp-anchors.py). Candidates != anchors: anchors
+#            are discovered in stage 3 from these.
 #   Stage 1: SGDP acquisition + normalization per chr
 #            (sbatch 1c_prep_sgdp_clm.sh — array 1-22)
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 13 keep-list
@@ -117,19 +118,19 @@ echo "[precheck] all stage scripts present"
 echo "[precheck] project root OK"
 
 # ---------------------------------------------------------------- STAGE 0
-# Fetch SGDP metadata and build the 7 super-pop anchor lists.
-# This is fast (metadata is a few MB) and must complete before stage 1
-# can read sgdp_combined_anchors.txt.
+# Fetch SGDP metadata and build the 7 super-pop CANDIDATE lists (BCF-native
+# IDs). Fast (metadata is a few MB); must complete before stage 1 can read
+# sgdp_combined_candidates.txt.
 echo
-echo "============ STAGE 0: SGDP anchor-list fetch ============"
+echo "============ STAGE 0: SGDP candidate-list fetch ============"
 run_now "fetch-sgdp" python3 scripts/fetch-sgdp-anchors.py \
     --outdir reference_ids
 
-ANCHORS_FILE="reference_ids/sgdp_combined_anchors.txt"
+CAND_FILE="reference_ids/sgdp_combined_candidates.txt"
 if [[ -z "$DRY_RUN" ]]; then
-    [[ -s "$ANCHORS_FILE" ]] || die "stage 0 did not produce $ANCHORS_FILE"
-    N=$(wc -l < "$ANCHORS_FILE")
-    echo "[stage 0] combined anchor list: $N SGDP samples across 7 super-pops"
+    [[ -s "$CAND_FILE" ]] || die "stage 0 did not produce $CAND_FILE"
+    N=$(wc -l < "$CAND_FILE")
+    echo "[stage 0] combined candidate list: $N SGDP samples across 7 super-pops"
 fi
 
 # ---------------------------------------------------------------- STAGE 1
