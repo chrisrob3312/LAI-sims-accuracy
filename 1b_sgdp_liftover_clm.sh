@@ -145,8 +145,18 @@ else
     RAW="${SGDP_STAGE}/chr.sgdp.pub.${CHR}.bcf"
 fi
 
-if [[ ! -s "$RAW" ]]; then
+if [[ -s "$RAW" ]]; then
+    # CACHE HIT. Say so loudly and print size+mtime. A silent skip here is
+    # exactly how the chr13 PEL cache-poisoning bug hid: a truncated file from
+    # a killed job was reused forever and every downstream artefact was wrong,
+    # with nothing in the log to show the file had not been re-fetched.
+    echo "[$(date +%T)] [chr${CHR}] CACHE HIT: reusing $RAW"
+    echo "[$(date +%T)] [chr${CHR}]   size=$(stat -c%s "$RAW") bytes" \
+         "($(du -h "$RAW" | cut -f1))  mtime=$(stat -c%y "$RAW" | cut -d. -f1)"
+    echo "[$(date +%T)] [chr${CHR}]   delete it to force a fresh download"
+else
     echo "[$(date +%T)] [chr${CHR}] downloading SGDP (hg19): $SGDP_URL"
+    DL_T0=$SECONDS
     # -k: the cluster CA bundle doesn't cover the Harvard chain. Payload is
     # public academic data; integrity relies on size sanity + bcftools header
     # validation below, not TLS.
@@ -157,20 +167,38 @@ if [[ ! -s "$RAW" ]]; then
         rm -f "$RAW"
         exit 1
     }
-    if [[ $(stat -c%s "$RAW") -lt 1000000 ]]; then
-        echo "ERROR: downloaded file suspiciously small ($(stat -c%s "$RAW") bytes)"
+    DL_SECS=$(( SECONDS - DL_T0 ))
+    DL_SIZE=$(stat -c%s "$RAW")
+    echo "[$(date +%T)] [chr${CHR}] downloaded ${DL_SIZE} bytes" \
+         "($(du -h "$RAW" | cut -f1)) in ${DL_SECS}s"
+    if [[ "$DL_SIZE" -lt 1000000 ]]; then
+        echo "ERROR: downloaded file suspiciously small (${DL_SIZE} bytes)."
+        echo "       First 200 bytes (usually an HTML error page):"
         head -c 200 "$RAW"
+        echo
         rm -f "$RAW"
         exit 1
     fi
 fi
+# Validate the BCF is readable BEFORE any downstream step trusts it. A
+# truncated-but-large file passes the size check; only bcftools can tell.
+if ! bcftools view -h "$RAW" >/dev/null 2>&1; then
+    echo "ERROR: $RAW exists but bcftools cannot read its header -- the file is"
+    echo "       truncated or corrupt (a killed download, or a poisoned cache)."
+    echo "       Delete it and re-run:  rm -f '$RAW' '${RAW}.csi'"
+    exit 1
+fi
+echo "[$(date +%T)] [chr${CHR}] BCF header OK, $(bcftools query -l "$RAW" | wc -l) samples in source"
 # Index (fetch remote .csi for per-chr; build locally for combined/subsetted).
-if [[ ! -s "${RAW}.csi" ]]; then
-    if [[ -n "$SGDP_COMBINED_URL" ]] \
-       || ! curl -kSLf --retry 3 -o "${RAW}.csi" "${SGDP_URL}.csi" 2>/dev/null; then
-        rm -f "${RAW}.csi"
-        bcftools index --threads "$THREADS" "$RAW"
-    fi
+if [[ -s "${RAW}.csi" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] index: reusing cached ${RAW}.csi"
+elif [[ -n "$SGDP_COMBINED_URL" ]] \
+     || ! curl -kSLf --retry 3 -o "${RAW}.csi" "${SGDP_URL}.csi" 2>/dev/null; then
+    echo "[$(date +%T)] [chr${CHR}] index: no remote .csi, building locally"
+    rm -f "${RAW}.csi"
+    bcftools index --threads "$THREADS" "$RAW"
+else
+    echo "[$(date +%T)] [chr${CHR}] index: fetched remote ${SGDP_URL}.csi"
 fi
 
 # ---------------------------------------------------------------------------
@@ -266,7 +294,16 @@ rm -f "$FILT_VCF" "${FILT_VCF}.tbi" "$LIFTED_VCF" \
 N_SAMPLES=$(bcftools query -l "$PREPPED" | wc -l)
 N_VARIANTS=$(bcftools index -n "$PREPPED")
 N_REJECT=$(zcat "${OUTDIR}/sgdp_prepped.chr${CHR}.rejected.vcf.gz" 2>/dev/null | grep -vc '^#' || echo 0)
-echo "[$(date +%T)] [chr${CHR}] DONE. ${N_SAMPLES} samples, ${N_VARIANTS} variants lifted, ${N_REJECT} rejected -> $PREPPED"
+# Report the reject RATE, not just the count: a liftover that silently drops
+# 30% of sites still "succeeds" and the raw count alone does not show it.
+REJ_PCT=$(awk -v r="$N_REJECT" -v k="$N_VARIANTS" \
+    'BEGIN{ t=r+k; printf "%.2f", (t>0 ? 100*r/t : 0) }')
+echo "[$(date +%T)] [chr${CHR}] DONE. ${N_SAMPLES} samples, ${N_VARIANTS} variants lifted, ${N_REJECT} rejected (${REJ_PCT}% of attempted) -> $PREPPED"
+if awk -v p="$REJ_PCT" 'BEGIN{exit !(p>5)}'; then
+    echo "[$(date +%T)] [chr${CHR}] WARNING: reject rate ${REJ_PCT}% exceeds 5%." \
+         "Check the chain/reference pair and the rejected VCF:" \
+         "${OUTDIR}/sgdp_prepped.chr${CHR}.rejected.vcf.gz"
+fi
 
 # Emit a per-chr sample list for provenance / debugging.
 bcftools query -l "$PREPPED" > "${PREPPED%.bcf}.samples.txt"
