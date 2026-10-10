@@ -328,35 +328,58 @@ weighted_summary <- long |>
          weighted_concordance, weighted_recall, weighted_precision, weighted_f1,
          total_sites, n_haps_chr, tp, fp, fn)
 
-# --- Uncertainty: cluster bootstrap over INDIVIDUALS -----------------------
-# The previous `se = sd(concordance)/sqrt(n())` was wrong in two ways at once:
-#   (1) it is the SE of a DIFFERENT estimator than the point estimate beside it
-#       -- the point estimate is a pooled micro-average over summed TP/FP/FN,
-#       while that SE describes the spread of unweighted per-(hap, chr) recall;
-#   (2) it treats ~1300 (hap, chr) rows as independent when they come from only
-#       ~30 individuals (2 haps x 22 chrs each). Rows from the same individual
-#       share ancestry proportions, breakpoints and phasing, so the effective
-#       sample size is the number of INDIVIDUALS. Dividing by sqrt(1300)
-#       instead of sqrt(30) understates the SE by roughly 6.6x.
-# Correct approach: resample INDIVIDUALS with replacement (keeping all of each
-# one's haps and chromosomes together) and recompute the pooled metric on each
-# resample -- a cluster/block bootstrap. Report percentile CIs.
+# --- Uncertainty: block bootstrap over (chr x hap) -------------------------
+# What is being estimated here is a SITE-LEVEL RATE: how often the caller gets
+# a genome position right. It is a methods benchmark, not a biological
+# experiment, so the question is "which genome sites, and how often correct".
+# That rules out two tempting units:
+#
+#   NOT the site. Ancestry segments span megabases -- at GEN=12 the expected
+#   segment is ~8 cM, so one true ancestry state covers thousands of adjacent
+#   SNPs and the caller usually labels the whole run identically. Treating
+#   ~10^7 sites as independent overstates the effective sample size by three to
+#   four orders of magnitude and yields a meaninglessly tiny SE.
+#
+#   NOT the individual. admix-simu builds every simulated haplotype as its own
+#   mosaic drawn from a SHARED donor pool. The two haplotypes of one simulated
+#   "individual" are no more related to each other than to any other simulated
+#   haplotype, so clustering by individual imposes structure the generative
+#   process does not have.
+#
+# The real unit is the independent ancestry SEGMENT (~3600 cM / ~8 cM ~= 450
+# per haplotype). The available proxy is the (chr x hap) BLOCK: an independent
+# recombination realization containing a set of segments. Resampling those
+# blocks and recomputing the POOLED metric respects within-segment correlation
+# without pretending sites are independent.
+#
+# This also fixes the original estimator mismatch, which was a separate bug:
+# `se = sd(concordance)/sqrt(n())` reported the SD of the unweighted per-block
+# RECALL next to a point estimate that is a pooled micro-average over summed
+# TP/FP/FN -- the SE of a different quantity than the number it annotated.
+#
+# RESIDUAL LIMITATION, stated honestly: blocks still share the donor pool, so
+# an atypical donor haplotype correlates errors across blocks. This bootstrap
+# does not capture that. The rigorous version is REPLICATE SIMULATIONS with
+# different admix-simu seeds, taking the SE across replicates; set
+# BOOT_UNIT=replicate once replicate runs exist.
 BOOT_B <- as.integer(Sys.getenv("BOOT_B", "1000"))
 BOOT_SEED <- as.integer(Sys.getenv("BOOT_SEED", "20261010"))
 
 boot_pooled <- function(df, B, seed) {
-  ids <- unique(df$sample)
+  # Block = one (chr, hap) recombination realization.
+  blk <- paste(df$chr, df$hap, sep = ":")
+  ids <- unique(blk)
   n <- length(ids)
   if (n < 2L || B < 1L) {
-    return(data.frame(n_individuals = n,
+    return(data.frame(n_blocks = n,
                       recall_lo = NA_real_, recall_hi = NA_real_,
                       precision_lo = NA_real_, precision_hi = NA_real_,
                       f1_lo = NA_real_, f1_hi = NA_real_,
                       recall_se = NA_real_, precision_se = NA_real_, f1_se = NA_real_))
   }
-  # Precompute row indices per individual so each bootstrap draw is a cheap
-  # index gather rather than an O(rows) scan.
-  idx_by_id <- split(seq_len(nrow(df)), df$sample)
+  # Precompute row indices per block so each bootstrap draw is a cheap index
+  # gather rather than an O(rows) scan.
+  idx_by_id <- split(seq_len(nrow(df)), blk)
   tpv <- df$n_correct; fpv <- df$n_fp; fnv <- df$n_fn
   set.seed(seed)
   # NB: do not name these R / F -- F is a base alias for FALSE and R shadows
@@ -373,7 +396,7 @@ boot_pooled <- function(df, B, seed) {
   }
   q <- function(v) stats::quantile(v, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
   qr <- q(bootR); qp <- q(bootP); qf <- q(bootF)
-  data.frame(n_individuals = n,
+  data.frame(n_blocks = n,
              recall_lo = qr[1], recall_hi = qr[2],
              precision_lo = qp[1], precision_hi = qp[2],
              f1_lo = qf[1], f1_hi = qf[2],
@@ -426,25 +449,33 @@ per_chr <- long |>
 write_tsv(per_chr, file.path(OUTDIR, "accuracy_per_chr.tsv"))
 
 # --- Paired comparisons vs baseline (Wilcoxon signed-rank, Bonferroni) ---
-# PAIRING UNIT FIX. This previously paired on (chr, hap), giving n ~ 1136 rows
-# drawn from only ~30 individuals x 2 haps x 22 chrs. Those rows are strongly
-# correlated within an individual, so treating them as independent makes the
-# Wilcoxon anti-conservative -- p-values far too small, and any positive result
-# untrustworthy. Pair on the INDIVIDUAL instead: pool each individual's tp/fn
-# across all their haps and chromosomes into one recall per (track, panel,
-# ancestry, sample), then pair those. n drops to ~30, which is the real
-# sample size, and the test becomes valid.
-message("[accuracy_v2] paired Wilcoxon vs baseline (paired by INDIVIDUAL): ",
+# PAIRING UNIT. Pair on the (chr, hap) BLOCK, matching the bootstrap unit
+# above: an independent recombination realization. Individual is NOT the unit
+# -- simulated haplotypes are separate mosaics from a shared donor pool, so the
+# two haps of one simulated individual are no more related than any other pair.
+# Pairing removes block-level variation, which is what makes the comparison
+# informative: the same block is scored under both panels.
+#
+# CAVEAT, not fixable by the test: blocks share the donor pool, so they are not
+# strictly independent and these p-values are mildly anti-conservative. Treat a
+# marginal result as suggestive. The block-bootstrap CI on the paired delta
+# (below) is the more honest summary, and replicate simulations with different
+# seeds would settle it properly.
+message("[accuracy_v2] paired Wilcoxon vs baseline (paired by chr x hap block): ",
         BASELINE_PANEL)
+
+# Per-individual pooled recall is still written out as a descriptive view --
+# useful for spotting an outlier simulated individual -- but it is NOT the
+# inference unit.
 per_individual <- long |>
   group_by(track, panel, ancestry, sample) |>
   summarise(tp = sum(n_correct), fn = sum(n_fn), fp = sum(n_fp), .groups = "drop") |>
   mutate(recall = ifelse((tp + fn) > 0, tp / (tp + fn), NA_real_))
 write_tsv(per_individual, file.path(OUTDIR, "accuracy_per_individual.tsv"))
 
-wide <- per_individual |>
-  select(track, panel, ancestry, sample, recall) |>
-  pivot_wider(names_from = panel, values_from = recall)
+wide <- long |>
+  select(track, panel, chr, hap, sample, ancestry, concordance) |>
+  pivot_wider(names_from = panel, values_from = concordance)
 
 # Only compare panels that actually landed in the wide table -- during a
 # partial run (e.g. NAT_PEL_EAS still finishing), pivot_wider will omit any
@@ -466,12 +497,9 @@ if (nrow(comparisons) == 0L) comp_rows <- list()
 for (i in seq_len(nrow(comparisons))) {
   c_ <- comparisons[i, ]
   sub <- wide |> filter(track == c_$track, ancestry == c_$ancestry) |>
-    select(sample, all_of(BASELINE_PANEL), all_of(c_$panel)) |>
+    select(chr, hap, all_of(BASELINE_PANEL), all_of(c_$panel)) |>
     drop_na()
-  # n is now INDIVIDUALS (~30), not (chr, hap) rows (~1136), so the floor has
-  # to come down with it. Below 5 paired individuals a signed-rank test is
-  # meaningless, so emit an NA row rather than a number.
-  if (nrow(sub) < 5) {
+  if (nrow(sub) < 10) {
     comp_rows[[i]] <- data.frame(track = c_$track, panel = c_$panel,
                                  ancestry = c_$ancestry, n = nrow(sub),
                                  base_mean = NA, alt_mean = NA, delta = NA,
