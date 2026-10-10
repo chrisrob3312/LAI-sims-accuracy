@@ -2,20 +2,69 @@
 # ----------------------------------------------------------------------------
 # SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=4a_homog_k7
+#SBATCH --job-name=4a_homog_kN
 #SBATCH --partition=atkinson,mhgcp
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=01:00:00
 #SBATCH --time=48:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
-#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_k7_%j.out
-#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_k7_%j.err
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_kN_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_kN_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
 # ============================================================================
-# DESCRIPTION -- K=7 homogeneity panel with SGDP OCE/MEN anchor DISCOVERY.
+# DESCRIPTION -- K=8 homogeneity panel: 7 named super-pops + empirical OTH.
+# ============================================================================
+# K-parametric companion to 4a_build_homogeneity_panel_clm.sh (K=5). Default
+# K=8: the 7 named super-pops (AFR AMR EAS EUR MEN OCE SAS) plus OTH, the
+# leftover cluster that captures samples not fitting an HGDP super-pop.
+#
+# The K=5 script uses PRE-BUILT anchor lists and cannot resolve Oceanian or
+# Middle Eastern, because those have no 1KG sub-pop label and no gnomAD
+# inference prob to pick anchors from. This script discovers them instead:
+#
+#   STAGE A (unsupervised, anchor DISCOVERY):
+#     Run UNSUPERVISED ADMIXTURE at K on the merged panel (which now includes
+#     the SGDP candidates from 1b/1c). Match clusters to super-pop NAMES by
+#     MEAN Q-loading of labelled exemplars, one-to-one. The 7 named groups
+#     claim 7 clusters; the LEFTOVER cluster becomes OTH -- defined by the
+#     data, not by a hand-written population list.
+#     Anchors = candidates sorted by their cluster-Q descending, kept if
+#     >= ANCHOR_MIN_Q, capped at ANCHOR_CAP -> reference_ids/{oce,men,oth}_rfmix.txt.
+#     OTH has no metadata candidate pool, so its anchors are drawn from the
+#     whole panel; this also makes supervised K=8 well-posed, since ADMIXTURE
+#     --supervised requires exactly K distinct labels in the .pop file.
+#
+#   STAGE B (supervised, anchor-INFORMED):
+#     Rerun ADMIXTURE --supervised at K with the full K-way .pop prior
+#     (5 existing *_rfmix.txt + OCE/MEN/OTH discovered in stage A).
+#
+#   STAGE C (homogeneity filter + refinement evidence):
+#     included = 1 iff supervised max_Q >= HOMOG_THRESHOLD AND the supervised
+#     argmax super-pop matches the sample's assigned super-pop. MXB forced in.
+#     Emits population_cluster_meanQ.k${K}.tsv -- mean unsupervised Q per
+#     POPULATION per cluster. That table is the evidence for the refinement
+#     pass: where Mozabite actually loads (AFR vs MEN), whether the Beringian
+#     set (Tlingit/Aleut/Eskimo_*) sits with EAS or AMR or OTH, whether the
+#     Central Asians (Tajik/Kyrgyz/Uygur/Hazara) concentrate or split, and
+#     where the SGDP populations with no HGDP counterpart (Australian, Maori,
+#     Hawaiian, Dusun, Igorot) fall. Populations whose argmax disagrees with
+#     their assigned label, or that fail to concentrate (best mean-Q < 0.60),
+#     are printed as [refine] lines.
+#
+# The SGDP fetcher's 277 outputs remain strictly a CANDIDATE POOL; this script
+# is what decides which clear the homogeneity threshold and enter the panel.
+#
+# Outputs in $HOMOG_DIR (all paths carry ${K}, so K=5/7/8 never collide):
+#   admixture_k${K}/lai_ref.{bed,bim,fam,${K}.Q,${K}.P,pop}
+#   admixture_k${K}/unsup/lai_ref.${K}.Q
+#   reference_ids/{oce,men,oth}_rfmix.txt              (DISCOVERED anchors)
+#   lai_ref_panel_samples.k${K}.tsv
+#   population_cluster_meanQ.k${K}.tsv                 (refinement evidence)
+#   homog_${K}pop_samples.txt
+#   homog_${K}pop/merged_chr${CHR}.homog_${K}pop.bcf{,.csi}
 # ============================================================================
 # K=7 companion to 4a_build_homogeneity_panel_clm.sh. The K=5 script uses
 # PRE-BUILT anchor lists (eur/afr/amr/eas/sas_rfmix.txt) and cannot resolve
@@ -51,9 +100,9 @@
 #   admixture_k7/lai_ref.{bed,bim,fam,7.Q,7.P,pop}
 #   admixture_k7/unsup/lai_ref.7.Q
 #   reference_ids/oce_rfmix.txt, men_rfmix.txt         (DISCOVERED anchors)
-#   lai_ref_panel_samples.k7.tsv
-#   homog_7pop_samples.txt
-#   homog_7pop/merged_chr${CHR}.homog_7pop.bcf{,.csi}
+#   lai_ref_panel_samples.k${K}.tsv
+#   homog_${K}pop_samples.txt
+#   homog_7pop/merged_chr${CHR}.homog_${K}pop.bcf{,.csi}
 # ============================================================================
 
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
@@ -74,7 +123,7 @@ REFS="${REFS:-${REPO_DIR}/reference_ids}"
 #                    build-anchors-from-koenig.py (cap 50).
 #   HOMOG_THRESHOLD= strict floor for FINAL inclusion in stage C
 #                    (supervised Q). This is the published homogeneity cut.
-K="${K:-7}"
+K="${K:-8}"
 ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
 ANCHOR_CAP="${ANCHOR_CAP:-50}"
 HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.95}"
@@ -89,12 +138,14 @@ SGDP_MEN_CAND="${SGDP_MEN_CAND:-${REFS}/sgdp_men_candidates.txt}"
 # Discovered anchor outputs (written by STAGE A).
 OCE_ANCHORS="${OCE_ANCHORS:-${REFS}/oce_rfmix.txt}"
 MEN_ANCHORS="${MEN_ANCHORS:-${REFS}/men_rfmix.txt}"
+# OTH = the empirical leftover cluster at K=8 (no metadata candidate pool).
+OTH_ANCHORS="${OTH_ANCHORS:-${REFS}/oth_rfmix.txt}"
 
 set -euo pipefail
 THREADS=${SLURM_CPUS_PER_TASK:-16}
-ADM_DIR="${HOMOG_DIR}/admixture_k7"
+ADM_DIR="${HOMOG_DIR}/admixture_k${K}"
 UNSUP_DIR="${ADM_DIR}/unsup"
-HOMOG_SUB="${HOMOG_DIR}/homog_7pop"
+HOMOG_SUB="${HOMOG_DIR}/homog_${K}pop"
 mkdir -p "$HOMOG_DIR" "$ADM_DIR" "$UNSUP_DIR" "$HOMOG_SUB"
 
 module load anaconda3/2024.06
@@ -182,11 +233,11 @@ python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$A
     "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
     "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" \
     "$SGDP_OCE_CAND" "$SGDP_MEN_CAND" "$MXB_POPINFO" \
-    "$OCE_ANCHORS" "$MEN_ANCHORS" <<'PYEOF'
+    "$OCE_ANCHORS" "$MEN_ANCHORS" "$OTH_ANCHORS" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
 (fam_f, qu_f, K, thresh, cap, eur_f, afr_f, amr_f, eas_f, sas_f,
- oce_cand_f, men_cand_f, mxb_f, oce_out, men_out) = sys.argv[1:16]
+ oce_cand_f, men_cand_f, mxb_f, oce_out, men_out, oth_out) = sys.argv[1:17]
 K = int(K); thresh = float(thresh); cap = int(cap)
 
 def load(p): return set(open(p).read().split())
@@ -218,6 +269,10 @@ assert len(samples) == len(Qu), f"{len(samples)} fam != {len(Qu)} Q rows"
 # plurality lands MEN on the wrong (taken) cluster. Mean-Q is robust to that
 # argmax-splitting: MEN claims the cluster where MEN exemplars load highest on
 # AVERAGE, even if individual MEN argmaxes scatter into adjacent EUR/SAS.
+# The 7 NAMED super-pops have metadata-defined exemplar pools. At K=8 they
+# claim 7 clusters and ONE cluster is left over -- that leftover is OTH: the
+# empirical "does not fit an HGDP super-pop" group. It is defined by the data,
+# not by a hand-written population list, which is the whole point of K=8.
 SPS = ["EUR", "AFR", "AMR", "EAS", "SAS", "OCE", "MEN"]
 sums = {sp: [0.0] * K for sp in SPS}; cnts = {sp: 0 for sp in SPS}
 for s, q in zip(samples, Qu):
@@ -272,11 +327,50 @@ if n_oce == 0 or n_men == 0:
           f"Zero means that super-pop didn't form a clean cluster at K={K} "
           f"or no candidate cleared Q>={thresh}. Supervised stage will still "
           f"run but that label will be weak/absent.", file=sys.stderr)
+
+# ---------------------------------------------------------------------------
+# OTH -- the leftover cluster(s). With K=8 and 7 named super-pops exactly one
+# cluster is unclaimed; it is the empirical "does not fit an HGDP super-pop"
+# group. Unlike the other 7 it has NO metadata candidate pool, so its anchors
+# are simply the top-N samples loading on that cluster, drawn from the whole
+# panel. This is what makes supervised K=8 well-posed (ADMIXTURE --supervised
+# needs exactly K distinct labels in the .pop file).
+# ---------------------------------------------------------------------------
+leftover = [c for c in range(K) if c not in used_cl]
+n_oth = 0
+if not leftover:
+    print(f"[discover] no leftover cluster at K={K} (all {K} claimed by named "
+          f"super-pops); writing empty {oth_out}", file=sys.stderr)
+    open(oth_out, "w").close()
+else:
+    if len(leftover) > 1:
+        print(f"[discover] NOTE: {len(leftover)} unclaimed clusters {leftover}; "
+              f"using the one with the most high-Q members as OTH.", file=sys.stderr)
+    # Pick the leftover cluster with the most members above threshold.
+    best = max(leftover, key=lambda c: sum(1 for q in Qu if q[c] >= thresh))
+    picked = sorted(((s, q[best]) for s, q in zip(samples, Qu) if q[best] >= thresh),
+                    key=lambda x: -x[1])
+    n_pass = len(picked); picked = picked[:cap]
+    with open(oth_out, "w") as g:
+        for s, _ in picked: g.write(s + "\n")
+    n_oth = len(picked)
+    cluster_of_sp["OTH"] = best
+    print(f"[discover] OTH: leftover cluster {best}, {n_pass} samples pass "
+          f"Q>={thresh}; kept top {n_oth} (cap {cap}) -> {oth_out}", file=sys.stderr)
+    if picked:
+        print(f"           top: {picked[0][0]} Q={picked[0][1]:.4f} | "
+              f"min kept Q={picked[-1][1]:.4f}", file=sys.stderr)
+    if n_oth == 0:
+        print(f"[discover] NOTE: OTH cluster {best} exists but no sample cleared "
+              f"Q>={thresh}. Supervised K={K} will have only "
+              f"{len(cluster_of_sp)-1} labels and ADMIXTURE will refuse to run; "
+              f"either lower ANCHOR_MIN_Q or drop K to {K-1}.", file=sys.stderr)
 PYEOF
 
 N_OCE=$(awk 'NF' "$OCE_ANCHORS" 2>/dev/null | wc -l)
 N_MEN=$(awk 'NF' "$MEN_ANCHORS" 2>/dev/null | wc -l)
-echo "[$(date +%T)] discovered anchors: OCE=${N_OCE}, MEN=${N_MEN}"
+N_OTH=$(awk 'NF' "$OTH_ANCHORS" 2>/dev/null | wc -l)
+echo "[$(date +%T)] discovered anchors: OCE=${N_OCE}, MEN=${N_MEN}, OTH=${N_OTH}"
 
 # ---------------------------------------------------------------------------
 # 5. STAGE B -- build supervised .pop file (7 labels) in .fam row order.
@@ -286,9 +380,9 @@ echo "[$(date +%T)] build supervised .pop file (K=${K})"
 python3 - "${PRUNED}.fam" "$POP_FILE" \
     "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
     "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" \
-    "$OCE_ANCHORS" "$MEN_ANCHORS" "$MXB_POPINFO" <<'PYEOF'
+    "$OCE_ANCHORS" "$MEN_ANCHORS" "$OTH_ANCHORS" "$MXB_POPINFO" <<'PYEOF'
 import sys
-(fam, outp, eur_f, afr_f, amr_f, eas_f, sas_f, oce_f, men_f, mxb_pop_f) = sys.argv[1:11]
+(fam, outp, eur_f, afr_f, amr_f, eas_f, sas_f, oce_f, men_f, oth_f, mxb_pop_f) = sys.argv[1:12]
 def load(p):
     try: return set(open(p).read().split())
     except FileNotFoundError: return set()
@@ -300,7 +394,7 @@ with open(mxb_pop_f) as f:
 # Order matters: ADMIXTURE Q columns follow first-appearance of labels in .pop.
 anchors = [("EUR", load(eur_f)), ("AFR", load(afr_f)), ("AMR", load(amr_f) | mxb),
            ("EAS", load(eas_f)), ("SAS", load(sas_f)),
-           ("OCE", load(oce_f)), ("MEN", load(men_f))]
+           ("OCE", load(oce_f)), ("MEN", load(men_f)), ("OTH", load(oth_f))]
 counts = {sp: 0 for sp, _ in anchors}; counts["-"] = 0
 with open(fam) as f, open(outp, "w") as g:
     for line in f:
@@ -325,10 +419,10 @@ fi
 [[ -s "${ADM_DIR}/lai_ref.${K}.Q" ]] || { echo "ERROR: supervised ADMIXTURE failed"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 7. STAGE C -- parse both .Q -> lai_ref_panel_samples.k7.tsv + homogeneity.
+# 7. STAGE C -- parse both .Q -> lai_ref_panel_samples.k${K}.tsv + homogeneity.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] write lai_ref_panel_samples.k7.tsv"
-SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.k7.tsv"
+echo "[$(date +%T)] write lai_ref_panel_samples.k${K}.tsv"
+SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"
 python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.${K}.Q" \
     "${UNSUP_DIR}/lai_ref.${K}.Q" "${ADM_DIR}/lai_ref.pop" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" "$SGDP_MANIFEST" \
@@ -406,7 +500,7 @@ unsup_sp_to_cluster = {v: k for k, v in unsup_cluster_to_sp.items()}
 print(f"sup_cluster_pop_map   = {sup_cluster_to_sp}",   file=sys.stderr)
 print(f"unsup_cluster_pop_map = {unsup_cluster_to_sp}", file=sys.stderr)
 
-POP_ORDER = ["AFR", "AMR", "EAS", "EUR", "MEN", "OCE", "SAS"]
+POP_ORDER = ["AFR", "AMR", "EAS", "EUR", "MEN", "OCE", "OTH", "SAS"]
 VALID_SUPERPOPS = set(POP_ORDER)
 
 def cohort_of(s):
@@ -510,6 +604,62 @@ with open(out, "w") as g:
                                                   str(agree), str(included)]
         ) + "\n")
     print(f"included {n_incl}/{len(samples)}", file=sys.stderr)
+
+# --------------------------------------------------------------------------
+# PER-POPULATION MEAN-Q TABLE (the refinement artifact).
+# Rows = population, columns = mean UNSUPERVISED Q on each named cluster.
+# This is the evidence for deciding, from data rather than from a hand-written
+# list, where each population actually sits: whether Mozabite loads AFR or MEN,
+# whether the Beringian set (Tlingit/Aleut/Eskimo_*) loads EAS or AMR or OTH,
+# whether Central Asians (Tajik/Kyrgyz/Uygur/Hazara) split rather than cluster,
+# and where the SGDP populations with no HGDP counterpart (Australian, Maori,
+# Hawaiian, Dusun, Igorot) fall. Review this, then re-run with overrides or
+# exclusions as needed.
+# --------------------------------------------------------------------------
+import os
+pop_rows = defaultdict(list)
+for s, qu in zip(samples, Qu):
+    pop_rows[(cohort_of(s), pop_of(s), super_pop_of(s))].append(qu)
+pop_tbl = os.path.join(os.path.dirname(out),
+                       f"population_cluster_meanQ.k{K}.tsv")
+with open(pop_tbl, "w") as g:
+    g.write("cohort\tpopulation\tassigned_super_pop\tn\t"
+            + "\t".join(f"meanQ_{c}" for c in POP_ORDER)
+            + "\targmax_cluster\tmax_meanQ\tsecond_cluster\tsecond_meanQ\n")
+    for (co, p, sp), rows in sorted(pop_rows.items()):
+        n = len(rows)
+        mean_by_cluster = [sum(r[c] for r in rows) / n for c in range(K)]
+        # Re-express in POP_ORDER using the unsupervised cluster->name map.
+        named = {unsup_cluster_to_sp[c]: mean_by_cluster[c] for c in range(K)}
+        ordered = [named.get(c, 0.0) for c in POP_ORDER]
+        rank = sorted(named.items(), key=lambda kv: -kv[1])
+        top, top_v = rank[0]
+        sec, sec_v = (rank[1] if len(rank) > 1 else ("NA", 0.0))
+        g.write(f"{co}\t{p}\t{sp}\t{n}\t"
+                + "\t".join(f"{x:.4f}" for x in ordered)
+                + f"\t{top}\t{top_v:.4f}\t{sec}\t{sec_v:.4f}\n")
+print(f"wrote per-population mean-Q table -> {pop_tbl}", file=sys.stderr)
+
+# Flag populations whose empirical cluster disagrees with their metadata label,
+# and populations that fail to concentrate anywhere (admixed / clinal).
+print("[refine] populations whose argmax cluster != assigned super_pop:",
+      file=sys.stderr)
+n_flag = 0
+for (co, p, sp), rows in sorted(pop_rows.items()):
+    n = len(rows)
+    mean_by_cluster = [sum(r[c] for r in rows) / n for c in range(K)]
+    named = {unsup_cluster_to_sp[c]: mean_by_cluster[c] for c in range(K)}
+    top, top_v = max(named.items(), key=lambda kv: kv[1])
+    if sp != "NA" and top != sp:
+        print(f"[refine]   {co:5s} {p:20s} assigned={sp:4s} -> loads {top} "
+              f"({top_v:.3f})  n={n}", file=sys.stderr); n_flag += 1
+    elif top_v < 0.60:
+        print(f"[refine]   {co:5s} {p:20s} assigned={sp:4s} DIFFUSE: best "
+              f"{top} only {top_v:.3f} -- admixed/clinal, poor anchor material",
+              file=sys.stderr); n_flag += 1
+if n_flag == 0:
+    print("[refine]   (none -- every population loads on its assigned cluster)",
+          file=sys.stderr)
 PYEOF
 
 N_INCL=$(awk -F'\t' 'NR>1 && $NF==1' "$SAMPLES_TSV" | wc -l)
@@ -532,16 +682,16 @@ awk -F'\t' '
       print "    assigned=" $h["super_pop"] "  argmax=" $h["argmax_pop_sup"]
   }' "$SAMPLES_TSV" | sort | uniq -c | sort -rn | head -15
 
-awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_7pop_samples.txt"
+awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_${K}pop_samples.txt"
 
 # ---------------------------------------------------------------------------
 # 8. Subset each per-chr phased BCF to the homogeneous samples (K=7 set).
 # ---------------------------------------------------------------------------
 echo "[$(date +%T)] subset per-chr BCFs to homog samples"
-HOMOG_KEEP="${HOMOG_DIR}/homog_7pop_samples.txt"
+HOMOG_KEEP="${HOMOG_DIR}/homog_${K}pop_samples.txt"
 for CHR in {1..22}; do
     SRC="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
-    DST="${HOMOG_SUB}/merged_chr${CHR}.homog_7pop.bcf"
+    DST="${HOMOG_SUB}/merged_chr${CHR}.homog_${K}pop.bcf"
     if [[ -s "$DST" && -s "${DST}.csi" ]]; then continue; fi
     bcftools view "$SRC" -S "$HOMOG_KEEP" --force-samples --threads "$THREADS" -Ob -o "$DST"
     bcftools index "$DST"
@@ -551,4 +701,5 @@ echo "[$(date +%T)] DONE."
 echo "  samples TSV      : $SAMPLES_TSV"
 echo "  discovered OCE   : $OCE_ANCHORS ($N_OCE)"
 echo "  discovered MEN   : $MEN_ANCHORS ($N_MEN)"
-echo "  homog BCFs       : ${HOMOG_SUB}/merged_chr*.homog_7pop.bcf"
+echo "  discovered OTH   : $OTH_ANCHORS ($N_OTH)"
+echo "  homog BCFs       : ${HOMOG_SUB}/merged_chr*.homog_${K}pop.bcf"

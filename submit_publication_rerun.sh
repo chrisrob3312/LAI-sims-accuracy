@@ -14,7 +14,7 @@
 #            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
 #   Stage 3: K=7 homogeneity filter with SGDP OCE/MEN anchor discovery,
 #            unsupervised->supervised ADMIXTURE, Q>=0.95
-#            (sbatch 4a_build_homogeneity_panel_k7_clm.sh)
+#            (sbatch 4a_build_homogeneity_panel_kN_clm.sh)
 #   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
 #   Stage 5: Full RFMix sweep — WGS main + HOMOG fork, chip main + HOMOG fork
 #            (sbatch 3b_*.sh — 4 arrays)
@@ -102,7 +102,7 @@ echo "=========================================================="
 for s in scripts/fetch-sgdp-anchors.py \
          1b_sgdp_liftover_clm.sh \
          1c_phasing-jointcall_clm.sh \
-         4a_build_homogeneity_panel_k7_clm.sh \
+         4a_build_homogeneity_panel_kN_clm.sh \
          2b_simulation_clm.sh \
          3b_wgs-rfmix-jointcall_clm.sh \
          3b_homog_wgs-rfmix-jointcall_clm.sh \
@@ -196,7 +196,7 @@ J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:
 # with SGDP-AMR (Karitiana/Surui/...) reinforcing the Amerindigenous centroid.
 echo
 echo "============ STAGE 3: homogeneity filter (K=7 + SGDP discovery) ============"
-J3=$(submit "stage3_homog_k7" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_k7_clm.sh)
+J3=$(submit "stage3_homog_k7" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_kN_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 4
 # Re-simulate admixed cohorts against the new panel. Simulation DONORS come
