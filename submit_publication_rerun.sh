@@ -196,7 +196,7 @@ J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:
 # with SGDP-AMR (Karitiana/Surui/...) reinforcing the Amerindigenous centroid.
 echo
 echo "============ STAGE 3: homogeneity filter (K=7 + SGDP discovery) ============"
-J3=$(submit "stage3_homog_k7" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_kN_clm.sh)
+J3=$(submit "stage3_homog_kN" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_kN_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 4
 # Re-simulate admixed cohorts against the new panel. Simulation DONORS come
