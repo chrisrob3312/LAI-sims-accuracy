@@ -38,6 +38,10 @@ PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_P
 PHASED_DIR="${PHASED_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
+# K for the multi-K homogeneity panel (4a_build_homogeneity_panel_kN_clm.sh).
+# The hg19 copy of that panel is what the mab-side genotyping pipeline needs
+# for supervised ADMIXTURE and FLARE; 5a previously only lifted homog_5pop.
+K="${K:-8}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg38ToHg19.over.chain.gz}"
 HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/hg19/hg19.fa}"
 PICARD_XMX="${PICARD_XMX:-48g}"
@@ -49,7 +53,7 @@ set -euo pipefail
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job}
 THREADS=${SLURM_CPUS_PER_TASK:-8}
 TMPDIR_LIFT="${HG19_DIR}/tmp/chr${CHR}"
-mkdir -p "$HG19_DIR/all_samples" "$HG19_DIR/homog_5pop" "$TMPDIR_LIFT"
+mkdir -p "$HG19_DIR/all_samples" "$HG19_DIR/homog_5pop" "$HG19_DIR/homog_${K}pop" "$TMPDIR_LIFT"
 
 [[ -s "$CHAIN"   ]] || { echo "ERROR: missing $CHAIN"; exit 1; }
 [[ -s "$HG19_FA" ]] || { echo "ERROR: missing $HG19_FA. Override with HG19_FA=..."; exit 1; }
@@ -139,5 +143,17 @@ do_lift \
     "${HOMOG_DIR}/homog_5pop/merged_chr${CHR}.homog_5pop.bcf" \
     "${HG19_DIR}/homog_5pop/merged_chr${CHR}.homog_5pop.hg19.bcf" \
     "${HG19_DIR}/homog_5pop/merged_chr${CHR}.homog_5pop.hg19.rejected.vcf.gz"
+
+# Lift the K-pop homogeneous panel (7 named super-pops; OTH excluded by 4a).
+# Skipped with a warning rather than a hard failure when 4a has not produced it
+# yet, so an hg19 refresh of the K=5 panel alone still succeeds.
+if [[ -s "${HOMOG_DIR}/homog_${K}pop/merged_chr${CHR}.homog_${K}pop.bcf" ]]; then
+    do_lift \
+        "${HOMOG_DIR}/homog_${K}pop/merged_chr${CHR}.homog_${K}pop.bcf" \
+        "${HG19_DIR}/homog_${K}pop/merged_chr${CHR}.homog_${K}pop.hg19.bcf" \
+        "${HG19_DIR}/homog_${K}pop/merged_chr${CHR}.homog_${K}pop.hg19.rejected.vcf.gz"
+else
+    echo "[$(date +%T)] [chr${CHR}] no homog_${K}pop BCF yet -- run 4a_build_homogeneity_panel_kN_clm.sh; skipping K=${K} lift"
+fi
 
 echo "[$(date +%T)] [chr${CHR}] DONE."

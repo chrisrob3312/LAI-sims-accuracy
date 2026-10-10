@@ -52,7 +52,26 @@ PHASED_DIR="${PHASED_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
 
+# Repo reference_ids (anchor lists, SGDP candidate lists, manifests). 6a had
+# no repo awareness at all -- it only ever shipped BCFs + two sample files.
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REFS="${REFS:-${REPO_DIR}/reference_ids}"
+
+# K for the multi-K homogeneity panel (4a_build_homogeneity_panel_kN_clm.sh).
+# The K=5 quadrants are kept for back-compat; the K-panel quadrants are new.
+K="${K:-8}"
+
+# The full panel is HGDP+1KG+MXB+SGDP once the publication rerun has run, so
+# it ships under a name that says so rather than the bare "all_samples".
+# Override to "all_samples" to keep the legacy remote path.
+ALL_SAMPLES_SUBDIR="${ALL_SAMPLES_SUBDIR:-1KG-HGDP_MXB_SGDP_all_samples_combined}"
+# The homogeneous panel carries exactly the 7 NAMED super-pops -- OTH (the
+# leftover K=8 cluster) is deliberately excluded by 4a, since a mixture of
+# leftovers is not a reference ancestry.
+HOMOG_K_SUBDIR="${HOMOG_K_SUBDIR:-homog_${K}pop_7superpop}"
+
 SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.tsv"
+SAMPLES_TSV_K="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"
 MAB_SSH_OPTS="${MAB_SSH_OPTS:-}"
 
 set -euo pipefail
@@ -69,7 +88,8 @@ build_manifest () {
     ( cd "$src" && \
       find . -maxdepth 2 -type f \( -name '*.bcf' -o -name '*.bcf.csi' \
                                     -o -name '*.tsv' -o -name '*.txt' \
-                                    -o -name '*.vcf.gz' -o -name '*.vcf.gz.csi' \) \
+                                    -o -name '*.vcf.gz' -o -name '*.vcf.gz.csi' \
+                                    -o -name '*.vcf.gz.tbi' -o -name '*.md' \) \
         -exec stat -c '%s %n' {} + | sort
     ) > "$manifest"
 }
@@ -125,7 +145,7 @@ run_hg38_all () {
         ln -sf "$f" "$STAGE/$(basename "$f")"
     done
     [[ -s "$SAMPLES_TSV" ]] && ln -sf "$SAMPLES_TSV" "$STAGE/lai_ref_panel_samples.tsv"
-    do_rsync "$STAGE" "hg38/all_samples"
+    do_rsync "$STAGE" "hg38/${ALL_SAMPLES_SUBDIR}"
 }
 
 run_hg38_homog () {
@@ -141,12 +161,75 @@ run_hg38_homog () {
     do_rsync "$STAGE" "hg38/homog_5pop"
 }
 
+run_reference_lists () {
+    # Everything the mab-side genotyping / ancestry-inference pipeline needs to
+    # run SUPERVISED ADMIXTURE and FLARE against this panel, which previously
+    # was never transferred at all:
+    #   * <sp>_rfmix.txt      -- the supervised ADMIXTURE anchor sets (the 5
+    #                            existing + OCE/MEN/OTH discovered by 4a)
+    #   * homog_<K>pop_samples.txt and the per-super-pop ID lists
+    #   * homog_composition.k<K>.tsv  -- per super_pop x population counts
+    #   * population_cluster_meanQ.k<K>.tsv -- the refinement evidence table
+    #   * sgdp_*_candidates.txt, sgdp_manifest.tsv -- SGDP provenance
+    local STAGE="${PROJECT_ROOT}/.stage_reference_lists"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    for f in "${REFS}"/*_rfmix.txt "${REFS}"/sgdp_*_candidates.txt \
+             "${REFS}/sgdp_manifest.tsv" "${REFS}/MXB50genomes_popinfo.tsv"; do
+        [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+    done
+    for f in "$SAMPLES_TSV" "$SAMPLES_TSV_K" \
+             "${HOMOG_DIR}/homog_${K}pop_samples.txt" \
+             "${HOMOG_DIR}/homog_5pop_samples.txt" \
+             "${HOMOG_DIR}/homog_composition.k${K}.tsv" \
+             "${HOMOG_DIR}/population_cluster_meanQ.k${K}.tsv"; do
+        [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+    done
+    if [[ -d "${HOMOG_DIR}/homog_${K}pop_by_superpop" ]]; then
+        for f in "${HOMOG_DIR}/homog_${K}pop_by_superpop"/*.txt; do
+            [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+        done
+    fi
+    do_rsync "$STAGE" "reference_lists"
+}
+
+run_hg38_homog_k () {
+    local STAGE="${PROJECT_ROOT}/.stage_hg38_${HOMOG_K_SUBDIR}"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    local n=0
+    for f in "${HOMOG_DIR}/homog_${K}pop"/*.bcf{,.csi}; do
+        [[ -e "$f" ]] || continue
+        ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1))
+    done
+    if [[ "$n" -eq 0 ]]; then
+        echo "WARNING: no BCFs in ${HOMOG_DIR}/homog_${K}pop -- run 4a_build_homogeneity_panel_kN_clm.sh first; skipping"
+        return 0
+    fi
+    [[ -s "$SAMPLES_TSV_K" ]] && ln -sf "$SAMPLES_TSV_K" "$STAGE/$(basename "$SAMPLES_TSV_K")"
+    [[ -s "${HOMOG_DIR}/homog_${K}pop_samples.txt" ]] && \
+        ln -sf "${HOMOG_DIR}/homog_${K}pop_samples.txt" "$STAGE/homog_${K}pop_samples.txt"
+    [[ -s "${HOMOG_DIR}/homog_composition.k${K}.tsv" ]] && \
+        ln -sf "${HOMOG_DIR}/homog_composition.k${K}.tsv" "$STAGE/homog_composition.k${K}.tsv"
+    do_rsync "$STAGE" "hg38/${HOMOG_K_SUBDIR}"
+}
+
+run_hg19_homog_k () {
+    if [[ ! -d "${HG19_DIR}/homog_${K}pop" ]]; then
+        echo "WARNING: ${HG19_DIR}/homog_${K}pop missing -- run 5a to lift the K=${K} panel; skipping"
+        return 0
+    fi
+    do_rsync "${HG19_DIR}/homog_${K}pop" "hg19/${HOMOG_K_SUBDIR}"
+    for f in "$SAMPLES_TSV_K" "${HOMOG_DIR}/homog_${K}pop_samples.txt"; do
+        [[ -s "$f" ]] && rsync -avz -e "ssh ${MAB_SSH_OPTS}" "$f" \
+            "${MAB_USER}@${MAB_HOST}:${MAB_BASE}/hg19/${HOMOG_K_SUBDIR}/$(basename "$f")"
+    done
+}
+
 run_hg19_all () {
-    do_rsync "${HG19_DIR}/all_samples" "hg19/all_samples"
+    do_rsync "${HG19_DIR}/all_samples" "hg19/${ALL_SAMPLES_SUBDIR}"
     # Add the samples TSV alongside.
     if [[ -s "$SAMPLES_TSV" ]]; then
         rsync -avz -e "ssh ${MAB_SSH_OPTS}" "$SAMPLES_TSV" \
-            "${MAB_USER}@${MAB_HOST}:${MAB_BASE}/hg19/all_samples/lai_ref_panel_samples.tsv"
+            "${MAB_USER}@${MAB_HOST}:${MAB_BASE}/hg19/${ALL_SAMPLES_SUBDIR}/lai_ref_panel_samples.tsv"
     fi
 }
 
@@ -164,21 +247,28 @@ run_hg19_homog () {
 
 case "$SCOPE" in
     all)
-        ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{all_samples,homog_5pop}"
+        ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" \
+            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/reference_lists"
         run_hg38_all
         run_hg38_homog
+        run_hg38_homog_k
         run_hg19_all
         run_hg19_homog
+        run_hg19_homog_k
+        run_reference_lists
         ;;
-    hg38)               run_hg38_all; run_hg38_homog ;;
-    hg19)               run_hg19_all; run_hg19_homog ;;
+    hg38)               run_hg38_all; run_hg38_homog; run_hg38_homog_k ;;
+    hg19)               run_hg19_all; run_hg19_homog; run_hg19_homog_k ;;
     hg38/all_samples)   run_hg38_all ;;
     hg38/homog_5pop)    run_hg38_homog ;;
+    hg38/homog_k)       run_hg38_homog_k ;;
     hg19/all_samples)   run_hg19_all ;;
     hg19/homog_5pop)    run_hg19_homog ;;
+    hg19/homog_k)       run_hg19_homog_k ;;
+    reference_lists)    run_reference_lists ;;
     *)
         echo "Unknown scope: $SCOPE"
-        echo "Usage: $0 [all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg19/all_samples | hg19/homog_5pop]"
+        echo "Usage: $0 [all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg38/homog_k | hg19/all_samples | hg19/homog_5pop | hg19/homog_k | reference_lists]"
         exit 1
         ;;
 esac
