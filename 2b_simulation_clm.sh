@@ -93,6 +93,53 @@ GMAP=$(printf "$GMAP_TPL" "$CHR")
 [[ -s "$DAT_FILE"        ]] || { echo "ERROR: missing $DAT_FILE (admix-simu config)"; exit 1; }
 [[ -s "$SAMPLE_TEMPLATE" ]] || { echo "ERROR: missing $SAMPLE_TEMPLATE"; exit 1; }
 
+# ---------------------------------------------------------------------------
+# DONOR <-> REFERENCE DISJOINTNESS CHECK.
+# A sample used as an admix-simu DONOR must never also appear in a reference
+# panel handed to RFMix: the benchmark would then score the caller on
+# haplotypes it was given as reference, inflating accuracy in a way no
+# downstream statistic can detect. This was previously enforced only by hand-
+# curating reference_ids/*, with no assertion anywhere. Check it every run.
+#
+# Set ALLOW_DONOR_IN_REF=1 to downgrade to a warning (e.g. a deliberate
+# positive-control run that measures the size of the leak).
+# ---------------------------------------------------------------------------
+DONOR_UNION="${WORKDIR_TMP:-/tmp}/.donors.$$.txt"
+REF_UNION="${WORKDIR_TMP:-/tmp}/.refs.$$.txt"
+trap 'rm -f "$DONOR_UNION" "$REF_UNION"' EXIT
+: > "$DONOR_UNION"
+for f in "$NAT_HGDP_SIMU" "$NAT_HGDPMXB_SIMU" "$EUR_SIMU" "$AFR_SIMU" \
+         "${REFS}/mxb_simulation.txt"; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$DONOR_UNION"
+done
+sort -u -o "$DONOR_UNION" "$DONOR_UNION"
+
+: > "$REF_UNION"
+for f in "${REFS}"/*_rfmix.txt; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+done
+# The homogeneous panel is also a reference set, if 4a has produced one.
+for f in "${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"/homog_*_samples.txt; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+done
+sort -u -o "$REF_UNION" "$REF_UNION"
+
+N_DONOR=$(wc -l < "$DONOR_UNION"); N_REF=$(wc -l < "$REF_UNION")
+OVERLAP=$(comm -12 "$DONOR_UNION" "$REF_UNION" | wc -l)
+echo "[$(date +%T)] donor/reference disjointness: ${N_DONOR} donors, ${N_REF} reference ids, ${OVERLAP} overlapping"
+if [[ "$OVERLAP" -gt 0 ]]; then
+    echo "ERROR: ${OVERLAP} sample(s) are BOTH simulation donors AND reference-panel members."
+    echo "       RFMix would be scored on haplotypes it was handed as reference."
+    echo "       Offending IDs (first 20):"
+    comm -12 "$DONOR_UNION" "$REF_UNION" | head -20 | sed 's/^/         /'
+    echo "       Fix the reference_ids lists, or re-run 4a (which now excludes"
+    echo "       simulation donors from the homogeneous panel for every ancestry)."
+    if [[ "${ALLOW_DONOR_IN_REF:-0}" != "1" ]]; then
+        exit 1
+    fi
+    echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
+fi
+
 WORKDIR="${OUTDIR}/${ADMIX_POP}/gen${GEN}"
 mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR"

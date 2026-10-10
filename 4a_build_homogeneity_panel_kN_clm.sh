@@ -423,16 +423,34 @@ fi
 # ---------------------------------------------------------------------------
 # 7. STAGE C -- parse both .Q -> lai_ref_panel_samples.k${K}.tsv + homogeneity.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Simulation-donor exclusion. Any sample used as an admix-simu DONOR must not
+# also appear in the reference panel RFMix is given, or the benchmark scores
+# the model on haplotypes it was handed as reference -- inflating accuracy.
+# Previously this was enforced only by hand-curation of reference_ids/*, and
+# only really for NAT. Enforce it here for EVERY ancestry by unioning all
+# *_simulation.txt donor lists and excluding them from the homogeneous panel.
+# ---------------------------------------------------------------------------
+SIM_DONORS="${SIM_DONORS:-${ADM_DIR}/simulation_donors.all.txt}"
+: > "$SIM_DONORS"
+for f in "${REFS}"/*_simulation.txt; do
+    [[ -s "$f" ]] || continue
+    echo "[$(date +%T)]   donor list: $(basename "$f") ($(awk 'NF' "$f" | wc -l) ids)"
+    awk 'NF' "$f" >> "$SIM_DONORS"
+done
+sort -u -o "$SIM_DONORS" "$SIM_DONORS"
+echo "[$(date +%T)] simulation donors to exclude from the homog panel: $(wc -l < "$SIM_DONORS")"
+
 echo "[$(date +%T)] write lai_ref_panel_samples.k${K}.tsv"
 SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"
 python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.${K}.Q" \
     "${UNSUP_DIR}/lai_ref.${K}.Q" "${ADM_DIR}/lai_ref.pop" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" "$SGDP_MANIFEST" \
-    "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SAMPLES_TSV" <<'PYEOF'
+    "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SIM_DONORS" "$SAMPLES_TSV" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
 (fam, qs_f, qu_f, pop_f, groups_f, gnomad_f, mxb_pop_f, sgdp_manifest_f,
- sas_f, thresh, K, out) = sys.argv[1:13]
+ sas_f, thresh, K, donors_f, out) = sys.argv[1:14]
 thresh = float(thresh); K = int(K)
 
 sg = {}
@@ -467,6 +485,13 @@ with open(sgdp_manifest_f) as f:
         ff = line.rstrip("\n").split("\t")
         if len(ff) > max(si, spi, pi):
             sgdp_sp[ff[si]] = ff[spi]; sgdp_pop[ff[si]] = ff[pi]
+
+sim_donors = set()
+try:
+    sim_donors = {x for x in open(donors_f).read().split() if x}
+except FileNotFoundError:
+    pass
+print(f"simulation donors loaded: {len(sim_donors)}", file=sys.stderr)
 
 samples = [l.split()[1] for l in open(fam)]
 Qs = [list(map(float, l.split())) for l in open(qs_f)]
@@ -504,6 +529,15 @@ print(f"unsup_cluster_pop_map = {unsup_cluster_to_sp}", file=sys.stderr)
 
 POP_ORDER = ["AFR", "AMR", "EAS", "EUR", "MEN", "OCE", "OTH", "SAS"]
 VALID_SUPERPOPS = set(POP_ORDER)
+# OTH is a MODEL component, not a reference ancestry. It is the leftover
+# cluster -- by construction a mixture of whatever did not fit the 7 named
+# HGDP super-pops -- so it must NOT enter the HOMOGENEOUS reference panel even
+# when its members load tightly on their own cluster. OTH samples still get an
+# OTH anchor set (so supervised K=8 is well-posed), still appear in the TSV
+# with their Q values, and still ship in the POOLED all-samples panel; they are
+# simply excluded from homog_${K}pop. The homogeneous panel therefore carries
+# exactly the 7 named super-pops.
+PANEL_SUPERPOPS = [c for c in POP_ORDER if c != "OTH"]
 
 def cohort_of(s):
     if s in sgdp_sp: return "SGDP"
@@ -592,9 +626,18 @@ with open(out, "w") as g:
         agree = 1 if ap_sup == ap_unsup else 0
         qs_ordered = [qs[sup_sp_to_cluster[c]]   if c in sup_sp_to_cluster   else 0.0 for c in POP_ORDER]
         qu_ordered = [qu[unsup_sp_to_cluster[c]] if c in unsup_sp_to_cluster else 0.0 for c in POP_ORDER]
-        if co == "MXB":
+        if s in sim_donors:
+            included = 0   # donor exclusion outranks the MXB force-include
+        elif co == "MXB":
             included = 1
         elif sp == "NA":
+            included = 0
+        elif s in sim_donors:
+            # Used as an admix-simu donor -> must never be a reference
+            # haplotype, for ANY ancestry, or the benchmark is circular.
+            included = 0
+        elif sp == "OTH" or ap_sup == "OTH":
+            # Leftover cluster -> pooled panel only, never the homogeneous one.
             included = 0
         else:
             included = 1 if (max_qs >= thresh and ap_sup == sp) else 0
@@ -685,6 +728,43 @@ awk -F'\t' '
   }' "$SAMPLES_TSV" | sort | uniq -c | sort -rn | head -15
 
 awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_${K}pop_samples.txt"
+
+# ---------------------------------------------------------------------------
+# Composition breakdown: how many homogeneous samples each super-pop has, and
+# which sub-populations (regions) supply them. This is the table to read when
+# deciding which under-represented groups need more data collected -- it shows
+# both the absolute count and the pass rate per population, so a super-pop that
+# is small because it has few candidates is distinguishable from one that is
+# small because its candidates keep failing the homogeneity cut.
+# ---------------------------------------------------------------------------
+COMPOSITION="${HOMOG_DIR}/homog_composition.k${K}.tsv"
+awk -F'\t' '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  {
+    sp=$h["super_pop"]; pop=$h["pop"]; co=$h["cohort"]; inc=$h["included"]
+    key=sp "\t" pop "\t" co
+    tot[key]++; if (inc==1) ok[key]++
+    sp_tot[sp]++; if (inc==1) sp_ok[sp]++
+  }
+  END {
+    print "super_pop\tpopulation\tcohort\tn_included\tn_total\tpct_included"
+    for (k in tot)
+      printf "%s\t%d\t%d\t%.1f\n", k, ok[k]+0, tot[k], 100*(ok[k]+0)/tot[k]
+  }' "$SAMPLES_TSV" | { read -r hdr; echo "$hdr"; sort -k1,1 -k4,4nr; } > "$COMPOSITION"
+
+echo "  homogeneous composition per super_pop (sub-populations listed in $COMPOSITION):"
+awk -F'\t' 'NR>1 {ok[$1]+=$4; tot[$1]+=$5; npop[$1]++}
+  END { printf "    %-5s %8s %8s %7s %6s\n","SP","incl","total","pct","npops"
+        for (s in ok) printf "    %-5s %8d %8d %6.1f%% %6d\n", s, ok[s], tot[s], 100*ok[s]/tot[s], npop[s] }' \
+  "$COMPOSITION"
+# Per-super-pop sample-ID lists, so an under-represented group can be traced
+# straight back to the individuals and sub-populations supplying it.
+mkdir -p "${HOMOG_DIR}/homog_${K}pop_by_superpop"
+awk -F'\t' -v d="${HOMOG_DIR}/homog_${K}pop_by_superpop" '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  $h["included"]==1 { print $h["sample"] > (d "/" $h["super_pop"] "_homog_samples.txt") }
+' "$SAMPLES_TSV"
+echo "  per-super_pop ID lists -> ${HOMOG_DIR}/homog_${K}pop_by_superpop/"
 
 # ---------------------------------------------------------------------------
 # 8. Subset each per-chr phased BCF to the homogeneous samples (K=7 set).
