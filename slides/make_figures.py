@@ -80,7 +80,7 @@ def fig_wgs_panels():
         (f"HGDP + 1KG{_cov_flag('NAT_HGDP')}",              "NAT_HGDP"),
         (f"+ 25 MXB{_cov_flag('NAT_HGDPMXB')}",             "NAT_HGDPMXB"),
         (f"+ 50 MXB{_cov_flag('NAT_HGDPMXB_FULL')}",        "NAT_HGDPMXB_FULL"),
-        (f"Homog. Q≥0.95{_cov_flag('NAT_HOMOG')}",          "NAT_HOMOG"),
+        (f"Homog. Q≥0.93{_cov_flag('NAT_HOMOG')}",          "NAT_HOMOG"),
         (f"+ PEL (Peru){_cov_flag('NAT_PEL')}",             "NAT_PEL"),
         (f"+ PEL + EAS{_cov_flag('NAT_PEL_EAS')}",          "NAT_PEL_EAS"),
     ]

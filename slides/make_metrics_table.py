@@ -30,7 +30,7 @@ PANEL_ORDER = [
     ("NAT_HGDP",         "HGDP + 1KG"),
     ("NAT_HGDPMXB",      "+ 25 MXB"),
     ("NAT_HGDPMXB_FULL", "+ 50 MXB"),
-    ("NAT_HOMOG",        "Homog. Q≥0.95"),
+    ("NAT_HOMOG",        "Homog. Q≥0.93"),
     ("NAT_PEL",          "+ PEL (Peru)"),
     ("NAT_PEL_EAS",      "+ PEL + EAS"),
 ]

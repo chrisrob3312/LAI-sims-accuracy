@@ -325,7 +325,7 @@ def slide_methods():
         ("NAT_HGDP",         "26 HGDP + 5 LP",           MUTED),
         ("NAT_HGDPMXB",      "+ 25 MXB",                 ACCENT),
         ("NAT_HGDPMXB_FULL", "+ 50 MXB",                 ACCENT),
-        ("NAT_HOMOG",        "ADMIXTURE-homog Q≥0.95",   BLUE),
+        ("NAT_HOMOG",        "ADMIXTURE-homog Q≥0.93",   BLUE),
         ("NAT_PEL",          "adds 9 PEL (Peru)",        GREEN),
         ("NAT_PEL_EAS",      "PEL + EAS outgroup",       GREEN),
     ]
@@ -429,7 +429,7 @@ def slide_wgs_result():
         "0.990), so F1 is roughly flat. +50 MXB (HGDPMXB_FULL) costs more "
         "recall (0.902) with only marginal F1 benefit — 25 MXB is the sweet "
         "spot. PEL matches or beats HGDP on the Brazilian cohort. NAT_HOMOG "
-        "(HGDP + 1KG + MXB jointly filtered to Q≥0.95 by supervised "
+        "(HGDP + 1KG + MXB jointly filtered to Q≥0.93 by supervised "
         "ADMIXTURE — includes MXB samples but excludes admixed individuals) "
         "matches HGDPMXB on Mexican-cohort F1 (0.972) with full coverage. "
         "Punchline: adding MXB is a clear win for a Mexican-cohort GWAS; "
@@ -488,7 +488,7 @@ def slide_chip_result():
         "chip-genotyped, not WGS — so the WGS result generalizes. Michigan/1KG "
         "imputation is the post-committee validation step; today we can already "
         "recommend HGDPMXB (+25 MXB) for the Mexican-Latino LAI pipeline. "
-        "NAT_HOMOG (Q≥0.95 across HGDP+1KG+MXB joint) matches HGDPMXB.")
+        "NAT_HOMOG (Q≥0.93 across HGDP+1KG+MXB joint) matches HGDPMXB.")
     return s
 
 # ---------------------------------------------------------------- SLIDE 6
