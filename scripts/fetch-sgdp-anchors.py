@@ -54,7 +54,7 @@ pre-homogeneity-filter pool, NOT anchors and NOT the final homogeneous set):
   reference_ids/sgdp_eur_candidates.txt        EUR (WestEurasia minus MEN populations)
   reference_ids/sgdp_eas_candidates.txt        EAS (EastAsia + CentralAsiaSiberia)
   reference_ids/sgdp_combined_candidates.txt   union of all 7 candidates — fed into
-                                               1c_prep_sgdp_clm.sh as the download
+                                               1b_sgdp_liftover_clm.sh as the download
                                                keep-list (who to pull from SGDP);
                                                final inclusion decided later by 4a
   reference_ids/sgdp_manifest.tsv              full filtered metadata rows for all
@@ -322,7 +322,7 @@ def main():
     print(f"[fetch] wrote manifest -> {manifest_path}", file=sys.stderr)
 
     # Combined candidate list — union across all 7 super-pops, deduped + sorted.
-    # 1c_prep_sgdp_clm.sh reads this as the keep-list for sample-filtering the
+    # 1b_sgdp_liftover_clm.sh reads this as the keep-list for sample-filtering the
     # downloaded SGDP VCFs. NOT the final homogeneous set: 4a's Q>=0.95 filter
     # decides which of these actually make the published reference panel.
     combined_path = os.path.join(args.outdir, "sgdp_combined_candidates.txt")

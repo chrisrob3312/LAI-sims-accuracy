@@ -2,7 +2,7 @@
 # ----------------------------------------------------------------------------
 # SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=1c_prep_sgdp
+#SBATCH --job-name=1b_sgdp_liftover
 #SBATCH --partition=atkinson,mhgcp
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=04:00:00
@@ -10,8 +10,8 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-22
-#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1c_prep_sgdp_chr%a_%j.out
-#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1c_prep_sgdp_chr%a_%j.err
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_sgdp_liftover_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_sgdp_liftover_chr%a_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
@@ -22,7 +22,7 @@
 # (phased_data2021, which is hg19 / GRCh37), filters to the candidate samples
 # produced by scripts/fetch-sgdp-anchors.py (union of all 7 super-pops),
 # LIFTS hg19 -> hg38, splits multi-allelics, normalizes, and emits
-# sgdp_prepped.chr${CHR}.bcf ready to feed into 1b_phasing-jointcall_clm.sh's
+# sgdp_prepped.chr${CHR}.bcf ready to feed into 1c_phasing-jointcall_clm.sh's
 # bcftools merge alongside HGDP+1KG and MXB.
 #
 # IMPORTANT -- SGDP phased_data2021 is hg19, our panel is hg38:
@@ -39,7 +39,7 @@
 #   Which of these actually clear Q>=0.95 is decided later by
 #   4a_build_homogeneity_panel_clm.sh over the merged panel.
 #
-# Why re-phase from scratch (downstream, in 1b): RFMix assumes reference
+# Why re-phase from scratch (downstream, in 1c): RFMix assumes reference
 # haplotypes are jointly phased. Appending an already-phased SGDP release to
 # an already-phased HGDP+1KG+MXB panel creates cohort-specific switch-error
 # patterns that RFMix would misinterpret as ancestry switches. Re-phasing
@@ -185,7 +185,7 @@ echo "[$(date +%T)] [chr${CHR}] candidate list: ${N_ANCHORS} SGDP samples reques
 # Guard against the silent-empty-filter trap: if NONE of the candidate IDs are
 # present in the BCF header, the sample-ID scheme doesn't match (e.g. anchors
 # are S_Papuan-1 but the BCF uses LP6005... Illumina IDs). Fail loud with a
-# hint rather than emitting an empty panel that 1b would silently merge.
+# hint rather than emitting an empty panel that 1c would silently merge.
 PRESENT=$(bcftools query -l "$RAW" | grep -Fxf "$KEEP_IDS" | wc -l || true)
 echo "[$(date +%T)] [chr${CHR}] ${PRESENT}/${N_ANCHORS} candidate IDs present in BCF header"
 if [[ "$PRESENT" -eq 0 ]]; then
@@ -240,7 +240,7 @@ picard "-Xmx${PICARD_XMX}" LiftoverVcf \
     MAX_RECORDS_IN_RAM=200000
 
 # 2d. norm (split multiallelics, left-align) + fixref (flip strand, drop
-#     unfixable) against hg38, then sort -> PREPPED.bcf (hg38, ready for 1b).
+#     unfixable) against hg38, then sort -> PREPPED.bcf (hg38, ready for 1c).
 echo "[$(date +%T)] [chr${CHR}] norm -m- + fixref + sort"
 bcftools norm -f "$HG38_FA" -m- --threads "$THREADS" \
     -Ob -o "${TMPDIR}/sgdp.chr${CHR}.hg38.norm.bcf" "$LIFTED_VCF"

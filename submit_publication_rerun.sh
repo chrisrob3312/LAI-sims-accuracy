@@ -8,10 +8,10 @@
 #            (scripts/fetch-sgdp-anchors.py). Candidates != anchors: anchors
 #            are discovered in stage 3 from these.
 #   Stage 1: SGDP acquisition + normalization per chr
-#            (sbatch 1c_prep_sgdp_clm.sh — array 1-22)
+#            (sbatch 1b_sgdp_liftover_clm.sh — array 1-22)
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 13 keep-list
 #            samples that were previously filtered as "related" + merge
-#            with SGDP + rephase (sbatch 1b_phasing-jointcall_clm.sh)
+#            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
 #   Stage 3: K=7 homogeneity filter with SGDP OCE/MEN anchor discovery,
 #            unsupervised->supervised ADMIXTURE, Q>=0.95
 #            (sbatch 4a_build_homogeneity_panel_k7_clm.sh)
@@ -100,8 +100,8 @@ echo "=========================================================="
 
 # Required scripts (hard-fail if missing)
 for s in scripts/fetch-sgdp-anchors.py \
-         1c_prep_sgdp_clm.sh \
-         1b_phasing-jointcall_clm.sh \
+         1b_sgdp_liftover_clm.sh \
+         1c_phasing-jointcall_clm.sh \
          4a_build_homogeneity_panel_k7_clm.sh \
          2b_simulation_clm.sh \
          3b_wgs-rfmix-jointcall_clm.sh \
@@ -139,19 +139,19 @@ fi
 # hg19->hg38, and emits sgdp_prepped.chr${CHR}.bcf for the merge step.
 #
 # URL is now pinned to the confirmed layout
-# (.../phased_data2021/chr.sgdp.pub.N.bcf). 1c aborts loudly if the candidate
+# (.../phased_data2021/chr.sgdp.pub.N.bcf). 1b aborts loudly if the candidate
 # IDs don't match the BCF sample-ID scheme, so a mismatch can't silently
 # produce an empty SGDP panel.
 echo
 echo "============ STAGE 1: SGDP download + prep ============"
-J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE}" ./1c_prep_sgdp_clm.sh)
+J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE}" ./1b_sgdp_liftover_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 2
 # Rebuild merged phased panel with:
 #   - the 13 previously-dropped keep-list samples restored
 #   - new SGDP samples merged in
 #
-# PENDING PATCH: 1b_phasing-jointcall_clm.sh currently sources from a
+# PENDING PATCH: 1c_phasing-jointcall_clm.sh currently sources from a
 # hgdp1kg filtered BCF that has already applied the "unrelated only" filter
 # upstream of our 13 missing samples. The patch (not yet in the repo) is to
 # either:
@@ -181,7 +181,7 @@ EOF
 fi
 
 J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:${J1}" \
-     ./1b_phasing-jointcall_clm.sh)
+     ./1c_phasing-jointcall_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 3
 # K=7 homogeneity filter with SGDP OCE/MEN anchor DISCOVERY.

@@ -21,7 +21,7 @@
 # Modernized replacement for simulation.sh. Builds admix-simu donor .phgeno
 # files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB)
 # directly from the new merged + jointly phased panel produced by
-# 1b_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
+# 1c_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
 # haps + truth files per chrom.
 #
 # Differences from legacy simulation.sh:
@@ -49,7 +49,7 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 # lab members' work.
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
-# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
+# Phased panel from 1c_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 

@@ -2,14 +2,14 @@
 # ----------------------------------------------------------------------------
 # SLURM directives
 # ----------------------------------------------------------------------------
-#SBATCH --job-name=1b_phase
+#SBATCH --job-name=1c_phase
 #SBATCH --partition=atkinson,mhgcp
 #SBATCH --time=72:00:00
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=32
 #SBATCH --array=1-22
-#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_phase_chr%a_%j.out
-#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_phase_chr%a_%j.err
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1c_phase_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1c_phase_chr%a_%j.err
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
@@ -98,7 +98,7 @@ THREADS=${SLURM_CPUS_PER_TASK:-32}
 GMAP="${GMAP_DIR}/chr${CHR}.b38.gmap.gz"
 TMPDIR="${OUTDIR}/tmp/chr${CHR}"
 MXB_LIFTED="${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
-# SGDP prepped BCF from 1c_prep_sgdp_clm.sh. OPTIONAL: if present and
+# SGDP prepped BCF from 1b_sgdp_liftover_clm.sh. OPTIONAL: if present and
 # non-empty it is merged into the panel alongside HGDP+1KG and MXB. If
 # absent the merge proceeds with just HGDP+1KG + MXB (backwards compatible).
 SGDP_PREPPED="${SGDP_PREPPED:-${OUTDIR}/sgdp_prepped.chr${CHR}.bcf}"

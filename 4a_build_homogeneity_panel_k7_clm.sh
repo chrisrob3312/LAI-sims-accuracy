@@ -27,7 +27,7 @@
 #
 #   STAGE A (unsupervised, anchor DISCOVERY):
 #     Run UNSUPERVISED ADMIXTURE at K=7 on the merged panel (which now
-#     includes the SGDP candidates from 1c/1b). Map each of the 7 clusters to
+#     includes the SGDP candidates from 1b/1c). Map each of the 7 clusters to
 #     a super-pop by exemplar majority vote (the 5 existing anchor sets + the
 #     SGDP OCE/MEN candidate pools). For OCE and MEN, take the SGDP candidates
 #     whose Q in their own cluster is >= HOMOG_THRESHOLD, SORTED by that Q

@@ -20,7 +20,7 @@
 # ============================================================================
 # Modernized replacement for wgs-simulation-rfmix-jointcall.sh. Builds RFMix
 # v1 inputs and runs RFMix across the 4 reference panels x 2 sim-tracks grid
-# from the merged + jointly phased panel produced by 1b_phasing-jointcall_clm.sh.
+# from the merged + jointly phased panel produced by 1c_phasing-jointcall_clm.sh.
 #
 # Reference panels (inner dim of comparison grid):
 #   1. NAT_HGDP        HGDP-NAT-rfmix + IBS + YRI                    (legacy)
@@ -54,7 +54,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_P
 # through SLURM_SUBMIT_DIR before resolving from BASH_SOURCE.
 REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 
-# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
+# Phased panel from 1c_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
