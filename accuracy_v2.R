@@ -201,8 +201,20 @@ score_one <- function(track, panel, chr) {
       truth_mask <- (tv == a)
       pred_mask  <- (rv == a)
       n_a   <- sum(truth_mask)
-      if (n_a == 0L) next
       n_p   <- sum(pred_mask)
+      # BUGFIX (precision inflation). This used to be `if (n_a == 0L) next`,
+      # which dropped the whole (hap, chr, ancestry) stratum whenever truth
+      # carried no sites of that class. Any site PREDICTED as that class on
+      # such a stratum is a pure false positive, and skipping the row meant
+      # those FPs were never counted in n_fp anywhere -- so genome-wide
+      # precision = sum(tp)/(sum(tp)+sum(fp)) was computed against an
+      # artificially small denominator. The effect scales with how often an
+      # ancestry is ABSENT from a stratum, so it inflates the RAREST ancestry
+      # most -- i.e. NAT/AMR, the headline metric of this study.
+      # Recall is unaffected: tp and fn both require truth == a, so a
+      # zero-truth stratum contributes 0 to each and skipping it was a no-op.
+      # Keep the row whenever the stratum is informative in EITHER direction.
+      if (n_a == 0L && n_p == 0L) next
       n_tp  <- sum(truth_mask & pred_mask)
       n_fp  <- n_p - n_tp
       n_fn  <- n_a - n_tp
@@ -216,7 +228,10 @@ score_one <- function(track, panel, chr) {
         ancestry    = ANC_LABELS[[as.character(a)]],
         n_sites     = as.integer(n_a),
         n_correct   = as.integer(n_tp),
-        concordance = n_tp / n_a,          # per-class recall / TPR
+        # Per-class recall / TPR. Undefined (not zero) when truth carries no
+        # sites of this class -- NA keeps it out of macro-averages instead of
+        # dragging them toward 0.
+        concordance = if (n_a > 0L) n_tp / n_a else NA_real_,
         n_pred      = as.integer(n_p),
         n_fp        = as.integer(n_fp),
         n_fn        = as.integer(n_fn),
@@ -233,17 +248,51 @@ grid <- expand.grid(track = TRACKS, panel = PANELS, chr = CHRS,
   filter(mapply(is_valid_combo, track, panel))
 
 results <- vector("list", nrow(grid))
+# Account for EVERY combo. Previously a combo that returned NULL -- whether
+# from a caught error, a missing file, or the <100-shared-sites guard (which
+# raises warning(), not error(), so it slipped past the error handler) -- just
+# vanished from the output with nothing downstream to notice. A silently
+# missing panel x chr reads as "scored and fine" in the summary tables.
+skipped <- vector("list", nrow(grid)); n_skip <- 0L
+last_warn <- NULL; err_msg <- NULL
 for (i in seq_len(nrow(grid))) {
   g <- grid[i, ]
   message(sprintf("  [%d/%d] %s / %s chr%d", i, nrow(grid), g$track, g$panel, g$chr))
-  results[[i]] <- tryCatch(score_one(g$track, g$panel, g$chr),
-                           error = function(e) { warning(e$message); NULL })
+  last_warn <- NULL; err_msg <- NULL
+  res <- withCallingHandlers(
+    tryCatch(score_one(g$track, g$panel, g$chr),
+             error = function(e) { err_msg <<- conditionMessage(e); NULL }),
+    # The <100-shared-sites guard raises warning(), not error(), so it would
+    # otherwise slip past tryCatch entirely. Capture it, then muffle so the
+    # loop behaves exactly as before.
+    warning = function(w) { last_warn <<- conditionMessage(w)
+                            invokeRestart("muffleWarning") })
+  if (is.null(res) || nrow(res) == 0L) {
+    n_skip <- n_skip + 1L
+    reason <- if (!is.null(err_msg))   paste("error:", err_msg)
+         else if (!is.null(last_warn)) last_warn
+         else "no rows (missing input, missing .done, or <100 shared sites)"
+    skipped[[n_skip]] <- data.frame(track = g$track, panel = g$panel, chr = g$chr,
+                                    reason = reason, stringsAsFactors = FALSE)
+    message(sprintf("    [SKIPPED] %s / %s chr%d -- %s", g$track, g$panel, g$chr, reason))
+  } else {
+    results[[i]] <- res
+  }
   # Explicit gc() every iteration -- big chrs (1-3) allocate ~2 GB matrices,
   # R's lazy GC leaves them resident and kills the process by chr 4-5.
   gc(FALSE)
 }
 long <- bind_rows(results)
 if (nrow(long) == 0) stop("No accuracy rows produced -- check paths and file existence.")
+
+# Persist the skip ledger so a partial sweep is visible in the outputs, not
+# only in scrollback.
+skip_tbl <- if (n_skip > 0L) bind_rows(skipped[seq_len(n_skip)]) else
+  data.frame(track = character(0), panel = character(0), chr = integer(0),
+             reason = character(0), stringsAsFactors = FALSE)
+write_tsv(skip_tbl, file.path(OUTDIR, "accuracy_skipped_combos.tsv"))
+message(sprintf("[accuracy_v2] %d/%d combos scored, %d skipped (see accuracy_skipped_combos.tsv)",
+                nrow(grid) - n_skip, nrow(grid), n_skip))
 
 write_tsv(long, file.path(OUTDIR, "accuracy_long.tsv"))
 message(sprintf("[accuracy_v2] wrote %d long rows", nrow(long)))
@@ -279,15 +328,86 @@ weighted_summary <- long |>
          weighted_concordance, weighted_recall, weighted_precision, weighted_f1,
          total_sites, n_haps_chr, tp, fp, fn)
 
-# unweighted per-hap mean/SE of recall (matches old "unweighted_mean" for plots)
-unweighted_stats <- long |>
+# --- Uncertainty: cluster bootstrap over INDIVIDUALS -----------------------
+# The previous `se = sd(concordance)/sqrt(n())` was wrong in two ways at once:
+#   (1) it is the SE of a DIFFERENT estimator than the point estimate beside it
+#       -- the point estimate is a pooled micro-average over summed TP/FP/FN,
+#       while that SE describes the spread of unweighted per-(hap, chr) recall;
+#   (2) it treats ~1300 (hap, chr) rows as independent when they come from only
+#       ~30 individuals (2 haps x 22 chrs each). Rows from the same individual
+#       share ancestry proportions, breakpoints and phasing, so the effective
+#       sample size is the number of INDIVIDUALS. Dividing by sqrt(1300)
+#       instead of sqrt(30) understates the SE by roughly 6.6x.
+# Correct approach: resample INDIVIDUALS with replacement (keeping all of each
+# one's haps and chromosomes together) and recompute the pooled metric on each
+# resample -- a cluster/block bootstrap. Report percentile CIs.
+BOOT_B <- as.integer(Sys.getenv("BOOT_B", "1000"))
+BOOT_SEED <- as.integer(Sys.getenv("BOOT_SEED", "20261010"))
+
+boot_pooled <- function(df, B, seed) {
+  ids <- unique(df$sample)
+  n <- length(ids)
+  if (n < 2L || B < 1L) {
+    return(data.frame(n_individuals = n,
+                      recall_lo = NA_real_, recall_hi = NA_real_,
+                      precision_lo = NA_real_, precision_hi = NA_real_,
+                      f1_lo = NA_real_, f1_hi = NA_real_,
+                      recall_se = NA_real_, precision_se = NA_real_, f1_se = NA_real_))
+  }
+  # Precompute row indices per individual so each bootstrap draw is a cheap
+  # index gather rather than an O(rows) scan.
+  idx_by_id <- split(seq_len(nrow(df)), df$sample)
+  tpv <- df$n_correct; fpv <- df$n_fp; fnv <- df$n_fn
+  set.seed(seed)
+  # NB: do not name these R / F -- F is a base alias for FALSE and R shadows
+  # the inferred-call matrix name used elsewhere in this script.
+  bootR <- numeric(B); bootP <- numeric(B); bootF <- numeric(B)
+  for (b in seq_len(B)) {
+    pick <- sample(ids, n, replace = TRUE)
+    idx  <- unlist(idx_by_id[pick], use.names = FALSE)
+    tp <- sum(tpv[idx]); fp <- sum(fpv[idx]); fn <- sum(fnv[idx])
+    r <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_
+    p <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
+    bootR[b] <- r; bootP[b] <- p
+    bootF[b] <- if (!is.na(p) && !is.na(r) && (p + r) > 0) 2 * p * r / (p + r) else NA_real_
+  }
+  q <- function(v) stats::quantile(v, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+  qr <- q(bootR); qp <- q(bootP); qf <- q(bootF)
+  data.frame(n_individuals = n,
+             recall_lo = qr[1], recall_hi = qr[2],
+             precision_lo = qp[1], precision_hi = qp[2],
+             f1_lo = qf[1], f1_hi = qf[2],
+             recall_se = sd(bootR, na.rm = TRUE),
+             precision_se = sd(bootP, na.rm = TRUE),
+             f1_se = sd(bootF, na.rm = TRUE))
+}
+
+message(sprintf("[accuracy_v2] cluster bootstrap over individuals (B=%d)", BOOT_B))
+boot_stats <- long |>
+  group_by(track, panel, ancestry) |>
+  group_modify(~ boot_pooled(.x, BOOT_B, BOOT_SEED)) |>
+  ungroup()
+
+# Macro (unweighted) mean of per-(hap, chr) recall. Kept for continuity with
+# the old plots but RENAMED so it is never mistaken for the pooled figure: it
+# is an average of averages, weighting chr22 equally with chr1 and a hap with
+# 50 NAT sites equally with one carrying 50,000. na.rm because recall is NA on
+# strata where truth carried none of that ancestry (see the n_a == 0 note).
+macro_stats <- long |>
   group_by(track, panel, ancestry) |>
   summarise(
-    unweighted_mean = mean(concordance),
-    se              = sd(concordance) / sqrt(n()),
+    macro_mean_recall_hapchr = mean(concordance, na.rm = TRUE),
+    macro_sd_recall_hapchr   = sd(concordance, na.rm = TRUE),
+    n_hapchr_strata          = sum(!is.na(concordance)),
+    unweighted_mean          = mean(concordance, na.rm = TRUE),  # legacy alias
     .groups = "drop")
+
 weighted_summary <- weighted_summary |>
-  left_join(unweighted_stats, by = c("track", "panel", "ancestry"))
+  left_join(boot_stats,  by = c("track", "panel", "ancestry")) |>
+  left_join(macro_stats, by = c("track", "panel", "ancestry")) |>
+  # legacy `se` column: now the bootstrap SE of the POOLED recall, which is
+  # the quantity the point estimate actually reports.
+  mutate(se = recall_se)
 write_tsv(weighted_summary, file.path(OUTDIR, "accuracy_summary.tsv"))
 
 # Per-chr: recall + F1
@@ -306,10 +426,25 @@ per_chr <- long |>
 write_tsv(per_chr, file.path(OUTDIR, "accuracy_per_chr.tsv"))
 
 # --- Paired comparisons vs baseline (Wilcoxon signed-rank, Bonferroni) ---
-message("[accuracy_v2] paired Wilcoxon vs baseline: ", BASELINE_PANEL)
-wide <- long |>
-  select(track, panel, chr, hap, sample, ancestry, concordance) |>
-  pivot_wider(names_from = panel, values_from = concordance)
+# PAIRING UNIT FIX. This previously paired on (chr, hap), giving n ~ 1136 rows
+# drawn from only ~30 individuals x 2 haps x 22 chrs. Those rows are strongly
+# correlated within an individual, so treating them as independent makes the
+# Wilcoxon anti-conservative -- p-values far too small, and any positive result
+# untrustworthy. Pair on the INDIVIDUAL instead: pool each individual's tp/fn
+# across all their haps and chromosomes into one recall per (track, panel,
+# ancestry, sample), then pair those. n drops to ~30, which is the real
+# sample size, and the test becomes valid.
+message("[accuracy_v2] paired Wilcoxon vs baseline (paired by INDIVIDUAL): ",
+        BASELINE_PANEL)
+per_individual <- long |>
+  group_by(track, panel, ancestry, sample) |>
+  summarise(tp = sum(n_correct), fn = sum(n_fn), fp = sum(n_fp), .groups = "drop") |>
+  mutate(recall = ifelse((tp + fn) > 0, tp / (tp + fn), NA_real_))
+write_tsv(per_individual, file.path(OUTDIR, "accuracy_per_individual.tsv"))
+
+wide <- per_individual |>
+  select(track, panel, ancestry, sample, recall) |>
+  pivot_wider(names_from = panel, values_from = recall)
 
 # Only compare panels that actually landed in the wide table -- during a
 # partial run (e.g. NAT_PEL_EAS still finishing), pivot_wider will omit any
@@ -331,9 +466,12 @@ if (nrow(comparisons) == 0L) comp_rows <- list()
 for (i in seq_len(nrow(comparisons))) {
   c_ <- comparisons[i, ]
   sub <- wide |> filter(track == c_$track, ancestry == c_$ancestry) |>
-    select(chr, hap, all_of(BASELINE_PANEL), all_of(c_$panel)) |>
+    select(sample, all_of(BASELINE_PANEL), all_of(c_$panel)) |>
     drop_na()
-  if (nrow(sub) < 10) {
+  # n is now INDIVIDUALS (~30), not (chr, hap) rows (~1136), so the floor has
+  # to come down with it. Below 5 paired individuals a signed-rank test is
+  # meaningless, so emit an NA row rather than a number.
+  if (nrow(sub) < 5) {
     comp_rows[[i]] <- data.frame(track = c_$track, panel = c_$panel,
                                  ancestry = c_$ancestry, n = nrow(sub),
                                  base_mean = NA, alt_mean = NA, delta = NA,

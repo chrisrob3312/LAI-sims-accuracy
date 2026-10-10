@@ -121,12 +121,14 @@ REFS="${REFS:-${REPO_DIR}/reference_ids}"
 #                    yield enough training exemplars.
 #   ANCHOR_CAP     = max anchors kept per super-pop (top-N by Q). Matches
 #                    build-anchors-from-koenig.py (cap 50).
-#   HOMOG_THRESHOLD= strict floor for FINAL inclusion in stage C
+#   HOMOG_THRESHOLD= floor for FINAL inclusion in stage C (0.93, matching the
+#                    committed K=5 panel -- kept deliberately below 0.95 so
+#                    under-represented super-pops retain enough members)
 #                    (supervised Q). This is the published homogeneity cut.
 K="${K:-8}"
 ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
 ANCHOR_CAP="${ANCHOR_CAP:-50}"
-HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.95}"
+HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 
 # SGDP candidate pools (from scripts/fetch-sgdp-anchors.py). Used as exemplars
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
