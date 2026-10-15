@@ -3,8 +3,10 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=2b_simu
-#SBATCH --partition=short
-#SBATCH --time=08:00:00
+#SBATCH --partition=atkinson,mhgcp
+#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=00:15:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-22
@@ -19,7 +21,7 @@
 # Modernized replacement for simulation.sh. Builds admix-simu donor .phgeno
 # files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB)
 # directly from the new merged + jointly phased panel produced by
-# 1b_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
+# 1c_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
 # haps + truth files per chrom.
 #
 # Differences from legacy simulation.sh:
@@ -47,14 +49,14 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 # lab members' work.
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
-# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
+# Phased panel from 1c_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
 # Sample-ID lists (in repo)
-REFS="${REFS:-reference_ids}"
+REFS="${REFS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/reference_ids}"
 NAT_HGDP_SIMU="${NAT_HGDP_SIMU:-${REFS}/amr_simulation.txt}"
-NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simu.txt}"
+NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simulation.txt}"
 EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"
 AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 
@@ -62,8 +64,8 @@ AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
+GMAP_DIR="${GMAP_DIR:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/resources/gmap_hg38}"
+GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.hg38.gmap.txt}"
 
 # Simulation model
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
@@ -91,6 +93,53 @@ GMAP=$(printf "$GMAP_TPL" "$CHR")
 [[ -s "$DAT_FILE"        ]] || { echo "ERROR: missing $DAT_FILE (admix-simu config)"; exit 1; }
 [[ -s "$SAMPLE_TEMPLATE" ]] || { echo "ERROR: missing $SAMPLE_TEMPLATE"; exit 1; }
 
+# ---------------------------------------------------------------------------
+# DONOR <-> REFERENCE DISJOINTNESS CHECK.
+# A sample used as an admix-simu DONOR must never also appear in a reference
+# panel handed to RFMix: the benchmark would then score the caller on
+# haplotypes it was given as reference, inflating accuracy in a way no
+# downstream statistic can detect. This was previously enforced only by hand-
+# curating reference_ids/*, with no assertion anywhere. Check it every run.
+#
+# Set ALLOW_DONOR_IN_REF=1 to downgrade to a warning (e.g. a deliberate
+# positive-control run that measures the size of the leak).
+# ---------------------------------------------------------------------------
+DONOR_UNION="${WORKDIR_TMP:-/tmp}/.donors.$$.txt"
+REF_UNION="${WORKDIR_TMP:-/tmp}/.refs.$$.txt"
+trap 'rm -f "$DONOR_UNION" "$REF_UNION"' EXIT
+: > "$DONOR_UNION"
+for f in "$NAT_HGDP_SIMU" "$NAT_HGDPMXB_SIMU" "$EUR_SIMU" "$AFR_SIMU" \
+         "${REFS}/mxb_simulation.txt"; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$DONOR_UNION"
+done
+sort -u -o "$DONOR_UNION" "$DONOR_UNION"
+
+: > "$REF_UNION"
+for f in "${REFS}"/*_rfmix.txt; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+done
+# The homogeneous panel is also a reference set, if 4a has produced one.
+for f in "${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"/homog_*_samples.txt; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+done
+sort -u -o "$REF_UNION" "$REF_UNION"
+
+N_DONOR=$(wc -l < "$DONOR_UNION"); N_REF=$(wc -l < "$REF_UNION")
+OVERLAP=$(comm -12 "$DONOR_UNION" "$REF_UNION" | wc -l)
+echo "[$(date +%T)] donor/reference disjointness: ${N_DONOR} donors, ${N_REF} reference ids, ${OVERLAP} overlapping"
+if [[ "$OVERLAP" -gt 0 ]]; then
+    echo "ERROR: ${OVERLAP} sample(s) are BOTH simulation donors AND reference-panel members."
+    echo "       RFMix would be scored on haplotypes it was handed as reference."
+    echo "       Offending IDs (first 20):"
+    comm -12 "$DONOR_UNION" "$REF_UNION" | head -20 | sed 's/^/         /'
+    echo "       Fix the reference_ids lists, or re-run 4a (which now excludes"
+    echo "       simulation donors from the homogeneous panel for every ancestry)."
+    if [[ "${ALLOW_DONOR_IN_REF:-0}" != "1" ]]; then
+        exit 1
+    fi
+    echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
+fi
+
 WORKDIR="${OUTDIR}/${ADMIX_POP}/gen${GEN}"
 mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR"
@@ -98,7 +147,13 @@ cd "$WORKDIR"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # ----------------------------------------------------------------------------
 # Helper: extract a per-pop .haps/.sample (SHAPEIT format) from the merged
