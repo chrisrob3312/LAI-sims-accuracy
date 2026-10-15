@@ -88,3 +88,11 @@ eur_rfmix.txt - 1KG IBS population IDs used as RFMix reference
 
 afr_rfmix.txt - 1KG YRI population IDs used as RFMix reference
 
+## benchmark_truth/ - simulated truth set for the genotyping-pipeline benchmark
+
+Non-circular benchmarking data spliced from HGDP + MX Biobank haplotypes (never 1KG, which
+sits inside the 1000G and HRC imputation panels): homogeneous cohorts per superpopulation,
+2-/3-/4-/5-way admixed cohorts, WGS truth on GRCh38, in-silico SNP6 + GSA arrays with logged
+strand / palindrome / error / missingness injection, and a GRCh37-delivered subset so the
+pipeline's harmonization is exercised. Stages 5a-5f reuse the phased panel (1b), the
+admix-simu driver (2b) and the Picard liftover recipe (5a). See `benchmark_truth/README.md`.

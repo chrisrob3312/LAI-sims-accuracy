@@ -1,0 +1,15 @@
+cohort_id	type	n	pops	props	gen	build	platforms	notes
+HOMOG_AFR	homog	100	AFR	1	10	38	snp6;gsa	splice within each AFR population, pooled to superpop
+HOMOG_EUR	homog	100	EUR	1	10	37	snp6;gsa	GRCh37 arm: exercises liftover in harmonization
+HOMOG_EAS	homog	100	EAS	1	10	38	snp6;gsa
+HOMOG_CSA	homog	100	CSA	1	10	37	snp6;gsa	GRCh37 arm
+HOMOG_AMR	homog	50	AMR	1	10	38	snp6;gsa	capped: ~64 HGDP-NAT + 50 MXB donors
+HOMOG_OCE	homog	50	OCE	1	10	38	gsa	capped: ~28 donors; GSA only (SNP6 arm optional)
+HOMOG_MEN	homog	100	MEN	1	10	37	snp6;gsa	GRCh37 arm
+ADM_AFR_EUR	admixed	100	AFR;EUR	0.80;0.20	8	38	snp6;gsa	African-American-like
+ADM_MEX	admixed	100	EUR;AMR;AFR	0.50;0.45;0.05	12	38	snp6;gsa	Mexican-like 3-way
+ADM_CAR	admixed	100	EUR;AFR;AMR	0.60;0.30;0.10	12	37	snp6;gsa	Caribbean-like 3-way; GRCh37 arm
+ADM_EUR_CSA	admixed	100	EUR;CSA	0.50;0.50	10	38	snp6;gsa
+ADM_EAS_EUR	admixed	100	EAS;EUR	0.50;0.50	10	38	gsa
+ADM_4WAY	admixed	100	EUR;AFR;AMR;EAS	0.40;0.30;0.20;0.10	12	38	snp6;gsa	4-way
+ADM_5WAY	admixed	100	EUR;AFR;AMR;EAS;CSA	0.30;0.25;0.20;0.15;0.10	15	37	snp6;gsa	5-way; GRCh37 arm
