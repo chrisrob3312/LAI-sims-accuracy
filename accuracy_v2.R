@@ -193,11 +193,48 @@ score_one <- function(track, panel, chr) {
   #   n_fp         = sites where rec == a AND truth != a
   #   n_fn         = sites where truth == a AND rec != a
   # Downstream aggregation computes precision, recall, F1 per (track,panel,ancestry).
+  # --- Tract-level accumulator (for the per-tract sensitivity bootstrap) ----
+  # An ancestry TRACT is a maximal run of constant TRUTH ancestry along a
+  # haplotype. It is the real independent unit: at GEN=12 a tract averages
+  # ~8 cM and the caller usually labels the whole run identically, so sites
+  # inside one tract are near-duplicates of each other.
+  # For each tract we store its truth ancestry, its length in sites, and how
+  # many of its sites were CALLED as each ancestry. That is enough to rebuild
+  # pooled tp/fp/fn on any resample of tracts:
+  #   tp(a) = sum over tracts with truth==a of n_pred_a
+  #   fn(a) = sum over tracts with truth==a of (n_sites - n_pred_a)
+  #   fp(a) = sum over tracts with truth!=a of n_pred_a
+  anc_codes <- as.integer(names(ANC_LABELS))
+  tr_out <- vector("list", n_haps)
+
   out <- vector("list", n_haps * length(ANC_LABELS))
   k <- 0L
   for (h in seq_len(n_haps)) {
     tv <- T[, h]; rv <- R[, h]
-    for (a in as.integer(names(ANC_LABELS))) {
+
+    # Run-length-encode the truth to get this haplotype's actual tracts.
+    rl     <- rle(tv)
+    ends   <- cumsum(rl$lengths)
+    starts <- ends - rl$lengths + 1L
+    n_tr   <- length(rl$lengths)
+    if (n_tr > 0L) {
+      pred_counts <- matrix(0L, nrow = n_tr, ncol = length(anc_codes),
+                            dimnames = list(NULL, paste0("n_pred_", unname(ANC_LABELS))))
+      for (ti_ in seq_len(n_tr)) {
+        seg <- rv[starts[ti_]:ends[ti_]]
+        for (ai in seq_along(anc_codes)) pred_counts[ti_, ai] <- sum(seg == anc_codes[ai])
+      }
+      tr_out[[h]] <- data.frame(
+        track = track, panel = panel, chr = chr, hap = h,
+        sample   = hap_sample[h],
+        tract_id = seq_len(n_tr),
+        truth_ancestry = unname(ANC_LABELS[as.character(rl$values)]),
+        n_sites  = as.integer(rl$lengths),
+        stringsAsFactors = FALSE)
+      tr_out[[h]] <- cbind(tr_out[[h]], as.data.frame(pred_counts))
+    }
+
+    for (a in anc_codes) {
       truth_mask <- (tv == a)
       pred_mask  <- (rv == a)
       n_a   <- sum(truth_mask)
@@ -238,7 +275,8 @@ score_one <- function(track, panel, chr) {
         stringsAsFactors = FALSE)
     }
   }
-  bind_rows(out[seq_len(k)])
+  list(long   = bind_rows(out[seq_len(k)]),
+       tracts = bind_rows(tr_out[!vapply(tr_out, is.null, logical(1))]))
 }
 
 # --- Main sweep ----------------------------------------------------------
@@ -254,6 +292,7 @@ results <- vector("list", nrow(grid))
 # vanished from the output with nothing downstream to notice. A silently
 # missing panel x chr reads as "scored and fine" in the summary tables.
 skipped <- vector("list", nrow(grid)); n_skip <- 0L
+tract_rows <- vector("list", nrow(grid))
 last_warn <- NULL; err_msg <- NULL
 for (i in seq_len(nrow(grid))) {
   g <- grid[i, ]
@@ -267,7 +306,9 @@ for (i in seq_len(nrow(grid))) {
     # loop behaves exactly as before.
     warning = function(w) { last_warn <<- conditionMessage(w)
                             invokeRestart("muffleWarning") })
-  if (is.null(res) || nrow(res) == 0L) {
+  # score_one now returns list(long=, tracts=); the guards still return NULL.
+  res_long <- if (is.list(res) && !is.data.frame(res)) res$long else res
+  if (is.null(res_long) || nrow(res_long) == 0L) {
     n_skip <- n_skip + 1L
     reason <- if (!is.null(err_msg))   paste("error:", err_msg)
          else if (!is.null(last_warn)) last_warn
@@ -276,7 +317,9 @@ for (i in seq_len(nrow(grid))) {
                                     reason = reason, stringsAsFactors = FALSE)
     message(sprintf("    [SKIPPED] %s / %s chr%d -- %s", g$track, g$panel, g$chr, reason))
   } else {
-    results[[i]] <- res
+    results[[i]] <- res_long
+    if (is.list(res) && !is.null(res$tracts) && nrow(res$tracts) > 0L)
+      tract_rows[[i]] <- res$tracts
   }
   # Explicit gc() every iteration -- big chrs (1-3) allocate ~2 GB matrices,
   # R's lazy GC leaves them resident and kills the process by chr 4-5.
@@ -432,6 +475,82 @@ weighted_summary <- weighted_summary |>
   # the quantity the point estimate actually reports.
   mutate(se = recall_se)
 write_tsv(weighted_summary, file.path(OUTDIR, "accuracy_summary.tsv"))
+
+# --- SENSITIVITY: bootstrap over ancestry TRACTS --------------------------
+# The (chr x hap) block above matches the unit used by Honorato-Mauer et al.,
+# so it is the primary estimator and the headline stays comparable to the
+# published work. But blocks are uneven: recombination is drawn independently
+# per haplotype, so one block may hold 25 tracts and another 12, yet the block
+# bootstrap weights them equally. The TRACT is the real independent unit, and
+# the truth .hanc gives it to us exactly (run-length encoded in score_one).
+# This re-runs the same pooled estimator resampling tracts instead, as a
+# robustness check on the unit. Set TRACT_BOOT=0 to skip.
+tracts <- bind_rows(tract_rows[!vapply(tract_rows, is.null, logical(1))])
+if (as.integer(Sys.getenv("TRACT_BOOT", "1")) == 1L && nrow(tracts) > 0L) {
+  write_tsv(tracts, file.path(OUTDIR, "accuracy_tracts.tsv"))
+  message(sprintf("[accuracy_v2] tract bootstrap over %d tracts (B=%d)",
+                  nrow(tracts), BOOT_B))
+
+  boot_tracts <- function(df, B, seed) {
+    n <- nrow(df)
+    ancs <- unname(ANC_LABELS)
+    if (n < 2L) return(NULL)
+    nsite <- df$n_sites
+    # Pre-extract the per-ancestry predicted-count columns and truth masks.
+    pcol <- lapply(ancs, function(a) df[[paste0("n_pred_", a)]])
+    tmask <- lapply(ancs, function(a) df$truth_ancestry == a)
+    names(pcol) <- names(tmask) <- ancs
+    set.seed(seed)
+    acc <- lapply(ancs, function(a) list(r = numeric(B), p = numeric(B), f = numeric(B)))
+    names(acc) <- ancs
+    for (b in seq_len(B)) {
+      idx <- sample.int(n, n, replace = TRUE)
+      for (a in ancs) {
+        pa <- pcol[[a]][idx]; ta <- tmask[[a]][idx]; ns <- nsite[idx]
+        tp <- sum(pa[ta]); fn <- sum(ns[ta]) - tp; fp <- sum(pa[!ta])
+        r <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_
+        p <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
+        acc[[a]]$r[b] <- r; acc[[a]]$p[b] <- p
+        acc[[a]]$f[b] <- if (!is.na(p) && !is.na(r) && (p + r) > 0) 2 * p * r / (p + r) else NA_real_
+      }
+    }
+    q <- function(v) stats::quantile(v, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+    bind_rows(lapply(ancs, function(a) {
+      qr <- q(acc[[a]]$r); qp <- q(acc[[a]]$p); qf <- q(acc[[a]]$f)
+      data.frame(ancestry = a, n_tracts = n,
+                 tract_recall_lo = qr[1], tract_recall_hi = qr[2],
+                 tract_precision_lo = qp[1], tract_precision_hi = qp[2],
+                 tract_f1_lo = qf[1], tract_f1_hi = qf[2],
+                 tract_recall_se = sd(acc[[a]]$r, na.rm = TRUE),
+                 tract_precision_se = sd(acc[[a]]$p, na.rm = TRUE),
+                 tract_f1_se = sd(acc[[a]]$f, na.rm = TRUE),
+                 stringsAsFactors = FALSE)
+    }))
+  }
+
+  # Resample within (track, panel): false positives for ancestry a live on
+  # tracts whose truth is NOT a, so the whole tract set must be resampled
+  # together, not just the tracts of one ancestry.
+  tract_boot <- tracts |>
+    group_by(track, panel) |>
+    group_modify(~ { r <- boot_tracts(.x, BOOT_B, BOOT_SEED)
+                     if (is.null(r)) data.frame() else r }) |>
+    ungroup()
+  write_tsv(tract_boot, file.path(OUTDIR, "accuracy_tract_bootstrap.tsv"))
+
+  # Side-by-side with the primary block bootstrap, so the sensitivity is
+  # readable without a join by hand.
+  cmp <- weighted_summary |>
+    select(track, panel, ancestry, weighted_recall, recall_lo, recall_hi, n_blocks) |>
+    left_join(tract_boot |> select(track, panel, ancestry,
+                                   tract_recall_lo, tract_recall_hi, n_tracts),
+              by = c("track", "panel", "ancestry")) |>
+    mutate(block_ci_width = recall_hi - recall_lo,
+           tract_ci_width = tract_recall_hi - tract_recall_lo,
+           width_ratio    = tract_ci_width / block_ci_width)
+  write_tsv(cmp, file.path(OUTDIR, "accuracy_unit_sensitivity.tsv"))
+  message("[accuracy_v2] wrote accuracy_tract_bootstrap.tsv and accuracy_unit_sensitivity.tsv")
+}
 
 # Per-chr: recall + F1
 per_chr <- long |>

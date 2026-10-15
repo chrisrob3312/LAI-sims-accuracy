@@ -253,24 +253,34 @@ assert len(samples) == len(Qs) == len(Qu) == len(anchors)
 # ADMIXTURE (supervised OR unsupervised) writes Q columns in the order the
 # distinct anchor labels first appear in the .pop file, which is NOT
 # alphabetical. Both mappings are derived here by anchor majority vote.
-def majority_vote_map(anchors, Q):
-    votes = defaultdict(Counter)
-    for a, q in zip(anchors, Q):
+def assign_map(anchor_labels, Q, K=5):
+    # BACKPORT of the K>=7 fix. The previous majority_vote_map assigned each
+    # cluster by the single ARGMAX of each labelled exemplar, processing
+    # super-pops greedily in order of exemplar count. For well-separated
+    # continental groups that recovers the right bijection, but it fails for
+    # any super-pop sitting on a cline: its samples argmax onto the ADJACENT
+    # cluster, so a count-based plurality never nominates the true cluster and
+    # the largest super-pops claim clusters first. Matching instead on MEAN
+    # Q-loading of the labelled exemplars, one-to-one greedy by max cell, is
+    # robust to that argmax-splitting and agrees with the old method wherever
+    # the old method was already correct.
+    sps = sorted({a for a in anchor_labels if a != "-"})
+    sums = {sp: [0.0] * K for sp in sps}; cnts = {sp: 0 for sp in sps}
+    for a, q in zip(anchor_labels, Q):
         if a == "-": continue
-        top = q.index(max(q))
-        votes[a][top] += 1
-    m = {}
-    used = set()
-    for sp, ctr in sorted(votes.items(), key=lambda kv: -sum(kv[1].values())):
-        for cl, _ in ctr.most_common():
-            if cl not in used:
-                m[cl] = sp; used.add(cl); break
-    for cl in range(5):
-        m.setdefault(cl, f"UNKc{cl+1}")
+        cnts[a] += 1
+        for c in range(K): sums[a][c] += q[c]
+    meanQ = {sp: [(sums[sp][c] / cnts[sp] if cnts[sp] else 0.0) for c in range(K)] for sp in sps}
+    cells = sorted(((meanQ[sp][c], sp, c) for sp in sps for c in range(K)), reverse=True)
+    m = {}; used_cl = set(); used_sp = set()
+    for val, sp, c in cells:
+        if sp in used_sp or c in used_cl: continue
+        m[c] = sp; used_sp.add(sp); used_cl.add(c)
+    for cl in range(K): m.setdefault(cl, f"UNKc{cl+1}")
     return m
 
-sup_cluster_to_sp   = majority_vote_map(anchors, Qs)
-unsup_cluster_to_sp = majority_vote_map(anchors, Qu)
+sup_cluster_to_sp   = assign_map(anchors, Qs)
+unsup_cluster_to_sp = assign_map(anchors, Qu)
 sup_sp_to_cluster   = {v: k for k, v in sup_cluster_to_sp.items()}
 unsup_sp_to_cluster = {v: k for k, v in unsup_cluster_to_sp.items()}
 print(f"sup_cluster_pop_map   = {sup_cluster_to_sp}",   file=sys.stderr)
