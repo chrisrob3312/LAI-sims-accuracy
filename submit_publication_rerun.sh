@@ -169,15 +169,40 @@ echo "============ STAGE 2: rebuild merged phased panel ============"
 if [[ -z "${HGDP1KG_PATTERN:-}" ]]; then
     cat >&2 <<'EOF'
 
-  WARNING: HGDP1KG_PATTERN is unset. Stage 2 will use the DEFAULT upstream
-  BCF which is missing the 13 keep-list samples flagged in the chat
-  transcript (HG01935/36, HGDP008xx/009xx/010xx, LP6005441-DNA_B04/B12/F10/
-  H06). To include those 13 for publication-grade results, re-invoke with:
-
-    HGDP1KG_PATTERN=/storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/TGP_HGDP_QC_phased_hg38_chr__CHR__.vcf.gz \
-      bash submit_publication_rerun.sh
+  NOTE: HGDP1KG_PATTERN is unset. Stage 2 uses the DEFAULT upstream BCF, which
+  has already had an "unrelated only" filter applied upstream and is therefore
+  missing 13 keep-list samples (HG01935/36, HGDP008xx/009xx/010xx,
+  LP6005441-DNA_B04/B12/F10/H06). That is a valid run -- the panel is simply
+  the relatedness-filtered set, and the methods should say so. Set
+  HGDP1KG_PATTERN to an unfiltered per-chr source to restore them.
 
 EOF
+else
+    # VALIDATE that the override actually resolves. Checking only that the
+    # variable is SET lets a wrong path through: stage 1 then runs the entire
+    # SGDP download and liftover (hours) before stage 2 dies on a missing
+    # file. Expand __CHR__ for one chromosome and look for the file now.
+    _probe="${HGDP1KG_PATTERN//__CHR__/22}"
+    if [[ ! -s "$_probe" ]]; then
+        cat >&2 <<EOF
+
+  FATAL: HGDP1KG_PATTERN is set but does not resolve to a readable file.
+         pattern : ${HGDP1KG_PATTERN}
+         probed  : ${_probe}
+
+         Firing anyway would waste stage 1 (the full SGDP download and
+         hg19->hg38 liftover) and then fail at stage 2.
+
+         Either point it at a real per-chr source containing __CHR__, or
+         UNSET it to run with the default relatedness-filtered panel:
+
+           unset HGDP1KG_PATTERN
+           bash submit_publication_rerun.sh
+
+EOF
+        exit 2
+    fi
+    echo "[precheck] HGDP1KG_PATTERN resolves: $_probe"
 fi
 
 J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:${J1}" \
