@@ -134,8 +134,19 @@ HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
 # These are CANDIDATES, not anchors -- anchors are the top-N discovered here.
 SGDP_MANIFEST="${SGDP_MANIFEST:-${REFS}/sgdp_manifest.tsv}"
-SGDP_OCE_CAND="${SGDP_OCE_CAND:-${REFS}/sgdp_oceania_candidates.txt}"
-SGDP_MEN_CAND="${SGDP_MEN_CAND:-${REFS}/sgdp_men_candidates.txt}"
+
+# Candidate pools are the UNION of EVERY source's candidate list for that
+# super-pop, not one fixed file. Drop in e.g. almarri_men_candidates.txt and it
+# is picked up with no code change.
+#
+# These stay CANDIDATES. A candidate pool does two jobs here -- it names the
+# unsupervised clusters by mean-Q, and it is the draw pool for anchors -- but
+# membership in it confers nothing. Which samples become ANCHORS is decided
+# downstream by the top-N >= ANCHOR_MIN_Q cut in stage A, and which enter the
+# HOMOGENEOUS panel by the supervised Q >= HOMOG_THRESHOLD cut in stage C.
+# Adding a source here is never the same as anchoring on it.
+OCE_CAND_GLOB="${OCE_CAND_GLOB:-${REFS}/*_oceania_candidates.txt}"
+MEN_CAND_GLOB="${MEN_CAND_GLOB:-${REFS}/*_men_candidates.txt}"
 
 # Discovered anchor outputs (written by STAGE A).
 OCE_ANCHORS="${OCE_ANCHORS:-${REFS}/oce_rfmix.txt}"
@@ -176,8 +187,35 @@ done
 [[ -s "$GNOMAD_META"   ]] || { echo "ERROR: missing $GNOMAD_META"; exit 1; }
 [[ -s "$MXB_POPINFO"   ]] || { echo "ERROR: missing $MXB_POPINFO"; exit 1; }
 [[ -s "$SGDP_MANIFEST" ]] || { echo "ERROR: missing $SGDP_MANIFEST (run fetch-sgdp-anchors.py)"; exit 1; }
-[[ -s "$SGDP_OCE_CAND" ]] || { echo "ERROR: missing $SGDP_OCE_CAND"; exit 1; }
-[[ -s "$SGDP_MEN_CAND" ]] || { echo "ERROR: missing $SGDP_MEN_CAND"; exit 1; }
+
+# Build the per-super-pop candidate unions from the globs, reporting every
+# source that contributes so the provenance is in the log rather than implied.
+build_cand_union () {
+    local sp="$1" glob="$2" out="$3" n=0 tot=0
+    : > "$out"
+    for f in $glob; do
+        [[ -s "$f" ]] || continue
+        local c; c=$(awk 'NF' "$f" | wc -l)
+        echo "[$(date +%T)]   ${sp} candidates += $(basename "$f") (${c})"
+        awk 'NF {print $1}' "$f" >> "$out"
+        n=$((n+1)); tot=$((tot+c))
+    done
+    sort -u -o "$out" "$out"
+    local u; u=$(wc -l < "$out")
+    if [[ "$n" -eq 0 ]]; then
+        echo "ERROR: no candidate files matched for ${sp}: $glob" >&2
+        echo "       expected at least one, e.g. ${REFS}/sgdp_$(echo "$sp" | tr 'A-Z' 'a-z')_candidates.txt" >&2
+        return 1
+    fi
+    echo "[$(date +%T)]   ${sp}: ${n} source(s), ${tot} ids -> ${u} unique"
+    return 0
+}
+
+SGDP_OCE_CAND="${ADM_DIR}/oce_candidates.union.txt"
+SGDP_MEN_CAND="${ADM_DIR}/men_candidates.union.txt"
+echo "[$(date +%T)] assembling candidate pools"
+build_cand_union OCE "$OCE_CAND_GLOB" "$SGDP_OCE_CAND" || exit 1
+build_cand_union MEN "$MEN_CAND_GLOB" "$SGDP_MEN_CAND" || exit 1
 
 # ---------------------------------------------------------------------------
 # 1. Concat all 22 chrs to a single BCF (k7 workspace).
