@@ -198,16 +198,78 @@ awk -F' ' '{ print $1":"$4"_"$5"_"$6, $1, $3, $4, $5, $6 }' "chr${CHR}.pos" \
     > "1kg_hgdp.chr${CHR}.snp"
 
 # Per NAT donor track: simu-mix.pl -> .bp -> .hanc -> .hanc2 + simulated .haps/.sample
+# ---------------------------------------------------------------------------
+# REPRODUCIBILITY.
+# admix-simu splits the randomness across two programs:
+#   * the compiled `mixer` binary draws the RECOMBINATION BREAKPOINTS and
+#     writes them to <prefix>.bp. It takes no seed argument and ships without
+#     source, so its RNG cannot be controlled.
+#   * simu-mix.pl then draws WHICH DONOR HAPLOTYPE to copy (rand() at ~line
+#     306). scripts/simu-mix-seeded.pl adds srand($ENV{SIMU_SEED}), so that
+#     half IS controllable.
+# Because the breakpoints cannot be seeded, reproducibility is achieved by
+# PRESERVATION instead: the .bp file IS the recombination realisation, and
+# simu-mix.pl's second mode replays from it --
+#     simu-mix.pl -bp <file.bp> <out_prefix> -POP <phgeno> ...
+# So archiving .bp + SIMU_SEED makes any replicate exactly regenerable, which
+# is stronger than seeding would have been since it is immune to the binary.
+SIMU_MIX="${SIMU_MIX:-${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/scripts/simu-mix-seeded.pl}"
+[[ -s "$SIMU_MIX" ]] || SIMU_MIX="${ADMIXSIMU_DIR}/simu-mix.pl"
+PROV_DIR="${PROV_DIR:-${WORKDIR}/provenance}"
+mkdir -p "$PROV_DIR"
+echo "[$(date +%T)] simu-mix: $SIMU_MIX"
+if [[ -n "${SIMU_SEED:-}" ]]; then
+    echo "[$(date +%T)] SIMU_SEED=${SIMU_SEED} (donor sampling seeded)"
+else
+    echo "[$(date +%T)] SIMU_SEED unset -- donor sampling unseeded; .bp archiving still makes this run regenerable"
+fi
+# FROM_BP=<dir> replays archived breakpoints instead of drawing new ones.
+FROM_BP="${FROM_BP:-}"
+
 run_admix_simu () {
     local track="$1"        # "NAT" or "NATMXB"
     local prefix="${track}.${ADMIX_POP}${CHR}"
+    local archived_bp="${FROM_BP}/${prefix}.bp"
 
-    echo "[$(date +%T)] [chr${CHR}] [$track] simu-mix.pl"
-    perl "${ADMIXSIMU_DIR}/simu-mix.pl" \
-        "$DAT_FILE" "1kg_hgdp.chr${CHR}.snp" "$prefix" \
-        -NAT "${track}${CHR}.phgeno" \
-        -EUR "EUR${CHR}.phgeno" \
-        -AFR "AFR${CHR}.phgeno"
+    if [[ -n "$FROM_BP" && -s "$archived_bp" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] [$track] REPLAY from archived breakpoints: $archived_bp"
+        cp "$archived_bp" "${prefix}.bp"
+        perl "$SIMU_MIX" -bp "${prefix}.bp" "$prefix" \
+            -NAT "${track}${CHR}.phgeno" \
+            -EUR "EUR${CHR}.phgeno" \
+            -AFR "AFR${CHR}.phgeno"
+    else
+        if [[ -n "$FROM_BP" ]]; then
+            echo "ERROR: FROM_BP=$FROM_BP set but $archived_bp is missing."
+            echo "       Refusing to silently draw fresh breakpoints -- that would"
+            echo "       produce a DIFFERENT realisation under a name implying replay."
+            exit 4
+        fi
+        echo "[$(date +%T)] [chr${CHR}] [$track] simu-mix.pl"
+        perl "$SIMU_MIX" \
+            "$DAT_FILE" "1kg_hgdp.chr${CHR}.snp" "$prefix" \
+            -NAT "${track}${CHR}.phgeno" \
+            -EUR "EUR${CHR}.phgeno" \
+            -AFR "AFR${CHR}.phgeno"
+    fi
+
+    # Archive the realisation. The .bp is the only non-regenerable artefact
+    # here, so it is copied before anything downstream can touch it.
+    cp "${prefix}.bp" "${PROV_DIR}/${prefix}.bp"
+    {
+        echo "prefix=${prefix}"
+        echo "chr=${CHR}"
+        echo "track=${track}"
+        echo "admix_pop=${ADMIX_POP}"
+        echo "gen=${GEN}"
+        echo "simu_seed=${SIMU_SEED:-UNSET}"
+        echo "simu_mix=${SIMU_MIX}"
+        echo "replayed_from=${FROM_BP:-NONE}"
+        echo "dat_md5=$(md5sum "$DAT_FILE" | cut -d' ' -f1)"
+        echo "snp_md5=$(md5sum "1kg_hgdp.chr${CHR}.snp" | cut -d' ' -f1)"
+        echo "bp_md5=$(md5sum "${prefix}.bp" | cut -d' ' -f1)"
+    } > "${PROV_DIR}/${prefix}.provenance.txt"
+    echo "[$(date +%T)] [chr${CHR}] [$track] archived .bp + provenance -> $PROV_DIR"
 
     echo "[$(date +%T)] [chr${CHR}] [$track] bp -> hanc -> hanc2"
     perl "${ADMIXSIMU_DIR}/bp2anc.pl" "${prefix}.bp" > "${prefix}.hanc"
