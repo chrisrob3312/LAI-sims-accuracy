@@ -231,7 +231,15 @@ fi
 FILT_VCF="${TMPDIR}/sgdp.chr${CHR}.hg19.filt.vcf.gz"
 REGION_ARGS=()
 [[ -n "$SGDP_COMBINED_URL" ]] && REGION_ARGS=(-r "${CHR}")
-bcftools view "${REGION_ARGS[@]}" -S "$KEEP_IDS" --force-samples \
+# NOTE the ${ARR[@]+"${ARR[@]}"} form, which is load-bearing, not style.
+# Under `set -u`, bash < 4.4 treats "${EMPTY_ARRAY[@]}" as an UNBOUND VARIABLE
+# and aborts. This cluster runs bash 4.2, so the plain expansion killed every
+# array task AFTER the multi-GB download had already completed. The `+`
+# expansion yields nothing when the array is empty and the properly quoted
+# elements otherwise, on every bash version. REGION_ARGS is empty in the
+# normal per-chr path (it is only set in SGDP_COMBINED_URL mode), so this is
+# the common case, not an edge case.
+bcftools view ${REGION_ARGS[@]+"${REGION_ARGS[@]}"} -S "$KEEP_IDS" --force-samples \
     --threads "$THREADS" -Ou "$RAW" \
   | bcftools norm --threads "$THREADS" -m -any -Oz -o "$FILT_VCF"
 bcftools index -t "$FILT_VCF"

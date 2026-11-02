@@ -75,7 +75,7 @@ PANELS_MAIN="NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB NAT_HGDPMXB_FULL NAT_HOMOG
 TRACKS="NAT NATMXB"
 IFS=',' read -ra CHR_ARR <<< "$CHRS"
 missing_wgs=0; missing_chip=0
-for chr in "${CHR_ARR[@]}"; do
+for chr in ${CHR_ARR[@]+"${CHR_ARR[@]}"}; do
     for track in $TRACKS; do
         for panel in $PANELS_MAIN; do
             # skip the deliberately-excluded combo (NATMXB + HGDPMXB_FULL double-dips donors)
