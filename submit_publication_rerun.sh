@@ -12,7 +12,7 @@
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 13 keep-list
 #            samples that were previously filtered as "related" + merge
 #            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
-#   Stage 3: K=7 homogeneity filter with SGDP OCE/MEN anchor discovery,
+#   Stage 3: K=8 homogeneity filter with SGDP OCE/MEN/OTH anchor discovery,
 #            unsupervised->supervised ADMIXTURE, Q>=0.95
 #            (sbatch 4a_build_homogeneity_panel_kN_clm.sh)
 #   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
@@ -184,11 +184,11 @@ J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:
      ./1c_phasing-jointcall_clm.sh)
 
 # ---------------------------------------------------------------- STAGE 3
-# K=7 homogeneity filter with SGDP OCE/MEN anchor DISCOVERY.
-#   STAGE A: unsupervised ADMIXTURE K=7 -> discover OCE/MEN anchors from the
+# K=8 homogeneity filter with SGDP OCE/MEN/OTH anchor DISCOVERY.
+#   STAGE A: unsupervised ADMIXTURE K=8 -> discover OCE/MEN/OTH anchors from the
 #            unsupervised Q (candidates sorted by cluster-Q, kept if >=0.95)
 #            -> reference_ids/{oce,men}_rfmix.txt.
-#   STAGE B: supervised ADMIXTURE K=7 with the full 7-way prior.
+#   STAGE B: supervised ADMIXTURE K=8 with the full 8-way prior.
 #   STAGE C: included iff supervised max_Q >= 0.95 AND argmax==assigned.
 # Writes k7 outputs (admixture_k7/, homog_7pop/, lai_ref_panel_samples.k7.tsv)
 # and never clobbers the proven K=5 outputs. The EUR/AFR/AMR 3-way accuracy
