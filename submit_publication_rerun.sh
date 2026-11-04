@@ -105,6 +105,21 @@ submit() {
     fi
 }
 
+# Stage 0 runs python on the LOGIN NODE, where `module load anaconda3` and an
+# activated conda env coexist. If PYTHONHOME/PYTHONPATH point at the system
+# anaconda while the binary on PATH is the conda env's, python loads the
+# system stdlib against the env's C extensions and dies at import with
+#
+#   AssertionError: SRE module mismatch
+#
+# (_sre.MAGIC from one build, re/_compiler.py from another). 4a already
+# sanitises this for the batch stages; stage 0 did not, so the orchestrator
+# crashed before submitting anything. Resolve the interpreter explicitly and
+# strip both variables for the call.
+PY="python3"
+[[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python3" ]] && PY="${CONDA_PREFIX}/bin/python3"
+py_run () { env -u PYTHONHOME -u PYTHONPATH "$PY" "$@"; }
+
 run_now() {
     # usage: run_now "<label>" <command and args...>
     local label="$1"; shift
@@ -166,7 +181,8 @@ echo
 echo "============ STAGE 0: SGDP candidate-list fetch ============"
 CAND_FILE="reference_ids/sgdp_combined_candidates.txt"
 if want 0; then
-    run_now "fetch-sgdp" python3 scripts/fetch-sgdp-anchors.py \
+    echo "[stage 0] interpreter: ${PY}"
+    run_now "fetch-sgdp" py_run scripts/fetch-sgdp-anchors.py \
         --outdir reference_ids
     if [[ -z "$DRY_RUN" ]]; then
         [[ -s "$CAND_FILE" ]] || die "stage 0 did not produce $CAND_FILE"

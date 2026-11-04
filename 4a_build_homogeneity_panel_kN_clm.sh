@@ -23,7 +23,8 @@
 #
 # The K=5 script uses PRE-BUILT anchor lists and cannot resolve Oceanian or
 # Middle Eastern, because those have no 1KG sub-pop label and no gnomAD
-# inference prob to pick anchors from. This script discovers them instead:
+# inference prob to pick anchors from. This script discovers anchors instead,
+# and discovers them for ALL SEVEN super-pops by the same rule:
 #
 #   STAGE A (unsupervised, anchor DISCOVERY):
 #     Run UNSUPERVISED ADMIXTURE at K on the merged panel (which now includes
@@ -31,15 +32,22 @@
 #     MEAN Q-loading of labelled exemplars, one-to-one. The 7 named groups
 #     claim 7 clusters; the LEFTOVER cluster becomes OTH -- defined by the
 #     data, not by a hand-written population list.
-#     Anchors = candidates sorted by their cluster-Q descending, kept if
-#     >= ANCHOR_MIN_Q, capped at ANCHOR_CAP -> reference_ids/{oce,men,oth}_rfmix.txt.
+#     Anchors = that super-pop's DRAW POOL sorted by its cluster-Q descending,
+#     kept if >= ANCHOR_MIN_Q, capped at ANCHOR_CAP
+#     -> reference_ids/<sp>_anchors.k${K}.txt, for all 7 plus OTH.
 #     OTH has no metadata candidate pool, so its anchors are drawn from the
 #     whole panel; this also makes supervised K=8 well-posed, since ADMIXTURE
 #     --supervised requires exactly K distinct labels in the .pop file.
 #
+#     WHY UNIFORM. Previously EUR/AFR/AMR/EAS/SAS were handed the curated
+#     *_rfmix.txt lists directly as supervised anchors while only OCE/MEN/OTH
+#     were discovered. Two methods produced the one .pop prior, and the SGDP
+#     genomes downloaded for the other five super-pops could never be drawn
+#     for them -- so widening the panel did nothing for five of seven groups.
+#
 #   STAGE B (supervised, anchor-INFORMED):
-#     Rerun ADMIXTURE --supervised at K with the full K-way .pop prior
-#     (5 existing *_rfmix.txt + OCE/MEN/OTH discovered in stage A).
+#     Rerun ADMIXTURE --supervised at K with the full K-way .pop prior, built
+#     entirely from stage A's discovered anchors.
 #
 #   STAGE C (homogeneity filter + refinement evidence):
 #     included = 1 iff supervised max_Q >= HOMOG_THRESHOLD AND the supervised
@@ -72,37 +80,44 @@
 # label and no gnomAD inference prob to pick anchors from.
 #
 # This script implements the two-stage anchor-discovery method used to build
-# the original anchor sets, applied to the SGDP additions:
+# the original anchor sets, applied UNIFORMLY to all 7 super-pop candidate
+# pools rather than only to the SGDP additions:
 #
 #   STAGE A (unsupervised, anchor DISCOVERY):
-#     Run UNSUPERVISED ADMIXTURE at K=7 on the merged panel (which now
-#     includes the SGDP candidates from 1b/1c). Map each of the 7 clusters to
-#     a super-pop by exemplar majority vote (the 5 existing anchor sets + the
-#     SGDP OCE/MEN candidate pools). For OCE and MEN, take the SGDP candidates
-#     whose Q in their own cluster is >= HOMOG_THRESHOLD, SORTED by that Q
-#     descending -> reference_ids/oce_rfmix.txt, men_rfmix.txt.
+#     Run UNSUPERVISED ADMIXTURE at K on the merged panel (which now includes
+#     the SGDP candidates from 1b/1c). Map each cluster to a super-pop by
+#     MEAN-Q with a one-to-one assignment, using each super-pop's LABEL pool.
+#     Then for EVERY one of the 7, take its DRAW pool members whose Q in that
+#     super-pop's own cluster is >= ANCHOR_MIN_Q, SORTED by that Q descending,
+#     capped at ANCHOR_CAP -> reference_ids/<sp>_anchors.k${K}.txt.
 #     => "order by the unsupervised sorted order and identify the anchors
-#         from the unsupervised" (Christina's spec).
+#         from the unsupervised" (Christina's spec), now the same way for all
+#         seven pools.
 #
 #   STAGE B (supervised, anchor-INFORMED):
-#     Rerun ADMIXTURE --supervised at K=7 with the full 7-way .pop prior
-#     (EUR/AFR/AMR/EAS/SAS existing + OCE/MEN just discovered). Supervised Q
-#     is the truth for the homogeneity filter.
+#     Rerun ADMIXTURE --supervised at K with the full K-way .pop prior, built
+#     entirely from the stage-A discovered anchors. Supervised Q is the truth
+#     for the homogeneity filter.
 #
 #   STAGE C (homogeneity filter):
 #     included = 1 iff supervised max_Q >= HOMOG_THRESHOLD AND the supervised
 #     argmax super-pop matches the sample's assigned super-pop. MXB forced in.
 #
-# The SGDP fetcher's 277 outputs remain strictly a CANDIDATE POOL; this script
-# is what decides which clear Q>=0.95 and enter the published panel.
+# Every candidate pool remains strictly a CANDIDATE POOL; this script is what
+# decides which members clear Q >= HOMOG_THRESHOLD and enter the panel.
 #
-# Outputs in $HOMOG_DIR (k7 subdirs, so the K=5 outputs are never clobbered):
-#   admixture_k7/lai_ref.{bed,bim,fam,7.Q,7.P,pop}
-#   admixture_k7/unsup/lai_ref.7.Q
-#   reference_ids/oce_rfmix.txt, men_rfmix.txt         (DISCOVERED anchors)
+# Outputs in $HOMOG_DIR (k${K} subdirs, so the K=5 outputs are never clobbered):
+#   admixture_k${K}/lai_ref.{bed,bim,fam,${K}.Q,${K}.P,pop}
+#   admixture_k${K}/unsup/lai_ref.${K}.Q
+#   admixture_k${K}/discover_spec.tsv                  (pools used, per super-pop)
+#   reference_ids/<sp>_anchors.k${K}.txt               (DISCOVERED anchors, 8)
 #   lai_ref_panel_samples.k${K}.tsv
 #   homog_${K}pop_samples.txt
-#   homog_7pop/merged_chr${CHR}.homog_${K}pop.bcf{,.csi}
+#   homog_${K}pop/merged_chr${CHR}.homog_${K}pop.bcf{,.csi}
+#
+# NOT written by this script: reference_ids/*_rfmix.txt. Those are the curated
+# RFMix reference panels (read by all four 3b_*.sh) and this script only ever
+# reads them, as seeds and as label pools.
 # ============================================================================
 
 CONDA_ENV="${CONDA_ENV:-shapeit5}"
@@ -135,24 +150,68 @@ HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 # These are CANDIDATES, not anchors -- anchors are the top-N discovered here.
 SGDP_MANIFEST="${SGDP_MANIFEST:-${REFS}/sgdp_manifest.tsv}"
 
-# Candidate pools are the UNION of EVERY source's candidate list for that
-# super-pop, not one fixed file. Drop in e.g. almarri_men_candidates.txt and it
-# is picked up with no code change.
+# UNIFORM DISCOVERY ACROSS ALL 7 CANDIDATE POOLS.
 #
-# These stay CANDIDATES. A candidate pool does two jobs here -- it names the
-# unsupervised clusters by mean-Q, and it is the draw pool for anchors -- but
-# membership in it confers nothing. Which samples become ANCHORS is decided
-# downstream by the top-N >= ANCHOR_MIN_Q cut in stage A, and which enter the
-# HOMOGENEOUS panel by the supervised Q >= HOMOG_THRESHOLD cut in stage C.
-# Adding a source here is never the same as anchoring on it.
-OCE_CAND_GLOB="${OCE_CAND_GLOB:-${REFS}/*_oceania_candidates.txt}"
-MEN_CAND_GLOB="${MEN_CAND_GLOB:-${REFS}/*_men_candidates.txt}"
+# Every named super-pop now goes through the SAME path: assemble a candidate
+# pool, rank its members by their loading on that super-pop's unsupervised
+# cluster, keep the top ANCHOR_CAP at or above ANCHOR_MIN_Q, and use THOSE as
+# the supervised anchors. Previously only OCE, MEN and OTH were discovered;
+# EUR/AFR/AMR/EAS/SAS were handed the curated *_rfmix.txt lists directly, so
+# two different methods produced the 8 supervised labels and the SGDP samples
+# downloaded for the other five super-pops could never become anchors for them.
+#
+# A candidate pool does TWO jobs, and they are deliberately kept separate:
+#
+#   DRAW pool  -- who may become an anchor. Union of every *_<token>_candidates
+#                 .txt for that super-pop PLUS the curated seed list, so SGDP
+#                 (and later Almarri) samples can be drawn for ALL seven.
+#   LABEL pool -- who names the unsupervised clusters by mean-Q. The curated
+#                 seed list where one exists, because those are the vetted
+#                 exemplars and cluster naming is the step everything else
+#                 depends on; the draw pool for OCE/MEN, which have no curated
+#                 list to use instead.
+#
+# Membership in either confers nothing. Which samples become ANCHORS is decided
+# by the top-N >= ANCHOR_MIN_Q cut in stage A, and which enter the HOMOGENEOUS
+# panel by the supervised Q >= HOMOG_THRESHOLD cut in stage C. Adding a source
+# here is never the same as anchoring on it.
+#
+# Drop in e.g. almarri_men_candidates.txt and it is picked up with no code
+# change. The token differs from the super-pop code only for OCE (the SGDP
+# fetcher writes *_oceania_candidates.txt).
+SUPERPOPS="EUR AFR AMR EAS SAS OCE MEN"
 
-# Discovered anchor outputs (written by STAGE A).
-OCE_ANCHORS="${OCE_ANCHORS:-${REFS}/oce_rfmix.txt}"
-MEN_ANCHORS="${MEN_ANCHORS:-${REFS}/men_rfmix.txt}"
+cand_token () { [[ "$1" == "OCE" ]] && echo oceania || echo "$1" | tr 'A-Z' 'a-z'; }
+
+# Per-super-pop glob override: EUR_CAND_GLOB, AFR_CAND_GLOB, ... all honoured.
+cand_glob_for () {
+    local sp="$1" var="${1}_CAND_GLOB"
+    if [[ -n "${!var:-}" ]]; then echo "${!var}"
+    else echo "${REFS}/*_$(cand_token "$sp")_candidates.txt"; fi
+}
+
+# Curated seed/label lists. These are the RFMix REFERENCE PANELS, read by all
+# four 3b_*.sh scripts, and are NEVER written by this script -- see the naming
+# note on the discovery outputs below. OCE and MEN have none.
+seed_for () {
+    local sp="$1" f="${REFS}/$(echo "$sp" | tr 'A-Z' 'a-z')_rfmix.txt"
+    [[ -s "$f" ]] && echo "$f" || echo ""
+}
+
+# DISCOVERED anchor outputs, written by STAGE A, consumed by STAGE B only.
+#
+# They are deliberately NOT named *_rfmix.txt. Two reasons, both load-bearing:
+#   1. *_rfmix.txt are the curated RFMix reference panels. Writing discovery
+#      output over them would silently change which haplotypes RFMix is given.
+#   2. A discovered list is also its own super-pop's seed on the next run. If
+#      discovery overwrote the seed, every rerun would re-draw from its own
+#      capped output and the pool would erode by the cap on each pass.
+# OCE/MEN previously wrote to oce_rfmix.txt/men_rfmix.txt, which nothing else
+# reads; they move here too so a *_rfmix.txt name always means "curated".
+anchors_for () { echo "${REFS}/$(echo "$1" | tr 'A-Z' 'a-z')_anchors.k${K}.txt"; }
+
 # OTH = the empirical leftover cluster at K=8 (no metadata candidate pool).
-OTH_ANCHORS="${OTH_ANCHORS:-${REFS}/oth_rfmix.txt}"
+OTH_ANCHORS="${OTH_ANCHORS:-${REFS}/oth_anchors.k${K}.txt}"
 
 set -euo pipefail
 THREADS=${SLURM_CPUS_PER_TASK:-16}
@@ -191,31 +250,65 @@ done
 # Build the per-super-pop candidate unions from the globs, reporting every
 # source that contributes so the provenance is in the log rather than implied.
 build_cand_union () {
-    local sp="$1" glob="$2" out="$3" n=0 tot=0
+    local sp="$1" glob="$2" seed="$3" out="$4" n=0 tot=0
     : > "$out"
+    if [[ -n "$seed" && -s "$seed" ]]; then
+        local c; c=$(awk 'NF' "$seed" | wc -l)
+        echo "[$(date +%T)]   ${sp} draw pool += $(basename "$seed") (${c}, curated seed)"
+        awk 'NF {print $1}' "$seed" >> "$out"
+        n=$((n+1)); tot=$((tot+c))
+    fi
     for f in $glob; do
         [[ -s "$f" ]] || continue
         local c; c=$(awk 'NF' "$f" | wc -l)
-        echo "[$(date +%T)]   ${sp} candidates += $(basename "$f") (${c})"
+        echo "[$(date +%T)]   ${sp} draw pool += $(basename "$f") (${c})"
         awk 'NF {print $1}' "$f" >> "$out"
         n=$((n+1)); tot=$((tot+c))
     done
+    # AMR carries the Mexican Biobank genomes, which are part of the AMR
+    # exemplar set everywhere else in this pipeline and must be drawable here.
+    if [[ "$sp" == "AMR" && -s "$MXB_POPINFO" ]]; then
+        local c; c=$(awk 'NR>1 && NF' "$MXB_POPINFO" | wc -l)
+        echo "[$(date +%T)]   ${sp} draw pool += $(basename "$MXB_POPINFO") (${c}, MXB)"
+        awk -F'\t' 'NR>1 && NF {print $1}' "$MXB_POPINFO" >> "$out"
+        n=$((n+1)); tot=$((tot+c))
+    fi
     sort -u -o "$out" "$out"
     local u; u=$(wc -l < "$out")
     if [[ "$n" -eq 0 ]]; then
         echo "ERROR: no candidate files matched for ${sp}: $glob" >&2
-        echo "       expected at least one, e.g. ${REFS}/sgdp_$(echo "$sp" | tr 'A-Z' 'a-z')_candidates.txt" >&2
+        echo "       expected at least one, e.g. ${REFS}/sgdp_$(cand_token "$sp")_candidates.txt" >&2
+        echo "       or the curated seed ${REFS}/$(echo "$sp" | tr 'A-Z' 'a-z')_rfmix.txt" >&2
         return 1
     fi
     echo "[$(date +%T)]   ${sp}: ${n} source(s), ${tot} ids -> ${u} unique"
     return 0
 }
 
-SGDP_OCE_CAND="${ADM_DIR}/oce_candidates.union.txt"
-SGDP_MEN_CAND="${ADM_DIR}/men_candidates.union.txt"
-echo "[$(date +%T)] assembling candidate pools"
-build_cand_union OCE "$OCE_CAND_GLOB" "$SGDP_OCE_CAND" || exit 1
-build_cand_union MEN "$MEN_CAND_GLOB" "$SGDP_MEN_CAND" || exit 1
+# The label pool names the clusters; the draw pool is who may be drawn. Where a
+# curated seed exists the label pool is just that seed, so cluster naming keeps
+# using only vetted exemplars even though the draw pool is now wider.
+echo "[$(date +%T)] assembling candidate pools (draw + label) for: ${SUPERPOPS}"
+DISCOVER_SPEC="${ADM_DIR}/discover_spec.tsv"
+: > "$DISCOVER_SPEC"
+for SP in $SUPERPOPS; do
+    DRAW="${ADM_DIR}/$(echo "$SP" | tr 'A-Z' 'a-z')_candidates.union.txt"
+    build_cand_union "$SP" "$(cand_glob_for "$SP")" "$(seed_for "$SP")" "$DRAW" || exit 1
+    SEED="$(seed_for "$SP")"
+    if [[ -n "$SEED" ]]; then
+        LABEL="${ADM_DIR}/$(echo "$SP" | tr 'A-Z' 'a-z')_label.txt"
+        awk 'NF {print $1}' "$SEED" > "$LABEL"
+        # MXB belongs to the AMR exemplar set for cluster naming too.
+        [[ "$SP" == "AMR" && -s "$MXB_POPINFO" ]] && \
+            awk -F'\t' 'NR>1 && NF {print $1}' "$MXB_POPINFO" >> "$LABEL"
+        sort -u -o "$LABEL" "$LABEL"
+        echo "[$(date +%T)]   ${SP} label pool: $(wc -l < "$LABEL") (curated)"
+    else
+        LABEL="$DRAW"
+        echo "[$(date +%T)]   ${SP} label pool: $(wc -l < "$LABEL") (= draw pool; no curated list)"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$SP" "$DRAW" "$LABEL" "$(anchors_for "$SP")" >> "$DISCOVER_SPEC"
+done
 
 # ---------------------------------------------------------------------------
 # 1. Concat all 22 chrs to a single BCF (k7 workspace).
@@ -262,39 +355,48 @@ fi
 [[ -s "${UNSUP_DIR}/lai_ref.${K}.Q" ]] || { echo "ERROR: unsupervised ADMIXTURE failed"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 4. STAGE A -- discover OCE/MEN anchors from the unsupervised Q.
-#    Map 7 clusters -> super-pop by mean-Q (known labels); then for OCE/MEN
-#    take their candidates with cluster-Q >= ANCHOR_MIN_Q, SORTED descending,
-#    CAPPED at ANCHOR_CAP. This is the "top 25-50 >= 0.93-0.95" recipe used to
-#    build the original anchor sets, applied to the SGDP additions.
+# 4. STAGE A -- discover anchors for ALL 7 super-pops from the unsupervised Q.
+#    Map K clusters -> super-pop by mean-Q (label pools); then for EACH of the
+#    7 take its DRAW pool members with cluster-Q >= ANCHOR_MIN_Q, SORTED
+#    descending, CAPPED at ANCHOR_CAP. This is the "top 25-50 >= 0.93-0.95"
+#    recipe that built the original anchor sets, now applied uniformly instead
+#    of to OCE/MEN alone.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] discover OCE/MEN anchors from unsupervised K=${K} (top ${ANCHOR_CAP} >= ${ANCHOR_MIN_Q})"
+echo "[$(date +%T)] discover anchors for all 7 super-pops from unsupervised K=${K} (top ${ANCHOR_CAP} >= ${ANCHOR_MIN_Q})"
 python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$ANCHOR_CAP" \
-    "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
-    "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" \
-    "$SGDP_OCE_CAND" "$SGDP_MEN_CAND" "$MXB_POPINFO" \
-    "$OCE_ANCHORS" "$MEN_ANCHORS" "$OTH_ANCHORS" <<'PYEOF'
+    "$DISCOVER_SPEC" "$OTH_ANCHORS" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
-(fam_f, qu_f, K, thresh, cap, eur_f, afr_f, amr_f, eas_f, sas_f,
- oce_cand_f, men_cand_f, mxb_f, oce_out, men_out, oth_out) = sys.argv[1:17]
+(fam_f, qu_f, K, thresh, cap, spec_f, oth_out) = sys.argv[1:8]
 K = int(K); thresh = float(thresh); cap = int(cap)
 
-def load(p): return set(open(p).read().split())
-mxb = set()
-with open(mxb_f) as f:
-    next(f)
-    for line in f:
-        if line.strip(): mxb.add(line.split("\t")[0])
+def load(p):
+    try: return set(open(p).read().split())
+    except FileNotFoundError: return set()
 
-# Exemplar -> super-pop. Existing 5 come from the anchor lists; OCE/MEN
-# exemplars are the SGDP candidate pools (used ONLY to label the clusters).
+# spec: super_pop <TAB> draw_pool <TAB> label_pool <TAB> anchors_out
+SPEC = []
+with open(spec_f) as f:
+    for line in f:
+        if not line.strip(): continue
+        sp, draw, label, out = line.rstrip("\n").split("\t")
+        SPEC.append((sp, draw, label, out))
+SPS = [s[0] for s in SPEC]
+
+# Exemplar -> super-pop, from the LABEL pools only. A sample that appears in
+# two super-pops' label pools is ambiguous and is dropped from labelling
+# entirely rather than silently going to whichever was read last.
+owners = defaultdict(set)
+for sp, _draw, label_f, _out in SPEC:
+    for s in load(label_f): owners[s].add(sp)
 exemplars = {}
-for sp, ids in [("EUR", load(eur_f)), ("AFR", load(afr_f)),
-                ("AMR", load(amr_f) | mxb), ("EAS", load(eas_f)),
-                ("SAS", load(sas_f)), ("OCE", load(oce_cand_f)),
-                ("MEN", load(men_cand_f))]:
-    for s in ids: exemplars[s] = sp
+dupes = 0
+for s, sps in owners.items():
+    if len(sps) == 1: exemplars[s] = next(iter(sps))
+    else: dupes += 1
+if dupes:
+    print(f"[discover] NOTE: {dupes} sample(s) appear in more than one label "
+          f"pool and were excluded from cluster naming.", file=sys.stderr)
 
 samples = [l.split()[1] for l in open(fam_f)]
 Qu = [list(map(float, l.split())) for l in open(qu_f)]
@@ -313,7 +415,6 @@ assert len(samples) == len(Qu), f"{len(samples)} fam != {len(Qu)} Q rows"
 # claim 7 clusters and ONE cluster is left over -- that leftover is OTH: the
 # empirical "does not fit an HGDP super-pop" group. It is defined by the data,
 # not by a hand-written population list, which is the whole point of K=8.
-SPS = ["EUR", "AFR", "AMR", "EAS", "SAS", "OCE", "MEN"]
 sums = {sp: [0.0] * K for sp in SPS}; cnts = {sp: 0 for sp in SPS}
 for s, q in zip(samples, Qu):
     sp = exemplars.get(s)
@@ -335,7 +436,7 @@ for sp in SPS:
               f"(meanQ={meanQ[sp][c]:.3f}, n_exemplar={cnts[sp]}, "
               f"2nd-best cluster {runner[1]} @ {runner[0]:.3f})", file=sys.stderr)
 
-def discover(cand_f, sp, out):
+def discover(cand_f, label_f, sp, out):
     if sp not in cluster_of_sp:
         print(f"[discover] WARNING: {sp} did not claim a cluster at K={K}; "
               f"writing empty {out}", file=sys.stderr)
@@ -353,20 +454,33 @@ def discover(cand_f, sp, out):
         for s, _ in picked: g.write(s + "\n")
     n_cand_in_panel = sum(1 for s in samples if s in cand)
     print(f"[discover] {sp}: cluster {cl}, {n_pass}/{n_cand_in_panel} "
-          f"candidates-in-panel pass Q>={thresh}; kept top {len(picked)} "
+          f"draw-pool-in-panel pass Q>={thresh}; kept top {len(picked)} "
           f"(cap {cap}) -> {out}", file=sys.stderr)
     if picked:
         print(f"           top: {picked[0][0]} Q={picked[0][1]:.4f} | "
               f"min kept Q={picked[-1][1]:.4f}", file=sys.stderr)
+    # How the discovered set compares with the curated seed it replaces. This
+    # is the number to read before trusting a rerun: if discovery keeps almost
+    # none of the curated anchors for a super-pop that used to work, the
+    # cluster map or the threshold is wrong, not the curated list.
+    curated = load(label_f)
+    if curated:
+        kept_ids = {s for s, _ in picked}
+        overlap = len(kept_ids & curated)
+        print(f"           vs curated label pool ({len(curated)}): "
+              f"{overlap} retained, {len(kept_ids) - overlap} newly drawn",
+              file=sys.stderr)
     return len(picked)
 
-n_oce = discover(oce_cand_f, "OCE", oce_out)
-n_men = discover(men_cand_f, "MEN", men_out)
-if n_oce == 0 or n_men == 0:
-    print(f"[discover] NOTE: OCE={n_oce} MEN={n_men} anchors discovered. "
-          f"Zero means that super-pop didn't form a clean cluster at K={K} "
-          f"or no candidate cleared Q>={thresh}. Supervised stage will still "
-          f"run but that label will be weak/absent.", file=sys.stderr)
+counts = {}
+for sp, draw_f, label_f, out_f in SPEC:
+    counts[sp] = discover(draw_f, label_f, sp, out_f)
+empty = [sp for sp, n in counts.items() if n == 0]
+if empty:
+    print(f"[discover] NOTE: no anchors for {', '.join(empty)}. Zero means that "
+          f"super-pop didn't form a clean cluster at K={K} or no draw-pool "
+          f"member cleared Q>={thresh}. ADMIXTURE --supervised needs every "
+          f"label populated, so this will fail downstream.", file=sys.stderr)
 
 # ---------------------------------------------------------------------------
 # OTH -- the leftover cluster(s). With K=8 and 7 named super-pops exactly one
@@ -407,34 +521,71 @@ else:
               f"either lower ANCHOR_MIN_Q or drop K to {K-1}.", file=sys.stderr)
 PYEOF
 
-N_OCE=$(awk 'NF' "$OCE_ANCHORS" 2>/dev/null | wc -l)
-N_MEN=$(awk 'NF' "$MEN_ANCHORS" 2>/dev/null | wc -l)
+# Every one of the K labels must be populated or ADMIXTURE --supervised will
+# refuse to run. Fail here, with the counts, rather than after the LD-pruned
+# bed has been handed to a multi-hour supervised run.
+echo "[$(date +%T)] discovered anchors:"
+EMPTY_LABELS=""
+for SP in $SUPERPOPS; do
+    F="$(anchors_for "$SP")"
+    N=$(awk 'NF' "$F" 2>/dev/null | wc -l)
+    printf '[%s]   %-4s %4d  %s\n' "$(date +%T)" "$SP" "$N" "$(basename "$F")"
+    [[ "$N" -eq 0 ]] && EMPTY_LABELS="${EMPTY_LABELS} ${SP}"
+done
 N_OTH=$(awk 'NF' "$OTH_ANCHORS" 2>/dev/null | wc -l)
-echo "[$(date +%T)] discovered anchors: OCE=${N_OCE}, MEN=${N_MEN}, OTH=${N_OTH}"
+printf '[%s]   %-4s %4d  %s\n' "$(date +%T)" "OTH" "$N_OTH" "$(basename "$OTH_ANCHORS")"
+[[ "$N_OTH" -eq 0 ]] && EMPTY_LABELS="${EMPTY_LABELS} OTH"
+if [[ -n "$EMPTY_LABELS" ]]; then
+    echo "ERROR: no anchors discovered for:${EMPTY_LABELS}" >&2
+    echo "       ADMIXTURE --supervised needs all ${K} labels populated." >&2
+    echo "       Either lower ANCHOR_MIN_Q (currently ${ANCHOR_MIN_Q}), widen" >&2
+    echo "       that super-pop's candidate pool, or drop K." >&2
+    echo "       The cluster map and per-super-pop counts are above." >&2
+    exit 6
+fi
 
 # ---------------------------------------------------------------------------
-# 5. STAGE B -- build supervised .pop file (7 labels) in .fam row order.
+# 5. STAGE B -- build supervised .pop file (K labels) in .fam row order.
+#    Every label now comes from a DISCOVERED anchor file. Previously five of
+#    them were read straight from the curated *_rfmix.txt, which is what made
+#    the method non-uniform.
 # ---------------------------------------------------------------------------
 POP_FILE="${PRUNED}.pop"
 echo "[$(date +%T)] build supervised .pop file (K=${K})"
-python3 - "${PRUNED}.fam" "$POP_FILE" \
-    "${REFS}/eur_rfmix.txt" "${REFS}/afr_rfmix.txt" "${REFS}/amr_rfmix.txt" \
-    "${REFS}/eas_rfmix.txt" "${REFS}/sas_rfmix.txt" \
-    "$OCE_ANCHORS" "$MEN_ANCHORS" "$OTH_ANCHORS" "$MXB_POPINFO" <<'PYEOF'
+# Label order fixes the ADMIXTURE Q column order, so it must be deterministic:
+# the SUPERPOPS order, then OTH.
+POP_SPEC="${ADM_DIR}/pop_spec.tsv"
+: > "$POP_SPEC"
+for SP in $SUPERPOPS; do printf '%s\t%s\n' "$SP" "$(anchors_for "$SP")" >> "$POP_SPEC"; done
+printf 'OTH\t%s\n' "$OTH_ANCHORS" >> "$POP_SPEC"
+python3 - "${PRUNED}.fam" "$POP_FILE" "$POP_SPEC" <<'PYEOF'
 import sys
-(fam, outp, eur_f, afr_f, amr_f, eas_f, sas_f, oce_f, men_f, oth_f, mxb_pop_f) = sys.argv[1:12]
+from collections import defaultdict
+(fam, outp, spec_f) = sys.argv[1:4]
 def load(p):
     try: return set(open(p).read().split())
     except FileNotFoundError: return set()
-mxb = set()
-with open(mxb_pop_f) as f:
-    next(f)
-    for line in f:
-        if line.strip(): mxb.add(line.split("\t")[0])
 # Order matters: ADMIXTURE Q columns follow first-appearance of labels in .pop.
-anchors = [("EUR", load(eur_f)), ("AFR", load(afr_f)), ("AMR", load(amr_f) | mxb),
-           ("EAS", load(eas_f)), ("SAS", load(sas_f)),
-           ("OCE", load(oce_f)), ("MEN", load(men_f)), ("OTH", load(oth_f))]
+anchors = []
+with open(spec_f) as f:
+    for line in f:
+        if not line.strip(): continue
+        sp, path = line.rstrip("\n").split("\t")
+        anchors.append((sp, load(path)))
+# A sample carrying two labels would be assigned by list order alone, silently.
+# Discovery draws each super-pop from its own pool, but the pools can overlap
+# (a sample may sit in two candidate lists), so check rather than assume.
+seen = defaultdict(list)
+for sp, ids in anchors:
+    for s in ids: seen[s].append(sp)
+conflicts = {s: v for s, v in seen.items() if len(v) > 1}
+if conflicts:
+    print(f"ERROR: {len(conflicts)} sample(s) were discovered as anchors for "
+          f"more than one super-pop; ADMIXTURE would be trained on a "
+          f"contradiction.", file=sys.stderr)
+    for s, v in list(conflicts.items())[:10]:
+        print(f"         {s}: {', '.join(v)}", file=sys.stderr)
+    sys.exit(7)
 counts = {sp: 0 for sp, _ in anchors}; counts["-"] = 0
 with open(fam) as f, open(outp, "w") as g:
     for line in f:
@@ -819,7 +970,11 @@ done
 
 echo "[$(date +%T)] DONE."
 echo "  samples TSV      : $SAMPLES_TSV"
-echo "  discovered OCE   : $OCE_ANCHORS ($N_OCE)"
-echo "  discovered MEN   : $MEN_ANCHORS ($N_MEN)"
-echo "  discovered OTH   : $OTH_ANCHORS ($N_OTH)"
+echo "  discovered anchors (stage A, all ${K} labels):"
+for SP in $SUPERPOPS; do
+    F="$(anchors_for "$SP")"
+    printf '    %-4s %4d  %s\n' "$SP" "$(awk 'NF' "$F" 2>/dev/null | wc -l)" "$F"
+done
+printf '    %-4s %4d  %s\n' "OTH" "$N_OTH" "$OTH_ANCHORS"
+echo "  curated *_rfmix.txt were NOT modified (they are the RFMix reference panels)"
 echo "  homog BCFs       : ${HOMOG_SUB}/merged_chr*.homog_${K}pop.bcf"
