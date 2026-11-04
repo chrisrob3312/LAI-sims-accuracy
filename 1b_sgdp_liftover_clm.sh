@@ -151,8 +151,17 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # ---------------------------------------------------------------------------
 PREPPED="${OUTDIR}/sgdp_prepped.chr${CHR}.bcf"
 if [[ -s "$PREPPED" && -s "${PREPPED}.csi" ]]; then
-    echo "[$(date +%T)] [chr${CHR}] $PREPPED exists, skipping"
-    exit 0
+    # Non-empty is not the same as complete. Read the header and count a
+    # record before accepting a previous run's output, so a file left behind
+    # by an earlier failure is rebuilt instead of silently reused.
+    if bcftools view -h "$PREPPED" >/dev/null 2>&1 \
+       && [[ "$(bcftools view -H "$PREPPED" 2>/dev/null | head -1 | wc -l)" -eq 1 ]]; then
+        echo "[$(date +%T)] [chr${CHR}] $PREPPED exists and reads cleanly, skipping"
+        exit 0
+    fi
+    echo "[$(date +%T)] [chr${CHR}] $PREPPED exists but is unreadable or empty"
+    echo "[$(date +%T)] [chr${CHR}] -- rebuilding (left over from a killed task)"
+    rm -f "$PREPPED" "${PREPPED}.csi"
 fi
 
 if [[ -n "$SGDP_COMBINED_URL" ]]; then
@@ -306,9 +315,25 @@ bcftools +fixref "${TMPDIR}/sgdp.chr${CHR}.hg38.norm.bcf" \
     -- -f "$HG38_FA" -m flip -d
 # Keep only this chr (liftover can scatter a handful of variants to other
 # contigs); then sort.
+# Build beside the final path and move into place only once BOTH the BCF and
+# its index are complete.
+#
+# Writing straight to $PREPPED means a killed task (an OOM, a timeout, a
+# scancel) leaves a truncated BCF, or a complete BCF with a half-written .csi,
+# at the real output path. The resume check tests that both files are
+# non-empty, which a half-written index passes -- so the rerun skips the
+# chromosome and 1c merges a corrupt index. A rename within one filesystem is
+# atomic, so the final path only ever holds a finished pair.
+PREP_TMP="${TMPDIR}/sgdp_prepped.chr${CHR}.partial.bcf"
+rm -f "$PREP_TMP" "${PREP_TMP}.csi"
 bcftools view "${TMPDIR}/sgdp.chr${CHR}.hg38.fixref.bcf" -r "chr${CHR}" -Ou \
-  | bcftools sort -m 8G -T "${TMPDIR}/sort" -Ob -o "$PREPPED"
-bcftools index "$PREPPED"
+  | bcftools sort -m 8G -T "${TMPDIR}/sort" -Ob -o "$PREP_TMP"
+bcftools index "$PREP_TMP"
+bcftools view -h "$PREP_TMP" >/dev/null 2>&1 || {
+    echo "ERROR: chr${CHR} output is unreadable right after writing it" >&2
+    rm -f "$PREP_TMP" "${PREP_TMP}.csi"; exit 5; }
+mv "${PREP_TMP}.csi" "${PREPPED}.csi"
+mv "$PREP_TMP" "$PREPPED"
 
 # Clean large intermediates (keep the reject log for provenance).
 rm -f "$FILT_VCF" "${FILT_VCF}.tbi" "$LIFTED_VCF" \
