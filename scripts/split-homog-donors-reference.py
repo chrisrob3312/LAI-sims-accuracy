@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""
+split-homog-donors-reference.py
+
+Split the homogeneous panel into a REFERENCE half and a DONOR half, per
+super-pop, by a size-dependent rule rather than one fixed ratio.
+
+WHY NOT A FIXED RATIO. "2/3 donors, 1/3 reference" is right for a large pool
+and wrong for a small one: at a pool of 40 it leaves a 13-individual reference
+panel, which is 26 haplotypes. The two sides do not fail the same way:
+
+  Too few DONORS    simulated individuals reuse haplotypes and become cryptic
+                    relatives. The intake's sim-kinship check catches this and
+                    the fix is to simulate fewer individuals.
+                    -> detectable, and recoverable.
+
+  Too few REFERENCE local ancestry genuinely degrades, and that degradation is
+                    confounded with the ancestry effect being measured. The
+                    result reads as "local ancestry is poor for this group"
+                    when the truth is "this group's reference panel had 13
+                    people".
+                    -> invisible in the output, and not recoverable.
+
+So the reference side is allocated FIRST, to a target, and the donors take the
+remainder. For a large pool that still yields 2/3 or more donors; for a small
+one it protects the panel that cannot be repaired afterwards.
+
+    reference = clamp(round(REF_FRACTION * N), REF_FLOOR, REF_TARGET)
+    donors    = N - reference
+
+With the defaults (0.375, floor 15, target 50):
+
+    N = 400  ->  50 ref / 350 donors   (88% donors)
+    N = 200  ->  50 ref / 150 donors   (75% donors)
+    N = 100  ->  38 ref /  62 donors   (62% donors)
+    N =  40  ->  15 ref /  25 donors   (62% donors)
+    N =  30  ->  15 ref /  15 donors   (50% donors)
+    N <  30  ->  refuses to split; see below
+
+REF_TARGET = 50 matches the curated EUR/AFR/EAS/SAS panels, which are 50 each.
+
+A pool below REF_FLOOR + DONOR_FLOOR cannot supply both roles. The script does
+not quietly halve it: it reports the group as UNDERSUPPLIED and writes nothing
+for it, because the useful options at that point are decisions, not defaults --
+use the group as a reference/control only and simulate no model containing it,
+or accept a thin panel and say so in the methods.
+
+THE SPLIT IS STRATIFIED BY POPULATION, not random over the super-pop. An
+unstratified split lets one population land mostly on the donor side and
+another mostly on the reference side, so the benchmark measures
+cross-population transfer while reporting it as within-super-pop accuracy.
+Both sides therefore get a proportional share of every population, following
+split_mxb_samples.R, and the allocation inside a stratum is deterministic
+(lexicographic sample ID) so it reproduces without a seeded RNG.
+
+SUPER-POPS WITH A SOURCE-BASED SPLIT ARE NOT SPLIT HERE. For EUR, EAS and AFR
+the reference is the 1000 Genomes slice and donors come from everything else,
+so disjointness is guaranteed by source and no sample has to be withheld.
+Pass them with --source-split to get those two lists instead.
+
+Usage:
+  python3 -I scripts/split-homog-donors-reference.py \\
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\
+      --out reference_ids --suffix b2 \\
+      --source-split EUR,EAS,AFR
+
+  # see the allocation without writing anything
+  python3 -I scripts/split-homog-donors-reference.py --panel ... --dry-run
+"""
+import argparse
+import csv
+import os
+import sys
+from collections import defaultdict
+
+REF_TARGET_DEFAULT = 50
+REF_FLOOR_DEFAULT = 15
+DONOR_FLOOR_DEFAULT = 15
+REF_FRACTION_DEFAULT = 0.375
+
+
+def plan_sizes(n, ref_fraction, ref_floor, ref_target, donor_floor):
+    """-> (n_reference, n_donors, status). status '' when the split is usable."""
+    if n < ref_floor + donor_floor:
+        return 0, 0, "UNDERSUPPLIED"
+    ref = int(round(ref_fraction * n))
+    ref = max(ref_floor, min(ref_target, ref))
+    don = n - ref
+    if don < donor_floor:
+        # The target took so much that donors fall below their floor; give the
+        # donors their floor and let the reference keep the rest. Only reachable
+        # between the two floors and the target.
+        don = donor_floor
+        ref = n - don
+    return ref, don, ""
+
+
+def allocate_stratified(by_pop, n_ref):
+    """Largest-remainder allocation of n_ref reference slots across populations.
+
+    Proportional by population size, so neither side over-represents a
+    population. Deterministic throughout: populations are ordered by name and
+    samples within a population by ID, so the same panel always yields the
+    same split with no seeded RNG.
+    """
+    total = sum(len(v) for v in by_pop.values())
+    pops = sorted(by_pop)
+    exact = {p: n_ref * len(by_pop[p]) / total for p in pops}
+    base = {p: int(exact[p]) for p in pops}
+    # A population must not be wiped off the reference side by flooring alone.
+    for p in pops:
+        if base[p] == 0 and len(by_pop[p]) > 0:
+            base[p] = 1
+    over = sum(base.values()) - n_ref
+    if over > 0:
+        # Took too many: trim from the populations with the largest allocation
+        # first, never below 1, so small populations keep representation.
+        for p in sorted(pops, key=lambda q: (-base[q], q)):
+            while over > 0 and base[p] > 1:
+                base[p] -= 1
+                over -= 1
+            if over == 0:
+                break
+    elif over < 0:
+        # Distribute what's left by largest fractional remainder.
+        rema = sorted(pops, key=lambda q: (-(exact[q] - int(exact[q])), q))
+        i = 0
+        while over < 0:
+            p = rema[i % len(rema)]
+            if base[p] < len(by_pop[p]):
+                base[p] += 1
+                over += 1
+            i += 1
+            if i > 100000:
+                break
+    ref_ids, don_ids = [], []
+    for p in pops:
+        members = sorted(by_pop[p])
+        k = min(base[p], len(members))
+        ref_ids.extend(members[:k])
+        don_ids.extend(members[k:])
+    return sorted(ref_ids), sorted(don_ids)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--panel", required=True,
+                    help="lai_ref_panel_samples.k<K>.tsv from 4a")
+    ap.add_argument("--out", default="reference_ids")
+    ap.add_argument("--suffix", default="b2",
+                    help="written as <sp>_reference_<suffix>.txt / <sp>_simulation_<suffix>.txt")
+    ap.add_argument("--source-split", default="EUR,EAS,AFR",
+                    help="super-pops whose reference is the 1000 Genomes slice "
+                         "and whose donors are everything else (no withholding)")
+    ap.add_argument("--kg-cohort", default="1KG",
+                    help="value of the cohort column marking 1000 Genomes")
+    ap.add_argument("--ref-fraction", type=float, default=REF_FRACTION_DEFAULT)
+    ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
+    ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
+    ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    source_split = {x.strip().upper() for x in args.source_split.replace(",", " ").split() if x.strip()}
+
+    # --- read the panel ---------------------------------------------------
+    rows = []
+    with open(args.panel, newline="") as fh:
+        rd = csv.DictReader(fh, delimiter="\t")
+        need = {"sample", "cohort", "pop", "super_pop"}
+        missing = need - set(rd.fieldnames or [])
+        if missing:
+            sys.exit(f"ERROR: {args.panel} lacks column(s): {sorted(missing)}\n"
+                     f"       found: {rd.fieldnames}")
+        has_incl = "included" in (rd.fieldnames or [])
+        for r in rd:
+            if has_incl and str(r.get("included", "")).strip() not in ("1", "true", "True"):
+                continue
+            rows.append(r)
+    if not rows:
+        sys.exit(f"ERROR: no included samples in {args.panel}. If the file has "
+                 f"an 'included' column, every row was 0 -- check stage C.")
+    print(f"[split] homogeneous samples: {len(rows)}")
+
+    by_sp = defaultdict(list)
+    for r in rows:
+        by_sp[r["super_pop"].strip().upper()].append(r)
+
+    os.makedirs(args.out, exist_ok=True)
+    print(f"\n{'super_pop':>9} {'N':>6} {'mode':>12} {'ref':>6} {'donors':>7} "
+          f"{'%don':>6}  note")
+    print("-" * 72)
+
+    written, problems = [], []
+    for sp in sorted(by_sp):
+        members = by_sp[sp]
+        n = len(members)
+
+        if sp in source_split:
+            ref = sorted(r["sample"] for r in members
+                         if r["cohort"].strip().upper() == args.kg_cohort.upper())
+            don = sorted(r["sample"] for r in members
+                         if r["cohort"].strip().upper() != args.kg_cohort.upper())
+            note = "reference = 1000G slice, donors = the rest"
+            if len(ref) < args.ref_floor:
+                note = (f"*** only {len(ref)} 1000G samples -- below the "
+                        f"reference floor of {args.ref_floor}")
+                problems.append((sp, note))
+            pct = 100.0 * len(don) / n if n else 0
+            print(f"{sp:>9} {n:>6} {'by-source':>12} {len(ref):>6} {len(don):>7} "
+                  f"{pct:>5.0f}%  {note}")
+        else:
+            n_ref, n_don, status = plan_sizes(
+                n, args.ref_fraction, args.ref_floor, args.ref_target,
+                args.donor_floor)
+            if status == "UNDERSUPPLIED":
+                note = (f"*** {n} < {args.ref_floor}+{args.donor_floor}: cannot "
+                        f"supply both roles -- DECIDE, do not default")
+                print(f"{sp:>9} {n:>6} {'--':>12} {'-':>6} {'-':>7} {'-':>6}  {note}")
+                problems.append((sp, note))
+                continue
+            by_pop = defaultdict(list)
+            for r in members:
+                by_pop[r["pop"].strip() or "NA"].append(r["sample"])
+            ref, don = allocate_stratified(by_pop, n_ref)
+            pct = 100.0 * len(don) / n if n else 0
+            print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
+                  f"{pct:>5.0f}%  {len(by_pop)} populations, stratified")
+
+        overlap = set(ref) & set(don)
+        if overlap:
+            sys.exit(f"ERROR: {sp} has {len(overlap)} samples on BOTH sides. "
+                     f"That is the circularity this script exists to prevent.")
+        written.append((sp, ref, don))
+
+    if args.dry_run:
+        print("\n[split] --dry-run: nothing written")
+    else:
+        for sp, ref, don in written:
+            lc = sp.lower()
+            for name, ids in ((f"{lc}_reference_{args.suffix}.txt", ref),
+                              (f"{lc}_simulation_{args.suffix}.txt", don)):
+                with open(os.path.join(args.out, name), "w") as fh:
+                    fh.write("\n".join(ids) + ("\n" if ids else ""))
+        print(f"\n[split] wrote {2*len(written)} lists to {args.out}/")
+
+    # A sample must not be a donor for one super-pop and a reference for
+    # another: it is one person either way, and the method would be scored on
+    # a haplotype it was given.
+    ref_all, don_all = set(), set()
+    for _sp, ref, don in written:
+        ref_all |= set(ref); don_all |= set(don)
+    cross = ref_all & don_all
+    if cross:
+        sys.exit(f"\nERROR: {len(cross)} sample(s) are a reference for one "
+                 f"super-pop and a donor for another, e.g. "
+                 f"{sorted(cross)[:5]}. Same person, same haplotypes.")
+    print(f"[split] disjoint across all super-pops: "
+          f"{len(ref_all)} reference, {len(don_all)} donor, 0 shared")
+
+    if problems:
+        print("\n[split] NEEDS A DECISION:")
+        for sp, note in problems:
+            print(f"  {sp}: {note}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
