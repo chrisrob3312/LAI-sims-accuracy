@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=1d_almarri
-#SBATCH --output=logs/1d_almarri_%A_%a.out
-#SBATCH --error=logs/1d_almarri_%A_%a.err
+#SBATCH --partition=atkinson,mhgcp
+#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
+# Absolute log paths, matching 1b. A relative `logs/%A_%a.out` resolves against
+# the submit directory, and if that directory has no logs/ Slurm cannot create
+# the file and kills the task before the script runs -- a failure with no log
+# to explain it, because the log is what failed.
+#SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1d_almarri_chr%a_%j.out
+#SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1d_almarri_chr%a_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=Christina.magyar@bcm.edu
 # ============================================================================
 # 1d_almarri_prep_clm.sh   --   array 1-22, one task per chromosome
 #
@@ -70,6 +78,28 @@ unset PYTHONHOME PYTHONPATH
 export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 [[ -d "$VCF_DIR" ]] || { echo "ERROR: missing $VCF_DIR (run scripts/fetch-almarri-vcfs.sh)"; exit 1; }
+
+# --------------------------------------------------------------------------
+# PREFLIGHT: the missing2ref plugin, checked BEFORE the expensive loop.
+#
+# Step 2 prepares 137 per-sample BCFs, which is the slow part. If the plugin
+# turns out to be unavailable at step 3, all of that work is thrown away --
+# per chromosome, on every task. bcftools ships plugins as separate .so files
+# and finds them via BCFTOOLS_PLUGINS, which a conda env does not always set,
+# so "is it there" is a real question rather than a formality.
+# --------------------------------------------------------------------------
+if ! bcftools plugin -l 2>/dev/null | grep -q 'missing2ref'; then
+    echo "ERROR: the bcftools missing2ref plugin is not available." >&2
+    echo "       It is REQUIRED: these are single-sample VCFs, so every site" >&2
+    echo "       absent from a sample becomes ./. on merge and the panel is" >&2
+    echo "       almost entirely missing without it." >&2
+    echo "       bcftools: $(command -v bcftools)" >&2
+    echo "       BCFTOOLS_PLUGINS=${BCFTOOLS_PLUGINS:-<unset>}" >&2
+    echo "       Try:  export BCFTOOLS_PLUGINS=\$(dirname \$(command -v bcftools))/../libexec/bcftools" >&2
+    echo "       then: bcftools plugin -l | grep missing2ref" >&2
+    exit 4
+fi
+echo "[almarri] missing2ref plugin available"
 
 # --------------------------------------------------------------------------
 # --index : build the .tbi/.csi the array tasks need. Run ONCE, not per chr.
@@ -192,8 +222,23 @@ if awk -v f="$FRAC_MISSING" -v m="$MAX_MISSING" 'BEGIN{exit !(f>m)}'; then
     exit 3
 fi
 
-mv "$MERGED" "$OUT"
+# Move the index first, then the BCF: $OUT only ever appears once both exist,
+# so a kill here cannot leave a BCF that the resume check accepts as finished.
 mv "${MERGED}.csi" "${OUT}.csi"
+mv "$MERGED" "$OUT"
+
+# Drop the 137 per-sample intermediates now that the merge is on disk. Each
+# chromosome builds its own set and 8 run at once, so leaving them is tens of
+# GB of scratch per run for files nothing reads again. KEEP_TMP=1 retains them
+# for debugging a specific chromosome.
+if [[ -z "${KEEP_TMP:-}" ]]; then
+    _sz=$(du -sh "$TMP" 2>/dev/null | cut -f1)
+    rm -rf "$TMP"
+    echo "[$(date +%T)] [chr${CHR}] cleaned ${_sz:-?} of per-sample intermediates"
+else
+    echo "[$(date +%T)] [chr${CHR}] KEEP_TMP set -- leaving $TMP"
+fi
+
 echo "[$(date +%T)] [chr${CHR}] DONE -> $OUT"
 echo "[$(date +%T)] [chr${CHR}] 1c will merge this alongside HGDP+1KG, MXB and SGDP,"
 echo "[$(date +%T)] [chr${CHR}] and SHAPEIT5 will re-phase the whole panel jointly."
