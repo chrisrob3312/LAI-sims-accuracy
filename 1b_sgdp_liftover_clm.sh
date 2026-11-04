@@ -154,8 +154,11 @@ if [[ -s "$PREPPED" && -s "${PREPPED}.csi" ]]; then
     # Non-empty is not the same as complete. Read the header and count a
     # record before accepting a previous run's output, so a file left behind
     # by an earlier failure is rebuilt instead of silently reused.
+    # Record count from the INDEX, not `view -H | head -1`: that pipeline
+    # SIGPIPEs the moment head exits, and on a whole chromosome it also reads
+    # far more than the question needs.
     if bcftools view -h "$PREPPED" >/dev/null 2>&1 \
-       && [[ "$(bcftools view -H "$PREPPED" 2>/dev/null | head -1 | wc -l)" -eq 1 ]]; then
+       && [[ "$(bcftools index -n "$PREPPED" 2>/dev/null || echo 0)" -gt 0 ]]; then
         echo "[$(date +%T)] [chr${CHR}] $PREPPED exists and reads cleanly, skipping"
         exit 0
     fi
@@ -275,8 +278,14 @@ bcftools index -t "$FILT_VCF"
 
 # 2b. hg19 contigs in SGDP/hs37d5 are bare-numeric (1,2,..); the UCSC
 #     hg19ToHg38 chain + Picard expect chr-prefixed. Rename if needed.
-first_contig=$(bcftools view -h "$FILT_VCF" \
-    | awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}')
+# The awk used to carry `exit` after the first contig, which closed the pipe
+# while bcftools was still writing the header: SIGPIPE, pipefail, and the
+# ASSIGNMENT fails, which under `set -e` kills the task. Reading the header
+# into a variable first removes the pipe entirely.
+_FHDR=$(bcftools view -h "$FILT_VCF") || {
+    echo "ERROR: cannot read header of $FILT_VCF" >&2; exit 1; }
+first_contig=$(awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}' <<<"$_FHDR")
+unset _FHDR
 echo "[$(date +%T)] [chr${CHR}] SGDP first contig: ${first_contig:-<none>}"
 LIFT_IN="$FILT_VCF"
 if [[ "$first_contig" != chr* ]]; then

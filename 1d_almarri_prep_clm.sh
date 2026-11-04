@@ -88,7 +88,12 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # and finds them via BCFTOOLS_PLUGINS, which a conda env does not always set,
 # so "is it there" is a real question rather than a formality.
 # --------------------------------------------------------------------------
-if ! bcftools plugin -l 2>/dev/null | grep -q 'missing2ref'; then
+# `bcftools plugin -l | grep -q` has the same SIGPIPE inversion as the contig
+# check below: grep -q exits at the match, bcftools dies, pipefail returns 141
+# and the test reports the plugin MISSING when it is present. Listed once into
+# a variable instead.
+PLUGINS=$(bcftools plugin -l 2>/dev/null || true)
+if ! grep -q 'missing2ref' <<<"$PLUGINS"; then
     echo "ERROR: the bcftools missing2ref plugin is not available." >&2
     echo "       It is REQUIRED: these are single-sample VCFs, so every site" >&2
     echo "       absent from a sample becomes ./. on merge and the panel is" >&2
@@ -141,18 +146,37 @@ done
 # checked rather than assumed: a silent mismatch yields an EMPTY region query,
 # which looks like "this cohort has no variants here" instead of an error.
 # --------------------------------------------------------------------------
-FIRST_VCF=$(ls -1 "$VCF_DIR"/*.vcf.gz 2>/dev/null | head -1)
-[[ -n "$FIRST_VCF" ]] || { echo "ERROR: no .vcf.gz in $VCF_DIR"; exit 1; }
-if bcftools view -h "$FIRST_VCF" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+# SIGPIPE, and why none of this is a pipeline any more.
+#
+# `bcftools view -h "$f" | grep -q PATTERN` under `set -o pipefail` does not
+# mean what it reads like. grep -q exits at the FIRST match, bcftools is still
+# writing a header with thousands of contig lines, bcftools dies of SIGPIPE
+# (141), and pipefail makes the PIPELINE return 141 -- so the `if` is FALSE
+# even though the pattern was found. Both branches below missed, execution
+# fell into the error path, and the error path's own
+# `| grep '^##contig' | head -5` died the same way, aborting the task with
+# exit 141 before it could print why.
+#
+# The header is read ONCE into a variable and matched with a here-string. No
+# pipe, so no SIGPIPE, and one read instead of three.
+shopt -s nullglob
+_vcfs=("$VCF_DIR"/*.vcf.gz)
+shopt -u nullglob
+[[ ${#_vcfs[@]} -gt 0 ]] || { echo "ERROR: no .vcf.gz in $VCF_DIR"; exit 1; }
+FIRST_VCF="${_vcfs[0]}"
+HDR=$(bcftools view -h "$FIRST_VCF") || {
+    echo "ERROR: cannot read the header of $FIRST_VCF" >&2; exit 1; }
+if grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$HDR"; then
     REGION="chr${CHR}"
-elif bcftools view -h "$FIRST_VCF" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+elif grep -q "^##contig=<ID=${CHR}[,>]" <<<"$HDR"; then
     REGION="${CHR}"
 else
     echo "ERROR: neither 'chr${CHR}' nor '${CHR}' in $(basename "$FIRST_VCF") header" >&2
     echo "       contigs present:" >&2
-    bcftools view -h "$FIRST_VCF" | grep '^##contig' | head -5 >&2
+    grep '^##contig' <<<"$HDR" | awk 'NR<=5' >&2
     exit 1
 fi
+unset HDR
 echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 
 # --------------------------------------------------------------------------
@@ -223,7 +247,11 @@ bcftools index "$MERGED"
 NSAMP=$(bcftools query -l "$MERGED" | wc -l)
 NREC=$(bcftools view -H "$MERGED" | wc -l)
 [[ "$NREC" -gt 0 ]] || { echo "ERROR: merged chr${CHR} has no records"; exit 1; }
-FRAC_MISSING=$(bcftools query -f '[%GT\t]\n' "$MERGED" | head -20000 \
+# The producer is wrapped so its SIGPIPE death (head -20000 closes the pipe
+# long before a whole chromosome is written) cannot fail the assignment under
+# pipefail. Sampling the first 20k records is deliberate: the question is
+# whether missing2ref ran at all, and that is visible immediately.
+FRAC_MISSING=$( { bcftools query -f '[%GT\t]\n' "$MERGED" || true; } | head -20000 \
   | awk '{for(i=1;i<=NF;i++){t++; if($i=="./."||$i==".|."||$i==".") m++}} END{printf "%.4f", (t>0?m/t:1)}')
 echo "[$(date +%T)] [chr${CHR}] merged: ${NSAMP} samples, ${NREC} records, missing GT fraction ${FRAC_MISSING}"
 if awk -v f="$FRAC_MISSING" -v m="$MAX_MISSING" 'BEGIN{exit !(f>m)}'; then

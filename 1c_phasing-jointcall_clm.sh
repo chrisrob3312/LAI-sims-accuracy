@@ -216,9 +216,18 @@ echo "[$(date +%T)] [chr${CHR}] HGDP+1KG: ${NSAMP_HGDP1KG} samples, ${NHGDP1KG} 
 # contigs, but if HGDP1KG_PATTERN is pointed at a bare-numeric source
 # (e.g. *.rechr.vcf.gz) we rename to chr-prefixed so the merge with the
 # chr-prefixed MXB BCF and SHAPEIT5's --region chr${CHR} both line up.
-if bcftools view -h "$HGDP1KG_PREP" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+# Read the header ONCE into a variable, never `bcftools view -h | grep -q`.
+# Under `set -o pipefail` that idiom inverts: grep -q exits at the first match,
+# bcftools dies of SIGPIPE writing the rest of the header, pipefail returns
+# 141, and the `if` is FALSE even though the contig IS present. It cost 1d a
+# whole array (exit 141) before it was spotted. Here it would have silently
+# renamed contigs that needed no renaming, or aborted claiming the chromosome
+# was absent from a file that contains it.
+_HDR=$(bcftools view -h "$HGDP1KG_PREP") || {
+    echo "ERROR: cannot read header of $HGDP1KG_PREP" >&2; exit 1; }
+if grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$_HDR"; then
     HGDP1KG_CHR="$HGDP1KG_PREP"
-elif bcftools view -h "$HGDP1KG_PREP" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+elif grep -q "^##contig=<ID=${CHR}[,>]" <<<"$_HDR"; then
     echo "[$(date +%T)] [chr${CHR}] rename HGDP+1KG contigs to chr-prefixed"
     RENAME_TXT="${TMPDIR}/rename_to_chr.txt"
     : > "$RENAME_TXT"
@@ -263,10 +272,13 @@ add_cohort () {
     local n; n=$(bcftools query -l "$src" | wc -l)
     echo "[$(date +%T)] [chr${CHR}] ${label} present: ${n} samples -> merge"
 
-    local cur="$src"
-    if bcftools view -h "$cur" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+    local cur="$src" hdr
+    # Header read once; see the SIGPIPE note on the HGDP+1KG block above.
+    hdr=$(bcftools view -h "$cur") || {
+        echo "ERROR: cannot read header of $src" >&2; return 1; }
+    if grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$hdr"; then
         :
-    elif bcftools view -h "$cur" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+    elif grep -q "^##contig=<ID=${CHR}[,>]" <<<"$hdr"; then
         echo "[$(date +%T)] [chr${CHR}] rename ${label} contigs to chr-prefixed"
         local rn="${TMPDIR}/${lc}_rename_to_chr.txt"
         : > "$rn"
@@ -370,11 +382,19 @@ bcftools index "$QCED"
 # prefix from contig names, which then makes the soft-union BCF unreadable
 # by SHAPEIT5 when invoked with `--region chr${CHR}` (#sites=0, no error).
 # `--output-chr chrM` above keeps them chr-prefixed; assert it stuck.
-if ! bcftools view -h "$QCED" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+# Header read once. As a PIPELINE this assertion inverted under pipefail: when
+# the prefix WAS present, grep -q matched and exited, bcftools died of SIGPIPE
+# finishing the header, the pipeline returned 141, `!` made that true, and the
+# task aborted reporting the prefix lost. A check that fires on success is
+# worse than no check.
+_QHDR=$(bcftools view -h "$QCED") || {
+    echo "ERROR: cannot read header of $QCED" >&2; exit 1; }
+if ! grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$_QHDR"; then
     echo "ERROR: QCED BCF lost the chr-prefix on contigs (plink2 --output-chr failed?)"
-    bcftools view -h "$QCED" | grep "^##contig" | head -3
+    grep "^##contig" <<<"$_QHDR" | awk 'NR<=3'
     exit 1
 fi
+unset _QHDR
 
 # 4. Per-superpop pre-filter, then soft-union of passing sites.
 #    For each superpop in $SAMPLE_GROUPS with N >= MIN_SUBPOP_N:

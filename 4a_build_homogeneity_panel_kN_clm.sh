@@ -954,7 +954,12 @@ awk -F'\t' '
       # group on the label PAIR only -- adding max_Q would make every row
       # unique and defeat the uniq -c aggregation.
       print "    assigned=" $h["super_pop"] "  argmax=" $h["argmax_pop_sup"]
-  }' "$SAMPLES_TSV" | sort | uniq -c | sort -rn | head -15
+  }' "$SAMPLES_TSV" | sort | uniq -c | sort -rn | awk 'NR<=15'
+# `awk 'NR<=15'` rather than `head -15`: head closes the pipe at line 15, which
+# SIGPIPEs the upstream `sort -rn` and, under `set -o pipefail`, fails the
+# whole pipeline and kills the task. awk reads its input to the end, so the
+# producer always finishes. This is a diagnostic print -- it must not be able
+# to abort the stage it is reporting on.
 
 awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_${K}pop_samples.txt"
 
