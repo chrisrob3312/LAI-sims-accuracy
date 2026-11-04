@@ -9,11 +9,11 @@
 #            are discovered in stage 3 from these.
 #   Stage 1: SGDP acquisition + normalization per chr
 #            (sbatch 1b_sgdp_liftover_clm.sh — array 1-22)
-#   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 13 keep-list
+#   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 60 keep-list
 #            samples that were previously filtered as "related" + merge
 #            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
-#   Stage 3: K=8 homogeneity filter with SGDP OCE/MEN/OTH anchor discovery,
-#            unsupervised->supervised ADMIXTURE, Q>=0.95
+#   Stage 3: K=8 homogeneity filter with SGDP anchor discovery,
+#            unsupervised->supervised ADMIXTURE, Q>=0.93
 #            (sbatch 4a_build_homogeneity_panel_kN_clm.sh)
 #   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
 #   Stage 5: Full RFMix sweep — WGS main + HOMOG fork, chip main + HOMOG fork
@@ -51,7 +51,36 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 THROTTLE="${THROTTLE:-15}"
 DRY_RUN="${DRY_RUN:-}"
 
+# START_STAGE / STOP_STAGE / AFTER_JOB -- submit part of the chain.
+#
+# Needed because sbatch SNAPSHOTS the batch script at submit time: a stage
+# queued now runs the script as it is now, so a stage whose script still needs
+# work must not be queued yet. Start the long stages that are ready, fix the
+# rest, then queue the remainder against the running job:
+#
+#   START_STAGE=0 STOP_STAGE=1 bash submit_publication_rerun.sh   # stages 0-1
+#   START_STAGE=2 AFTER_JOB=3738999 bash submit_publication_rerun.sh  # 2-6
+#
+# AFTER_JOB is the job the first submitted stage waits on (afterok). It is
+# required whenever START_STAGE > 1, because the stage it would have depended
+# on was not submitted in this invocation.
+START_STAGE="${START_STAGE:-0}"
+STOP_STAGE="${STOP_STAGE:-6}"
+AFTER_JOB="${AFTER_JOB:-}"
+
 cd "$REPO_DIR"
+
+# Should stage N be submitted in this invocation?
+want () { [[ "$1" -ge "$START_STAGE" && "$1" -le "$STOP_STAGE" ]]; }
+
+# The dependency clause for stage N: afterok on the job the previous stage
+# produced, or on AFTER_JOB when the previous stage was skipped.
+dep_of () {
+    local prev_jid="$1"
+    if [[ -n "$prev_jid" ]]; then echo "--dependency=afterok:${prev_jid}"
+    elif [[ -n "$AFTER_JOB" ]]; then echo "--dependency=afterok:${AFTER_JOB}"
+    else echo ""; fi
+}
 
 # ---------------------------------------------------------------- helpers
 die() { echo "[publication-rerun] FATAL: $*" >&2; exit 2; }
@@ -113,6 +142,18 @@ for s in scripts/fetch-sgdp-anchors.py \
 done
 echo "[precheck] all stage scripts present"
 
+# A partial submit with no AFTER_JOB would queue stage N with NO dependency,
+# so it would start immediately against inputs the skipped stages have not
+# produced yet -- and fail hours later, or worse, succeed on stale inputs.
+if [[ "$START_STAGE" -gt 1 && -z "$AFTER_JOB" ]]; then
+    die "START_STAGE=${START_STAGE} needs AFTER_JOB=<jobid of the stage before it>.
+       Without it stage ${START_STAGE} would be queued with no dependency and
+       start at once, before its inputs exist. Find the job id with:
+         squeue -u \$USER --format='%.12i %.20j %.8T'"
+fi
+[[ "$START_STAGE" -le "$STOP_STAGE" ]] || die "START_STAGE > STOP_STAGE"
+echo "[precheck] submitting stages ${START_STAGE}..${STOP_STAGE}${AFTER_JOB:+ after job ${AFTER_JOB}}"
+
 # Project paths
 [[ -d "$PROJECT_ROOT" ]] || die "PROJECT_ROOT missing: $PROJECT_ROOT"
 echo "[precheck] project root OK"
@@ -123,14 +164,20 @@ echo "[precheck] project root OK"
 # sgdp_combined_candidates.txt.
 echo
 echo "============ STAGE 0: SGDP candidate-list fetch ============"
-run_now "fetch-sgdp" python3 scripts/fetch-sgdp-anchors.py \
-    --outdir reference_ids
-
 CAND_FILE="reference_ids/sgdp_combined_candidates.txt"
-if [[ -z "$DRY_RUN" ]]; then
-    [[ -s "$CAND_FILE" ]] || die "stage 0 did not produce $CAND_FILE"
-    N=$(wc -l < "$CAND_FILE")
-    echo "[stage 0] combined candidate list: $N SGDP samples across 7 super-pops"
+if want 0; then
+    run_now "fetch-sgdp" python3 scripts/fetch-sgdp-anchors.py \
+        --outdir reference_ids
+    if [[ -z "$DRY_RUN" ]]; then
+        [[ -s "$CAND_FILE" ]] || die "stage 0 did not produce $CAND_FILE"
+        N=$(wc -l < "$CAND_FILE")
+        echo "[stage 0] combined candidate list: $N SGDP samples across 7 super-pops"
+    fi
+else
+    echo "  (skipped: START_STAGE=${START_STAGE})"
+    # Stage 1 reads this file, so it must already exist even when stage 0 is
+    # skipped. Checking now beats discovering it 22 array tasks later.
+    want 1 && [[ ! -s "$CAND_FILE" ]] && die "stage 0 skipped but $CAND_FILE is missing"
 fi
 
 # ---------------------------------------------------------------- STAGE 1
@@ -144,26 +191,34 @@ fi
 # produce an empty SGDP panel.
 echo
 echo "============ STAGE 1: SGDP download + prep ============"
-J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE}" ./1b_sgdp_liftover_clm.sh)
+J1=""
+if want 1; then
+    J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE} $(dep_of "")" \
+         ./1b_sgdp_liftover_clm.sh)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE})"
+fi
 
 # ---------------------------------------------------------------- STAGE 2
 # Rebuild merged phased panel with:
-#   - the 13 previously-dropped keep-list samples restored
+#   - the 60 previously-dropped keep-list samples restored
 #   - new SGDP samples merged in
 #
 # PENDING PATCH: 1c_phasing-jointcall_clm.sh currently sources from a
 # hgdp1kg filtered BCF that has already applied the "unrelated only" filter
-# upstream of our 13 missing samples. The patch (not yet in the repo) is to
-# either:
-#   (a) switch HGDP1KG_PATTERN to the u235158 archived file
-#       /storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/
-#       TGP_HGDP_QC_phased_hg38_chr__CHR__.vcf.gz   (has all 4151 samples
-#       incl. our 13 relatives); OR
-#   (b) explicitly add the 13 back via a bcftools view -S step on top of
-#       the current source.
+# upstream of those samples. To restore them, set HGDP1KG_PATTERN to the
+# u235158 archived source:
 #
-# Option (a) is cleaner. Add it as an env override of HGDP1KG_PATTERN when
-# you fire this orchestrator for real.
+#   /storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/
+#   TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz
+#
+# NOTE THE _rechr SUFFIX -- it is part of the real filename. A pattern
+# without it resolves to nothing and the precheck below rejects it.
+#
+# It restores 60 samples, not 13. One of them, CHMI_CHMI3_WGS2, is a
+# hydatidiform-mole cell line (a complete-hydatidiform-mole genome, so
+# effectively haploid) and must NOT enter an ADMIXTURE panel or a donor
+# pool. Exclude it explicitly when using this source.
 echo
 echo "============ STAGE 2: rebuild merged phased panel ============"
 if [[ -z "${HGDP1KG_PATTERN:-}" ]]; then
@@ -171,10 +226,14 @@ if [[ -z "${HGDP1KG_PATTERN:-}" ]]; then
 
   NOTE: HGDP1KG_PATTERN is unset. Stage 2 uses the DEFAULT upstream BCF, which
   has already had an "unrelated only" filter applied upstream and is therefore
-  missing 13 keep-list samples (HG01935/36, HGDP008xx/009xx/010xx,
-  LP6005441-DNA_B04/B12/F10/H06). That is a valid run -- the panel is simply
-  the relatedness-filtered set, and the methods should say so. Set
-  HGDP1KG_PATTERN to an unfiltered per-chr source to restore them.
+  missing 60 keep-list samples. That is a valid run -- the panel is simply the
+  relatedness-filtered set, and the methods should say so. To restore them:
+
+    HGDP1KG_PATTERN=/storage/atkinson/home/u235158/projects/archived/\
+  tgp_hgdp_liftover/TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz
+
+  (the _rechr suffix is part of the real filename), and exclude
+  CHMI_CHMI3_WGS2 -- a hydatidiform-mole cell line, not a population sample.
 
 EOF
 else
@@ -205,23 +264,47 @@ EOF
     echo "[precheck] HGDP1KG_PATTERN resolves: $_probe"
 fi
 
-J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} --dependency=afterok:${J1}" \
-     ./1c_phasing-jointcall_clm.sh)
+J2=""
+if want 2; then
+    J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} $(dep_of "$J1")" \
+         ./1c_phasing-jointcall_clm.sh)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+fi
 
 # ---------------------------------------------------------------- STAGE 3
-# K=8 homogeneity filter with SGDP OCE/MEN/OTH anchor DISCOVERY.
-#   STAGE A: unsupervised ADMIXTURE K=8 -> discover OCE/MEN/OTH anchors from the
-#            unsupervised Q (candidates sorted by cluster-Q, kept if >=0.95)
-#            -> reference_ids/{oce,men}_rfmix.txt.
+# K=8 homogeneity filter with SGDP anchor DISCOVERY.
+#   STAGE A: unsupervised ADMIXTURE K=8 -> discover anchors from the
+#            unsupervised Q (candidates sorted by cluster-Q, kept if
+#            >= ANCHOR_MIN_Q = 0.93, capped at ANCHOR_CAP = 50).
 #   STAGE B: supervised ADMIXTURE K=8 with the full 8-way prior.
-#   STAGE C: included iff supervised max_Q >= 0.95 AND argmax==assigned.
-# Writes k7 outputs (admixture_k7/, homog_7pop/, lai_ref_panel_samples.k7.tsv)
-# and never clobbers the proven K=5 outputs. The EUR/AFR/AMR 3-way accuracy
-# test benefits because AMR homogeneity is now resolved at the strict 0.95 cut
-# with SGDP-AMR (Karitiana/Surui/...) reinforcing the Amerindigenous centroid.
+#   STAGE C: included iff supervised max_Q >= HOMOG_THRESHOLD (0.93) AND the
+#            supervised argmax cluster == the assigned super-pop.
+# Writes k8 outputs (admixture_k8/, homog_8pop/, lai_ref_panel_samples.k8.tsv)
+# and never clobbers the proven K=5 outputs.
+#
+# KNOWN GAP as of this revision: stage A discovers anchors for OCE, MEN and
+# OTH only; EUR/AFR/AMR/EAS/SAS still use the pre-existing *_rfmix.txt
+# exemplar lists rather than being discovered the same way. Uniform discovery
+# across all 7 candidate pools is the agreed design and is not in yet.
+#
+# THIS MATTERS AT SUBMIT TIME, NOT AT RUN TIME. sbatch takes a COPY of the
+# batch script when the job is queued, and the job runs that copy -- editing
+# 4a_build_homogeneity_panel_kN_clm.sh after this orchestrator has queued
+# stage 3 does NOT change what stage 3 runs. Verify what a queued job will
+# actually execute with:
+#     scontrol write batch_script <jobid> -
+# So either fix 4a before submitting stage 3, or submit stage 1 on its own
+# (START_STAGE=1) and submit stages 2-6 later with AFTER_JOB=<stage1 jobid>.
 echo
 echo "============ STAGE 3: homogeneity filter (K=8 + SGDP discovery) ============"
-J3=$(submit "stage3_homog_kN" "--dependency=afterok:${J2}" ./4a_build_homogeneity_panel_kN_clm.sh)
+J3=""
+if want 3; then
+    J3=$(submit "stage3_homog_kN" "$(dep_of "$J2")" \
+         ./4a_build_homogeneity_panel_kN_clm.sh)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+fi
 
 # ---------------------------------------------------------------- STAGE 4
 # Re-simulate admixed cohorts against the new panel. Simulation DONORS come
@@ -231,8 +314,13 @@ J3=$(submit "stage3_homog_kN" "--dependency=afterok:${J2}" ./4a_build_homogeneit
 # genetic maps now source from the rebuilt panel.
 echo
 echo "============ STAGE 4: re-simulate admixed cohorts ============"
-J4=$(submit "stage4_simulate" "--array=1-22%${THROTTLE} --dependency=afterok:${J3}" \
-     ./2b_simulation_clm.sh)
+J4=""
+if want 4; then
+    J4=$(submit "stage4_simulate" "--array=1-22%${THROTTLE} $(dep_of "$J3")" \
+         ./2b_simulation_clm.sh)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+fi
 
 # ---------------------------------------------------------------- STAGE 5
 # Full RFMix sweep on both WGS and chip-GSA density. Four parallel arrays:
@@ -249,21 +337,27 @@ CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
 
 echo
 echo "============ STAGE 5: full RFMix sweep (4 arrays) ============"
-J5a=$(submit "stage5_wgs_main" \
-      "--array=1-198%${THROTTLE} --mem=64G --dependency=afterok:${J4}" \
-      ./3b_wgs-rfmix-jointcall_clm.sh)
+J5a=""; J5b=""; J5c=""; J5d=""
+if want 5; then
+    _d5="$(dep_of "$J4")"
+    J5a=$(submit "stage5_wgs_main" \
+          "--array=1-198%${THROTTLE} --mem=64G ${_d5}" \
+          ./3b_wgs-rfmix-jointcall_clm.sh)
 
-J5b=$(submit "stage5_wgs_homog" \
-      "--array=1-44%${THROTTLE} --mem=64G --dependency=afterok:${J4}" \
-      ./3b_homog_wgs-rfmix-jointcall_clm.sh)
+    J5b=$(submit "stage5_wgs_homog" \
+          "--array=1-44%${THROTTLE} --mem=64G ${_d5}" \
+          ./3b_homog_wgs-rfmix-jointcall_clm.sh)
 
-J5c=$(submit "stage5_chip_main" \
-      "--array=1-198%${THROTTLE} --mem=64G --dependency=afterok:${J4} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
-      ./3b_chip_wgs-rfmix-jointcall_clm.sh)
+    J5c=$(submit "stage5_chip_main" \
+          "--array=1-198%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
+          ./3b_chip_wgs-rfmix-jointcall_clm.sh)
 
-J5d=$(submit "stage5_chip_homog" \
-      "--array=1-44%${THROTTLE} --mem=64G --dependency=afterok:${J4} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
-      ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
+    J5d=$(submit "stage5_chip_homog" \
+          "--array=1-44%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
+          ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+fi
 
 # ---------------------------------------------------------------- STAGE 6
 # Accuracy pilot + verify + commit + push. finalize_pilot.sbatch has its
@@ -272,23 +366,38 @@ J5d=$(submit "stage5_chip_homog" \
 # runs accuracy_v2.R, commits the TSVs, and pushes.
 echo
 echo "============ STAGE 6: accuracy pilot + push ============"
-J6=$(submit "stage6_finalize" \
-     "--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}" \
-     ./finalize_pilot.sbatch)
+J6=""
+if want 6; then
+    if [[ -n "$J5a" ]]; then
+        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}"
+    else
+        _d6="$(dep_of "")"
+    fi
+    J6=$(submit "stage6_finalize" "${_d6}" ./finalize_pilot.sbatch)
+else
+    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+fi
 
 # ---------------------------------------------------------------- summary
 echo
 echo "=========================================================="
 echo "orchestrator complete — jobs queued with afterok chain:"
-echo "  stage 1 (SGDP prep)              = ${J1}"
-echo "  stage 2 (rebuild panel)          = ${J2}  (after ${J1})"
-echo "  stage 3 (homog filter)           = ${J3}  (after ${J2})"
-echo "  stage 4 (simulate)               = ${J4}  (after ${J3})"
-echo "  stage 5a (WGS main sweep)        = ${J5a} (after ${J4})"
-echo "  stage 5b (WGS HOMOG fork)        = ${J5b} (after ${J4})"
-echo "  stage 5c (chip main sweep)       = ${J5c} (after ${J4})"
-echo "  stage 5d (chip HOMOG fork)       = ${J5d} (after ${J4})"
-echo "  stage 6 (accuracy + push)        = ${J6}  (after 5a/5b/5c/5d)"
+row () { [[ -n "$2" ]] && printf '  %-32s = %s\n' "$1" "$2" || printf '  %-32s   (not submitted)\n' "$1"; }
+row "stage 1 (SGDP prep)"        "$J1"
+row "stage 2 (rebuild panel)"    "$J2"
+row "stage 3 (homog filter)"     "$J3"
+row "stage 4 (simulate)"         "$J4"
+row "stage 5a (WGS main sweep)"  "$J5a"
+row "stage 5b (WGS HOMOG fork)"  "$J5b"
+row "stage 5c (chip main sweep)" "$J5c"
+row "stage 5d (chip HOMOG fork)" "$J5d"
+row "stage 6 (accuracy + push)"  "$J6"
+if [[ "$STOP_STAGE" -lt 6 ]]; then
+    echo
+    echo "PARTIAL SUBMIT. Queue the rest once the stage scripts are ready:"
+    echo "  START_STAGE=$((STOP_STAGE+1)) AFTER_JOB=<last job id above> \\"
+    echo "    bash submit_publication_rerun.sh"
+fi
 echo
 echo "Watch progress with:"
 echo "  squeue -u \$USER --states=PD,R --format='%.10i %.15j %.8T %.10M %R'"
