@@ -1,0 +1,18 @@
+# Samples excluded from the merged reference panel in 1c, before any merge.
+# One ID per line. Lines starting with # and blank lines are ignored.
+#
+# These are excluded from EVERY cohort (HGDP+1KG, MXB, SGDP, Almarri), so an
+# ID present in two sources cannot re-enter through the other one.
+#
+# ID                 why
+# ------------------ ---------------------------------------------------------
+# CHMI_CHMI3_WGS2    Complete hydatidiform mole cell line (CHM1/CHM13 lineage).
+#                    A CHM genome is androgenetic and effectively haploid:
+#                    homozygous genome-wide. It exists as a reference-assembly
+#                    control, not as a population sample. In an ADMIXTURE panel
+#                    it is a sample with no heterozygosity; as an admix-simu
+#                    donor it would contribute haplotypes that belong to no
+#                    population. It is absent from the default relatedness-
+#                    filtered HGDP+1KG source and returns only when
+#                    HGDP1KG_PATTERN points at the unfiltered u235158 archive.
+CHMI_CHMI3_WGS2

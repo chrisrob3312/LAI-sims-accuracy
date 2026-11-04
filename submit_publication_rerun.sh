@@ -207,10 +207,23 @@ fi
 # produce an empty SGDP panel.
 echo
 echo "============ STAGE 1: SGDP download + prep ============"
+# Stage 1 acquires the two external cohorts. They are independent of each
+# other, so both go in now and stage 2 waits on BOTH: afterok takes a
+# colon-separated list.
 J1=""
 if want 1; then
     J1=$(submit "stage1_sgdp_prep" "--array=1-22%${THROTTLE} $(dep_of "")" \
          ./1b_sgdp_liftover_clm.sh)
+    if [[ "${RUN_ALMARRI:-1}" == "1" ]]; then
+        # The per-sample VCFs ship without indexes and 1d region-queries every
+        # one of them, so the index pass runs once, inline, before the array.
+        run_now "almarri-index" bash ./1d_almarri_prep_clm.sh --index
+        J1B=$(submit "stage1_almarri_prep" "--array=1-22%${THROTTLE} $(dep_of "")" \
+              ./1d_almarri_prep_clm.sh)
+        J1="${J1}:${J1B}"
+    else
+        echo "  (RUN_ALMARRI=0 -- Almarri cohort not acquired)"
+    fi
 else
     echo "  (skipped: START_STAGE=${START_STAGE})"
 fi
@@ -282,7 +295,22 @@ fi
 
 J2=""
 if want 2; then
-    J2=$(submit "stage2_phase_panel" "--array=1-22%${THROTTLE} $(dep_of "$J1")" \
+    # Pass the panel-composition settings explicitly rather than relying on
+    # sbatch's default environment inheritance: these decide WHICH SAMPLES get
+    # jointly phased, and a dropped variable means re-phasing everything.
+    # submit() word-splits its args on purpose, so nothing in --export may
+    # contain a space. REQUIRE_COHORTS="SGDP ALMARRI" would otherwise put
+    # ALMARRI in the argument position where sbatch expects the script.
+    # 1c accepts the list comma- or space-separated.
+    _e2="ALL"
+    [[ -n "${HGDP1KG_PATTERN:-}" ]] && _e2="${_e2},HGDP1KG_PATTERN=${HGDP1KG_PATTERN}"
+    [[ -n "${REQUIRE_COHORTS:-}" ]] && _e2="${_e2},REQUIRE_COHORTS=${REQUIRE_COHORTS// /,}"
+    [[ -n "${EXCLUDE_IDS:-}"     ]] && _e2="${_e2},EXCLUDE_IDS=${EXCLUDE_IDS}"
+    case "$_e2" in
+        *" "*) die "a value passed to stage 2 contains a space: ${_e2}" ;;
+    esac
+    J2=$(submit "stage2_phase_panel" \
+         "--array=1-22%${THROTTLE} $(dep_of "$J1") --export=${_e2}" \
          ./1c_phasing-jointcall_clm.sh)
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"

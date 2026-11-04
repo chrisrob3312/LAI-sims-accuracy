@@ -102,6 +102,32 @@ MXB_LIFTED="${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
 # non-empty it is merged into the panel alongside HGDP+1KG and MXB. If
 # absent the merge proceeds with just HGDP+1KG + MXB (backwards compatible).
 SGDP_PREPPED="${SGDP_PREPPED:-${OUTDIR}/sgdp_prepped.chr${CHR}.bcf}"
+# Almarri prepped BCF from 1d_almarri_prep_clm.sh. Same contract as SGDP:
+# merged if present and non-empty, skipped if absent.
+ALMARRI_PREPPED="${ALMARRI_PREPPED:-${OUTDIR}/almarri_prepped.chr${CHR}.bcf}"
+
+# ----------------------------------------------------------------------------
+# EXCLUDE_IDS -- samples dropped from the panel before anything is merged.
+#
+# This exists because the unfiltered HGDP+1KG source (HGDP1KG_PATTERN pointed
+# at the u235158 archive) restores 60 samples that the default relatedness-
+# filtered source had removed, and ONE of them must not come back:
+#
+#   CHMI_CHMI3_WGS2 -- a complete hydatidiform mole cell line. A CHM genome is
+#   androgenetic and effectively haploid: every site is homozygous. It is used
+#   as a reference-quality assembly control, not as a population sample. In an
+#   ADMIXTURE panel it is a sample with no heterozygosity at all, and as an
+#   admix-simu donor it would contribute haplotypes that do not come from a
+#   population. It is excluded by name, not by a heterozygosity filter, so the
+#   reason is recorded rather than inferred.
+#
+# The default list lives in the repo so the exclusion travels with the code
+# and is visible in the diff, instead of being an env var someone forgets.
+# Exclusion is applied to EVERY cohort, not just HGDP+1KG, so an ID appearing
+# in two sources cannot slip in through the other one.
+# ----------------------------------------------------------------------------
+EXCLUDE_IDS="${EXCLUDE_IDS:-${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/reference_ids/panel_exclude_ids.txt}"
+
 mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 
 [[ -s "$MXB_LIFTED"     ]] || { echo "ERROR: missing $MXB_LIFTED. Run 1a_prep-mxb-liftover_clm.sh first."; exit 1; }
@@ -151,8 +177,34 @@ HGDP1KG_CHR_SRC="${HGDP1KG_PATTERN//__CHR__/$CHR}"
 echo "[$(date +%T)] [chr${CHR}] drop kinship outliers from $HGDP1KG_CHR_SRC"
 OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.txt"
 awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
+
+# Fold the named exclusions in with the kinship outliers so there is ONE drop
+# list and one bcftools pass. Reported separately, because "excluded by name"
+# and "excluded as a kinship outlier" are different facts about the panel and
+# the methods have to state them differently.
+DROP_IDS="${TMPDIR}/drop_ids.chr${CHR}.txt"
+cp "$OUTLIERS_IDS" "$DROP_IDS"
+N_EXCL=0
+if [[ -s "$EXCLUDE_IDS" ]]; then
+    awk 'NF && $1 !~ /^#/ {print $1}' "$EXCLUDE_IDS" >> "$DROP_IDS"
+    N_EXCL=$(awk 'NF && $1 !~ /^#/' "$EXCLUDE_IDS" | wc -l)
+    echo "[$(date +%T)] [chr${CHR}] named exclusions from $(basename "$EXCLUDE_IDS"): ${N_EXCL}"
+    # Say which of them were actually present, so an ID that has been renamed
+    # upstream shows up as "not found" instead of passing as "excluded".
+    while read -r _id; do
+        if bcftools query -l "$HGDP1KG_CHR_SRC" | grep -Fxq "$_id"; then
+            echo "[$(date +%T)] [chr${CHR}]   excluding ${_id} (present in source)"
+        else
+            echo "[$(date +%T)] [chr${CHR}]   ${_id} NOT in this source (nothing to exclude)"
+        fi
+    done < <(awk 'NF && $1 !~ /^#/ {print $1}' "$EXCLUDE_IDS")
+else
+    echo "[$(date +%T)] [chr${CHR}] no exclusion list at $EXCLUDE_IDS"
+fi
+sort -u -o "$DROP_IDS" "$DROP_IDS"
+
 HGDP1KG_PREP="${TMPDIR}/hgdp1kg_chr${CHR}.prep.bcf"
-bcftools view -S "^${OUTLIERS_IDS}" --force-samples \
+bcftools view -S "^${DROP_IDS}" --force-samples \
     --threads "$THREADS" -Ob -o "$HGDP1KG_PREP" "$HGDP1KG_CHR_SRC"
 bcftools index "$HGDP1KG_PREP"
 NHGDP1KG=$(bcftools view "$HGDP1KG_PREP" -H | wc -l)
@@ -186,44 +238,110 @@ fi
 #    HGDP+1KG/MXB convention so the merge and SHAPEIT5 --region line up.
 MERGE_INPUTS=("$HGDP1KG_CHR" "$MXB_LIFTED")
 
-if [[ -s "$SGDP_PREPPED" ]]; then
-    NSAMP_SGDP=$(bcftools query -l "$SGDP_PREPPED" | wc -l)
-    echo "[$(date +%T)] [chr${CHR}] SGDP present: ${NSAMP_SGDP} samples -> merge"
-    if bcftools view -h "$SGDP_PREPPED" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
-        SGDP_CHR="$SGDP_PREPPED"
-    elif bcftools view -h "$SGDP_PREPPED" | grep -q "^##contig=<ID=${CHR}[,>]"; then
-        echo "[$(date +%T)] [chr${CHR}] rename SGDP contigs to chr-prefixed"
-        SGDP_RENAME_TXT="${TMPDIR}/sgdp_rename_to_chr.txt"
-        : > "$SGDP_RENAME_TXT"
-        for c in {1..22} X Y MT; do echo "$c chr$c" >> "$SGDP_RENAME_TXT"; done
-        SGDP_CHR="${TMPDIR}/sgdp_chr${CHR}.rechr.bcf"
-        bcftools annotate --rename-chrs "$SGDP_RENAME_TXT" \
-            --threads "$THREADS" -Ob -o "$SGDP_CHR" "$SGDP_PREPPED"
-        bcftools index "$SGDP_CHR"
+# Running list of sample IDs already in the merge. Each additional cohort is
+# deduplicated against ALL of it, not just against HGDP+1KG: once more than one
+# optional cohort can join, "already present" has to mean present in any of
+# them, or Almarri could re-introduce an ID that SGDP had just contributed.
+SEEN_IDS="${TMPDIR}/seen_ids.chr${CHR}.txt"
+{ bcftools query -l "$HGDP1KG_CHR"; bcftools query -l "$MXB_LIFTED"; } \
+    | sort -u > "$SEEN_IDS"
+echo "[$(date +%T)] [chr${CHR}] base panel: $(wc -l < "$SEEN_IDS") samples (HGDP+1KG + MXB)"
+
+# add_cohort <label> <prepped bcf>
+#   Normalises contig naming, drops named exclusions and any ID already in the
+#   merge, appends to MERGE_INPUTS and extends SEEN_IDS. A cohort whose file is
+#   absent is skipped with a note; one whose file is present but unusable is a
+#   hard error, because silently phasing a panel that is missing a whole cohort
+#   is the failure that is expensive to discover later.
+add_cohort () {
+    local label="$1" src="$2" lc
+    lc=$(echo "$label" | tr 'A-Z' 'a-z')
+    if [[ ! -s "$src" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] no ${label} prepped BCF at ${src} -- skipping"
+        return 0
+    fi
+    local n; n=$(bcftools query -l "$src" | wc -l)
+    echo "[$(date +%T)] [chr${CHR}] ${label} present: ${n} samples -> merge"
+
+    local cur="$src"
+    if bcftools view -h "$cur" | grep -q "^##contig=<ID=chr${CHR}[,>]"; then
+        :
+    elif bcftools view -h "$cur" | grep -q "^##contig=<ID=${CHR}[,>]"; then
+        echo "[$(date +%T)] [chr${CHR}] rename ${label} contigs to chr-prefixed"
+        local rn="${TMPDIR}/${lc}_rename_to_chr.txt"
+        : > "$rn"
+        for c in {1..22} X Y MT; do echo "$c chr$c" >> "$rn"; done
+        local out="${TMPDIR}/${lc}_chr${CHR}.rechr.bcf"
+        bcftools annotate --rename-chrs "$rn" --threads "$THREADS" -Ob -o "$out" "$cur"
+        bcftools index "$out"
+        cur="$out"
     else
-        echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in $SGDP_PREPPED header"
-        exit 1
+        echo "ERROR: neither 'chr${CHR}' nor '${CHR}' contig in ${src} header" >&2
+        return 1
     fi
-    # Guard against sample-ID collisions between SGDP and HGDP+1KG/MXB:
-    # bcftools merge aborts on duplicate sample names. Drop any SGDP sample
-    # already present in the HGDP+1KG prep (e.g. an LP ID in both releases).
-    DUP_IDS="${TMPDIR}/sgdp_dup_ids.chr${CHR}.txt"
-    comm -12 \
-        <(bcftools query -l "$SGDP_CHR"       | sort -u) \
-        <(bcftools query -l "$HGDP1KG_PREP"   | sort -u) > "$DUP_IDS" || true
-    if [[ -s "$DUP_IDS" ]]; then
-        NDUP=$(wc -l < "$DUP_IDS")
-        echo "[$(date +%T)] [chr${CHR}] dropping ${NDUP} SGDP samples already in HGDP+1KG"
-        SGDP_DEDUP="${TMPDIR}/sgdp_chr${CHR}.dedup.bcf"
-        bcftools view -S "^${DUP_IDS}" --force-samples \
-            --threads "$THREADS" -Ob -o "$SGDP_DEDUP" "$SGDP_CHR"
-        bcftools index "$SGDP_DEDUP"
-        SGDP_CHR="$SGDP_DEDUP"
+
+    # bcftools merge aborts on duplicate sample names, so collisions have to go
+    # before the merge, not after. Named exclusions are applied here too: an ID
+    # on the exclusion list must not enter through a cohort other than the one
+    # it was noticed in.
+    local drop="${TMPDIR}/${lc}_drop_ids.chr${CHR}.txt"
+    comm -12 <(bcftools query -l "$cur" | sort -u) "$SEEN_IDS" > "$drop" || true
+    if [[ -s "$EXCLUDE_IDS" ]]; then
+        awk 'NF && $1 !~ /^#/ {print $1}' "$EXCLUDE_IDS" >> "$drop"
     fi
-    MERGE_INPUTS+=("$SGDP_CHR")
-else
-    echo "[$(date +%T)] [chr${CHR}] no SGDP prepped BCF at $SGDP_PREPPED -- HGDP+1KG+MXB only"
-fi
+    sort -u -o "$drop" "$drop"
+    # Only count IDs this cohort actually carries, so the log does not report
+    # dropping samples that were never here.
+    local ndrop
+    ndrop=$(comm -12 <(bcftools query -l "$cur" | sort -u) "$drop" | wc -l)
+    if [[ "$ndrop" -gt 0 ]]; then
+        echo "[$(date +%T)] [chr${CHR}] dropping ${ndrop} ${label} samples (duplicate or excluded)"
+        local ded="${TMPDIR}/${lc}_chr${CHR}.dedup.bcf"
+        bcftools view -S "^${drop}" --force-samples --threads "$THREADS" \
+            -Ob -o "$ded" "$cur"
+        bcftools index "$ded"
+        cur="$ded"
+    fi
+
+    local kept; kept=$(bcftools query -l "$cur" | wc -l)
+    if [[ "$kept" -eq 0 ]]; then
+        echo "ERROR: ${label} contributed 0 samples to chr${CHR} after dedup." >&2
+        echo "       Its file exists, so this is a real problem (ID scheme" >&2
+        echo "       mismatch, or every sample already in the panel), not an" >&2
+        echo "       absent cohort. Refusing to phase a panel silently missing it." >&2
+        return 1
+    fi
+    echo "[$(date +%T)] [chr${CHR}] ${label} contributes ${kept} samples"
+    # Not `sort -m -o "$SEEN_IDS" "$SEEN_IDS" ...`: a merge sort streams its
+    # inputs, so writing back over one of them is not safe the way a plain
+    # `sort -o file file` is. Build beside it, then move.
+    bcftools query -l "$cur" | sort -u > "${TMPDIR}/${lc}_kept.txt"
+    sort -u "$SEEN_IDS" "${TMPDIR}/${lc}_kept.txt" > "${SEEN_IDS}.new"
+    mv "${SEEN_IDS}.new" "$SEEN_IDS"
+    MERGE_INPUTS+=("$cur")
+    return 0
+}
+
+# REQUIRE_COHORTS -- fail if a cohort that should be in this run is absent.
+# Checked BEFORE any cohort is added, so the run dies in seconds rather than
+# after the merge. The default is permissive for backwards compatibility, but
+# a publication run sets it: the expensive mistake is not a crash, it is
+# joint-phasing a panel quietly missing SGDP or Almarri and only noticing at
+# ADMIXTURE, by which point everything has to be re-phased.
+REQUIRE_COHORTS="${REQUIRE_COHORTS:-}"
+for _req in ${REQUIRE_COHORTS//,/ }; do
+    case "$_req" in
+        SGDP)    [[ -s "$SGDP_PREPPED"    ]] || { echo "ERROR: REQUIRE_COHORTS lists SGDP but $SGDP_PREPPED is missing" >&2; exit 1; } ;;
+        ALMARRI) [[ -s "$ALMARRI_PREPPED" ]] || { echo "ERROR: REQUIRE_COHORTS lists ALMARRI but $ALMARRI_PREPPED is missing" >&2; exit 1; } ;;
+        *)       echo "ERROR: REQUIRE_COHORTS has unknown cohort '$_req' (valid: SGDP ALMARRI)" >&2; exit 1 ;;
+    esac
+done
+[[ -n "$REQUIRE_COHORTS" ]] && echo "[$(date +%T)] [chr${CHR}] required cohorts present: ${REQUIRE_COHORTS}"
+
+add_cohort SGDP    "$SGDP_PREPPED"    || exit 1
+add_cohort ALMARRI "$ALMARRI_PREPPED" || exit 1
+
+echo "[$(date +%T)] [chr${CHR}] panel after all cohorts: $(wc -l < "$SEEN_IDS") samples"
 
 echo "[$(date +%T)] [chr${CHR}] bcftools merge (${#MERGE_INPUTS[@]} inputs)"
 bcftools merge --threads "$THREADS" \
