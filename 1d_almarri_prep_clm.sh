@@ -168,13 +168,28 @@ for f in "$VCF_DIR"/*.vcf.gz; do
         echo "ERROR: $(basename "$f") has no index. Run: bash $0 --index" >&2; exit 2; }
     base=$(basename "$f" .vcf.gz)
     sub="${TMP}/${base}.bcf"
-    if [[ ! -s "${sub}.csi" ]]; then
+    # Reuse a cached per-sample BCF only if it READS BACK. Testing for the
+    # index alone accepts a truncated BCF beside a complete .csi, which is
+    # what a killed task leaves -- and these are cached precisely so a rerun
+    # after a kill is cheap, so that is the common case, not a rare one.
+    if [[ -s "$sub" && -s "${sub}.csi" ]] && bcftools view -h "$sub" >/dev/null 2>&1; then
+        :
+    else
+        rm -f "$sub" "${sub}.csi"
+        # Build beside the target and move, so this loop never leaves a
+        # half-written pair for the next run to find.
         bcftools view -r "$REGION" -f PASS -i "FMT/GQ>${MIN_GQ}" -Ou "$f" 2>/dev/null \
           | bcftools norm -c ws -m -snps --fasta-ref "$REF_FA" -Ou 2>/dev/null \
-          | bcftools view --types snps --max-alleles 2 -Ob -o "$sub" 2>/dev/null
-        bcftools index "$sub"
+          | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.part" 2>/dev/null
+        bcftools index "${sub}.part"
+        mv "${sub}.part.csi" "${sub}.csi"
+        mv "${sub}.part" "$sub"
     fi
-    NREC=$(bcftools view -H "$sub" 2>/dev/null | wc -l)
+    # Record count from the INDEX, not by reading the file. `bcftools view -H
+    # | wc -l` re-reads every per-sample BCF on every run, 137 of them per
+    # chromosome, which on a resumed task is most of the work for no new
+    # information.
+    NREC=$(bcftools index -n "$sub" 2>/dev/null || echo 0)
     if [[ "$NREC" -eq 0 ]]; then
         # A sample with no surviving variant on this chromosome still has to
         # join the merge, or it silently vanishes from the panel on this
