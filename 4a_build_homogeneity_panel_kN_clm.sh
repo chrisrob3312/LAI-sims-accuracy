@@ -145,6 +145,25 @@ ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
 ANCHOR_CAP="${ANCHOR_CAP:-50}"
 HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 
+# TIERED homogeneity cut. HOMOG_THRESHOLD above is the FLOOR and the default
+# for any super-pop not named here; HOMOG_THRESHOLD_STRICT applies to the
+# groups that have enough samples to afford it.
+#
+# WHY TWO NUMBERS. The cut trades purity against panel size, and the two sides
+# of that trade are not symmetric across super-pops. EUR, EAS and AFR are
+# richly sampled in HGDP+1KG, so 0.95 costs them little and buys cleaner
+# reference haplotypes. AMR, OCE, MEN and SAS are not: at 0.95 they lose
+# members the panel cannot spare, and a thin reference panel for exactly the
+# ancestries whose local-ancestry calls are hardest is the failure this whole
+# project is measuring. So the under-represented groups sit at 0.93.
+#
+# This is a deliberate asymmetry and it belongs in the methods: the panel is
+# not "samples above one Q", it is "samples above a per-super-pop Q", and the
+# per-super-pop counts and cut are printed in the stage C log and carried in
+# homog_composition.k${K}.tsv.
+HOMOG_THRESHOLD_STRICT="${HOMOG_THRESHOLD_STRICT:-0.95}"
+HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
+
 # SGDP candidate pools (from scripts/fetch-sgdp-anchors.py). Used as exemplars
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
 # These are CANDIDATES, not anchors -- anchors are the top-N discovered here.
@@ -635,12 +654,27 @@ SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"
 python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.${K}.Q" \
     "${UNSUP_DIR}/lai_ref.${K}.Q" "${ADM_DIR}/lai_ref.pop" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" "$SGDP_MANIFEST" \
-    "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SIM_DONORS" "$SAMPLES_TSV" <<'PYEOF'
+    "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SIM_DONORS" "$SAMPLES_TSV" \
+    "$HOMOG_THRESHOLD_STRICT" "$HOMOG_STRICT_SUPERPOPS" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
 (fam, qs_f, qu_f, pop_f, groups_f, gnomad_f, mxb_pop_f, sgdp_manifest_f,
- sas_f, thresh, K, donors_f, out) = sys.argv[1:14]
-thresh = float(thresh); K = int(K)
+ sas_f, thresh, K, donors_f, out, thresh_strict, strict_sps) = sys.argv[1:16]
+thresh = float(thresh); K = int(K); thresh_strict = float(thresh_strict)
+
+# Tiered homogeneity cut: the strict value for the richly-sampled super-pops,
+# the floor for everyone else. See HOMOG_THRESHOLD_STRICT in the config block
+# for why the asymmetry is deliberate.
+STRICT = {x.strip().upper() for x in strict_sps.replace(",", " ").split() if x.strip()}
+if thresh_strict < thresh:
+    sys.exit(f"ERROR: HOMOG_THRESHOLD_STRICT ({thresh_strict}) is below "
+             f"HOMOG_THRESHOLD ({thresh}). The strict tier must be at least as "
+             f"strict as the floor, or the two tiers are the wrong way round.")
+def thresh_for(sp):
+    return thresh_strict if sp in STRICT else thresh
+print(f"[homog] tiered cut: {sorted(STRICT)} at Q>={thresh_strict}, "
+      f"all others at Q>={thresh}", file=sys.stderr)
+n_by_sp = {}; n_seen_by_sp = {}
 
 sg = {}
 with open(groups_f) as f:
@@ -829,8 +863,10 @@ with open(out, "w") as g:
             # Leftover cluster -> pooled panel only, never the homogeneous one.
             included = 0
         else:
-            included = 1 if (max_qs >= thresh and ap_sup == sp) else 0
+            included = 1 if (max_qs >= thresh_for(sp) and ap_sup == sp) else 0
         n_incl += included
+        n_by_sp[sp] = n_by_sp.get(sp, 0) + included
+        n_seen_by_sp[sp] = n_seen_by_sp.get(sp, 0) + 1
         g.write("\t".join(
             [s, co, p, sp, a]
             + [f"{x:.4f}" for x in qs_ordered] + [f"{max_qs:.4f}", ap_sup]
@@ -838,6 +874,10 @@ with open(out, "w") as g:
                                                   str(agree), str(included)]
         ) + "\n")
     print(f"included {n_incl}/{len(samples)}", file=sys.stderr)
+    print("  per super-pop (threshold applied, kept/seen):", file=sys.stderr)
+    for _sp in sorted(n_seen_by_sp):
+        print(f"    {_sp:4s} Q>={thresh_for(_sp):.2f}  "
+              f"{n_by_sp.get(_sp,0):5d}/{n_seen_by_sp[_sp]:-5d}", file=sys.stderr)
 
 # --------------------------------------------------------------------------
 # PER-POPULATION MEAN-Q TABLE (the refinement artifact).

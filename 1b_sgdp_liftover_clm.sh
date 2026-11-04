@@ -7,7 +7,7 @@
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=04:00:00
 #SBATCH --time-min=00:30:00
-#SBATCH --mem=16G
+#SBATCH --mem=48G
 #SBATCH --cpus-per-task=8
 #SBATCH --array=1-22
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/1b_sgdp_liftover_chr%a_%j.out
@@ -91,7 +91,27 @@ HG38_FA="${HG38_FA:-/storage/atkinson/shared_resources/reference/reference_genom
 # UCSC hg19->hg38 chain (chr-prefixed contigs expected on both sides).
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
 # Picard heap. SGDP candidate panel is tiny (~277 samples) so 1a's 40g is plenty.
-PICARD_XMX="${PICARD_XMX:-24g}"
+# PICARD_XMX is DERIVED from the allocation, not set independently.
+#
+# It was a fixed 24g against #SBATCH --mem=16G. A JVM given -Xmx24g inside a
+# 16 GB cgroup does not fail politely: it grows until the kernel kills it.
+# Task 15 died at 19.59 GB, 122% of its limit, exit 255 -- after the multi-GB
+# download had already finished. Nothing in the script could catch it, because
+# the process is killed, not returned an error.
+#
+# Deriving the heap from SLURM_MEM_PER_NODE means raising or lowering --mem
+# moves both numbers together, so they cannot silently disagree again. The
+# headroom covers the JVM's own non-heap use (metaspace, GC, thread stacks,
+# direct buffers) plus the bcftools processes in the same pipeline.
+if [[ -z "${PICARD_XMX:-}" && -n "${SLURM_MEM_PER_NODE:-}" ]]; then
+    _hdr=$(( SLURM_MEM_PER_NODE / 4 ))
+    [[ "$_hdr" -lt 4096 ]] && _hdr=4096
+    _heap=$(( (SLURM_MEM_PER_NODE - _hdr) / 1024 ))
+    [[ "$_heap" -lt 4 ]] && _heap=4
+    PICARD_XMX="${_heap}g"
+    echo "[1b] heap derived from allocation: --mem=${SLURM_MEM_PER_NODE}M -> -Xmx${PICARD_XMX}"
+fi
+PICARD_XMX="${PICARD_XMX:-8g}"
 
 set -euo pipefail
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}
