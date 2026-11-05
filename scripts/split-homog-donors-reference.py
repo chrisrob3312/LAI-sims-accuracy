@@ -169,6 +169,14 @@ def main():
                     help="deprecated and ignored; --mode now selects the policy")
     ap.add_argument("--kg-cohort", default="1KG",
                     help="value of the cohort column marking 1000 Genomes")
+    ap.add_argument("--server-panel-ids",
+                    default="reference_ids/sgdp_server_panel_ids.txt",
+                    help="extra ids that are inside an imputation server's "
+                         "reference panel under ANOTHER identifier, and so "
+                         "are donor-ineligible even though their cohort is "
+                         "not 1000 Genomes. Written by "
+                         "scripts/sgdp-alias-duplicates.py. Missing file = "
+                         "empty, with a warning.")
     ap.add_argument("--ref-fraction", type=float, default=REF_FRACTION_DEFAULT)
     ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
@@ -177,6 +185,26 @@ def main():
     args = ap.parse_args()
 
     _ = args.source_split  # deprecated; --mode selects the policy
+
+    # Ids that are inside a server panel under another identifier. Only used
+    # in benchmark mode; in lai mode no source rule applies at all.
+    server_ids = set()
+    if args.mode == "benchmark":
+        try:
+            with open(args.server_panel_ids) as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s and not s.startswith("#"):
+                        server_ids.add(s)
+            print(f"[split] server-panel ids (donor-ineligible): {len(server_ids)}")
+        except FileNotFoundError:
+            print(f"[split] WARNING: {args.server_panel_ids} not found.\n"
+                  f"        SGDP re-sequenced 1000 Genomes individuals; without\n"
+                  f"        this list they read as cohort SGDP and become\n"
+                  f"        DONOR-ELIGIBLE while their haplotypes sit in the\n"
+                  f"        imputation servers' panels under an NA/HG id.\n"
+                  f"        Generate it: python3 -I scripts/sgdp-alias-duplicates.py",
+                  file=sys.stderr)
 
     # --- read the panel ---------------------------------------------------
     rows = []
@@ -228,10 +256,18 @@ def main():
         if args.mode == "lai":
             kg, nonkg = [], list(members)
         else:
-            kg = sorted(r["sample"] for r in members
-                        if r["cohort"].strip().upper() == args.kg_cohort.upper())
-            nonkg = [r for r in members
-                     if r["cohort"].strip().upper() != args.kg_cohort.upper()]
+            # Donor-ineligible = cohort is 1000 Genomes, OR the sample is a
+            # 1000 Genomes individual re-sequenced under another id. SGDP
+            # re-sequenced 41 of the people on our candidate list; they read
+            # as cohort SGDP and would otherwise be donor-eligible while their
+            # haplotypes sit in TOPMed's panel under an NA/HG identifier.
+            # De-duplication does not catch this: the 1000 Genomes copy need
+            # not be in OUR panel for the server to hold that person.
+            def _is_kg(r):
+                return (r["cohort"].strip().upper() == args.kg_cohort.upper()
+                        or r["sample"].strip() in server_ids)
+            kg = sorted(r["sample"] for r in members if _is_kg(r))
+            nonkg = [r for r in members if not _is_kg(r)]
 
         n_ref, n_don, status = plan_sizes(
             n, args.ref_fraction, args.ref_floor, args.ref_target,
