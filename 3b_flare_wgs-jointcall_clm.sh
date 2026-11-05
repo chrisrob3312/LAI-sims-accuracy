@@ -69,7 +69,19 @@ PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"
 PEL_EAS_RFMIX="${PEL_EAS_RFMIX:-${REFS}/pel_eas_rfmix.txt}"
 
 # FLARE jar. No conda package, so this is a path to flare.jar.
-FLARE_JAR="${FLARE_JAR:-/storage/atkinson/shared_resources/software/flare/flare.jar}"
+# FLARE is distributed as a single jar by the Browning lab; there is no conda
+# package. Searched in a few plausible places so a working install is picked
+# up without an env var, but NOT guessed silently: if none is found the error
+# says where to get it.
+_flare_default=""
+for _p in "${PROJECT_ROOT}/software/flare.jar" \
+          "/storage/atkinson/shared_resources/software/flare/flare.jar" \
+          "/storage/atkinson/shared_resources/software/flare.jar" \
+          "${HOME}/software/flare.jar" \
+          "${HOME}/flare.jar"; do
+    [[ -s "$_p" ]] && { _flare_default="$_p"; break; }
+done
+FLARE_JAR="${FLARE_JAR:-$_flare_default}"
 FLARE_XMX="${FLARE_XMX:-}"      # derived from the allocation below if unset
 FLARE_GEN="${FLARE_GEN:-}"      # defaults to GEN (the simulated generations)
 FLARE_MIN_MAC="${FLARE_MIN_MAC:-50}"
@@ -151,7 +163,31 @@ if [[ -s "${OUT_PREFIX}.anc.vcf.gz" ]]; then
     exit 0
 fi
 
-for f in "$PANEL" "$GMAP" "$FLARE_JAR"; do
+if [[ -z "$FLARE_JAR" || ! -s "$FLARE_JAR" ]]; then
+    cat >&2 <<EOF
+ERROR: flare.jar not found.
+
+  Looked in:
+    ${PROJECT_ROOT}/software/flare.jar
+    /storage/atkinson/shared_resources/software/flare/flare.jar
+    /storage/atkinson/shared_resources/software/flare.jar
+    ${HOME}/software/flare.jar
+    ${HOME}/flare.jar
+
+  FLARE is one jar from the Browning lab, no conda package:
+    mkdir -p ${PROJECT_ROOT}/software
+    wget -O ${PROJECT_ROOT}/software/flare.jar https://faculty.washington.edu/browning/flare.jar
+    java -jar ${PROJECT_ROOT}/software/flare.jar  # prints usage if it works
+
+  Or point at an existing copy:
+    FLARE_JAR=/path/to/flare.jar sbatch ... 3b_flare_wgs-jointcall_clm.sh
+
+  If it is already somewhere else on this cluster:
+    find /storage/atkinson -name 'flare*.jar' 2>/dev/null
+EOF
+    exit 1
+fi
+for f in "$PANEL" "$GMAP"; do
     [[ -s "$f" ]] || { echo "ERROR: missing $f"; exit 1; }
 done
 command -v java >/dev/null || { echo "ERROR: java not on PATH (FLARE is a jar)"; exit 1; }
