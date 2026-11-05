@@ -1,126 +1,163 @@
 # Reference and donor panels: who may be a reference, who may be a donor
 
-Decided 2026-11-04. This governs the **genotyping-pipeline benchmark set**
-(project B). The LAI simulation and accuracy paper (project A) keeps its own
-three comparison arms and is described at the bottom.
+Decided 2026-11-04/05. There are **three** panel sets built from the same
+homogeneous pool, under different rules, for different purposes. Confusing
+them is the main way this goes wrong, so they are named here and kept apart
+everywhere else.
 
-## The one rule everything else serves
+| # | set | built by | rule |
+|---|---|---|---|
+| 1 | LAI / ADMIXTURE reference panels (project A) | `split-homog-donors-reference.py --mode lai` | even stratified split, every super-pop, no source rule |
+| 2 | Benchmarking panels (project B) | `... --mode benchmark` | same split, **plus** 1000 Genomes may never be a donor |
+| 3 | The full homogeneous panel | `4a` stage C, unsplit | everything that clears its tier. Never used as a benchmark reference |
+
+## The one rule all three serve
 
 **A haplotype used as a simulation donor must never appear in the reference
-panel the ancestry method is given.** If it does, the method is scored on
-haplotypes it was handed as reference, and the benchmark is circular — it
-measures memorisation, not inference.
+panel the method is given.** Otherwise the method is scored on haplotypes it
+was handed, and the result measures memorisation.
 
-`4a_build_homogeneity_panel_kN_clm.sh` enforces this for the homogeneous panel
-by unioning every `reference_ids/*_simulation.txt` and excluding that union,
-for every ancestry. `2b_simulation_clm.sh` has the matching gate on the donor
-side. Neither is advisory.
+`4a` enforces this for the homogeneous panel by excluding the union of every
+`reference_ids/*_simulation.txt`, for every ancestry. `2b` has the matching
+gate on the donor side. The splitter adds two more checks, both fatal: a
+sample on both sides within a super-pop, and a sample that is a reference for
+one super-pop and a donor for another — same person, same haplotypes.
 
-## The policy, per super-pop
+## The split, for sets 1 and 2
 
-Two tiers, because the two situations are genuinely different.
+One formula, applied per super-pop to the number of homogeneous samples `N`:
 
-### EUR, EAS, AFR — reference is 1000 Genomes only
+```
+reference = clamp(round(0.5 × N), 15, 65)
+donors    = N − reference
+```
 
-These have enough 1000 Genomes samples to build a reference panel without
-touching anything else. So:
-
-| role | drawn from |
-|---|---|
-| LAI reference | homogeneous **1000 Genomes** samples only, Q ≥ 0.95 |
-| simulation donors | HGDP, SGDP, Almarri, MXB — never 1000 Genomes |
-
-Donor/reference disjointness here is guaranteed **by source**, not by a split:
-no 1000 Genomes sample is ever a donor, no non-1000G sample is ever in these
-reference panels. That is the strongest form of the guarantee available and it
-costs nothing, because the samples are plentiful.
-
-Q ≥ 0.95 is the strict tier (`HOMOG_STRICT_SUPERPOPS`): these groups are
-richly sampled, so the stricter cut costs them little and buys cleaner
-reference haplotypes.
-
-### SAS, AMR, MEN, OCE — reference and donors both come from the homogeneous pool
-
-There are not enough 1000 Genomes samples to build a reference panel for these
-from 1000G alone. So both roles draw from the same homogeneous pool
-(HGDP + 1KG + MXB + SGDP + Almarri), and disjointness has to be **constructed**
-rather than inherited:
-
-| role | drawn from |
-|---|---|
-| LAI reference | homogeneous pool, Q ≥ 0.93, **disjoint half** |
-| simulation donors | homogeneous pool, Q ≥ 0.93, **the other half** |
-
-Q ≥ 0.93 is the floor tier. At 0.95 these groups lose members the panel cannot
-spare, and a thin reference panel for exactly the ancestries whose local
-ancestry is hardest to call is the thing this project exists to measure.
-
-**AMR specifically includes MXB in the reference panel**, so the Mexican-like
-cohort is tested against a reference that actually represents it rather than
-against HGDP Indigenous American alone.
-
-#### The cost of this tier, stated plainly
-
-Splitting one limited pool into two halves makes **both** halves smaller. The
-reference panel for SAS/AMR/MEN/OCE is therefore thinner than it would be if
-donors came from elsewhere, and the simulated cohorts draw from fewer distinct
-donor haplotypes — which raises the chance that simulated individuals become
-cryptic relatives of each other. That is a real cost, accepted deliberately
-because the alternative (reusing samples in both roles) is not a benchmark at
-all. The per-super-pop counts on each side must be reported, not assumed
-adequate, and the kinship among simulated individuals must be checked.
-
-## The precedent: MXB is already split this way
-
-`split_mxb_samples.R` splits the 50 MXB WGS genomes 25 donors / 25 reference,
-stratified by inferred genetic cluster so neither half is a biased sample of
-the whole:
-
-| cluster | n | donors | reference |
+| N | ref | donors | % donors |
 |---|---|---|---|
-| Nahua | 18 | 9 | 9 |
-| Zapotec/Mazatec | 10 | 5 | 5 |
-| Maya | 7 | 3 | 4 |
-| Totonac | 6 | 3 | 3 |
-| Tzotzil | 4 | 2 | 2 |
-| Tarahumara | 3 | 2 | 1 |
-| Huichol | 2 | 1 | 1 |
+| 400 | 65 | 335 | 84% |
+| 316 | 65 | 251 | 79% |
+| 200 | 65 | 135 | 68% |
+| 130 | 65 | 65 | 50% |
+| 100 | 50 | 50 | 50% |
+| 40 | 20 | 20 | 50% |
+| 30 | 15 | 15 | 50% |
+| <30 | — | — | refuses to split |
 
-The split within a cluster is deterministic (lexicographic sample ID, first
-*n* to donors) so it reproduces without seeded RNG. Verified: 25 and 25, zero
-overlap.
+Even until the cap bites at N = 130, then donors take the remainder — which
+clears 2/3 donors above N ≈ 195 without that being a separate rule. The cap of
+65 gives 130 haplotypes per ancestry, comfortably above the curated 50-sample
+panels. Below 30 the script writes nothing and exits non-zero: 10 reference
+individuals is not a panel, and the real options there are decisions, not
+defaults.
 
-**The SAS / MEN / OCE splits should follow this shape**: stratify by
-population within the super-pop, split deterministically inside each stratum.
-Splitting a super-pop at random instead would let one population land mostly
-on the donor side and another mostly on the reference side, so the benchmark
-would be measuring cross-population transfer while reporting it as
-within-super-pop accuracy.
+### Both sides are stratified by population
+
+Neither side is a biased sample of its super-pop. An unstratified split would
+let one population land mostly on the donor side and another mostly on the
+reference side, so the benchmark would measure cross-population transfer while
+reporting it as within-super-pop accuracy.
+
+Largest-remainder allocation, deterministic throughout (populations by name,
+samples by ID), so it reproduces with no seeded RNG. Flooring cannot erase a
+population from the reference side — verified on a 40-sample OCE whose
+smallest strata are 2 samples.
+
+Measured on the projected panel: MEN matches within **1.0 percentage point**
+across 8 populations, OCE within **5.0** across 6, AMR within **10.0**.
+
+`split_mxb_samples.R` is the precedent: 50 MXB genomes, 25/25, stratified by
+inferred cluster (Nahua 9/9, Zapotec/Mazatec 5/5, Maya 3/4 …), deterministic
+within each stratum. Verified 25 and 25, zero overlap.
+
+## What set 2 adds: 1000 Genomes may never be a donor
+
+Not a general tidiness rule — a specific one. **The imputation servers'
+reference panels (TOPMed, Michigan, All of Us) all contain 1000 Genomes.** A
+1000 Genomes simulation donor therefore has its own haplotypes sitting inside
+the server's panel, and the imputation is scored on data the server has
+memorised. No donor/reference split repairs that, because the leak is into a
+panel we do not control. So the exclusion is **by source**, and it applies to
+every super-pop, not only the ones with enough 1000 Genomes to build a
+reference from.
+
+Set 1 has no such rule. The LAI and ADMIXTURE panels are not imputed against
+those servers, so the circularity does not exist there and withholding 1000
+Genomes from donors would only shrink the pool for nothing.
+
+### How set 2 keeps the compositions matched anyway
+
+The non-1000G samples are split evenly and stratified, so both sides carry the
+same mix; the reference is then topped up from 1000 Genomes to its target.
+Taking the reference whole from one source and donors from another would make
+any difference between them a difference between *datasets*, which the
+benchmark would read as an ancestry effect.
+
+**Two consequences, both reported by the script rather than discovered later.**
+
+A population that exists only in 1000 Genomes can only ever be a reference.
+The script names every population that lands on one side only. PEL is the AMR
+case and accounts for that group's entire 10-point gap; GIH is the SAS case.
+These belong in the methods; they are not defects to tune away.
+
+Donor pools for the 1000G-rich super-pops are bounded by their non-1000G
+supply. On the projection: **SAS 24 donors, AFR 47, EUR 59** — against 335,
+569 and 555 in set 1. SAS at 24 is thin.
+
+## The SAS consequence, and what absorbs it
+
+A thin SAS donor pool limits how many simulated SAS-containing individuals can
+be made before they become cryptic relatives of each other. That cost does not
+fall evenly across the benchmark's three readings:
+
+- **Imputation accuracy, calibration and retention** are scored on real test
+  genomes as well as simulated ones, so SAS can lean on the **real admixed SAS
+  genomes** here.
+- **Local-ancestry accuracy** cannot. Real genomes have a WGS truth but nobody
+  recorded which ancestry each of their segments came from, so they carry no
+  tracts and are never scored for LAI. Only simulated individuals have
+  recorded truth tracts.
+
+So a thin SAS donor pool costs **SAS local-ancestry precision specifically**,
+while the imputation metrics stay well supplied. That is the right trade to
+make if one has to be made, and it is worth saying in the methods rather than
+reporting a wide SAS LAI interval without explaining it.
+
+The same reasoning applies to OCE, harder: with ~40 homogeneous samples it
+splits 20/20, and 20 donors is few. The decision to make once the real count
+lands is whether to simulate an OCE-containing admixture model at all, or to
+use OCE as a reference/control group only. Surfaced rather than buried in a
+ratio.
+
+## Set 3: the full homogeneous panel
+
+Everything clearing its tier — 0.95 for EUR/EAS/AFR, 0.93 for AMR/OCE/MEN/SAS
+(`HOMOG_STRICT_SUPERPOPS`) — kept whole and unsplit, as a resource for later
+work.
+
+**It must never be used as a benchmark reference panel.** It contains the
+donors. Keeping it intact and keeping it out of project B are the same
+decision, and the reason it is written down here is that it is otherwise the
+obvious thing for a later reader to reach for.
 
 ## Build order
 
-Everything below waits on the K = 8 supervised Q file from stage 3. Nothing
-here can be built from the candidate lists, because membership of the
-homogeneous pool is exactly what stage 3 decides.
+Everything waits on the K = 8 supervised Q file from stage 3. None of it can
+be built from the candidate lists, because membership of the homogeneous pool
+is exactly what stage 3 decides.
 
 1. Stage 3 writes `lai_ref_panel_samples.k8.tsv` and `homog_8pop_samples.txt`.
-2. Partition the homogeneous pool by super-pop and by source (1000 Genomes vs
-   everything else).
-3. EUR/EAS/AFR: reference = the 1000 Genomes slice. No split needed.
-4. SAS/AMR/MEN/OCE: stratified deterministic split into donor and reference
-   halves, following the MXB recipe.
-5. Write `*_simulation_b2.txt` and `*_reference_b2.txt` per super-pop.
-6. Run `scripts/check-donor-panel-disjointness.sh` over the result. It must
-   report zero overlap before anything is simulated.
+2. `split-homog-donors-reference.py --mode lai --suffix a` → set 1.
+3. `split-homog-donors-reference.py --mode benchmark --suffix b2` → set 2.
+4. Read the printed composition table and the per-super-pop counts before
+   simulating anything. The donor counts are what bound the cohort size.
+5. `scripts/check-donor-panel-disjointness.sh` must report zero overlap.
 
-## Project A (the LAI accuracy paper) is unchanged
-
-Project A compares three reference-panel arms and needs all three to coexist:
+## Project A's three comparison arms are unchanged
 
 | arm | reference panel |
 |---|---|
 | hgdp+pel | the curated `reference_ids/*_rfmix.txt` lists |
-| homog | the homogeneous panel, tiered Q (0.95 EUR/EAS/AFR, 0.93 others) |
+| homog | the homogeneous panel, tiered Q |
 | mxb | HGDP-NAT + MXB (`amr_hgdpmxb_rfmix.txt`) |
 
 This is why `4a` writes discovered anchors to `<sp>_anchors.k8.txt` and never

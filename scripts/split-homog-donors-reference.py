@@ -158,9 +158,15 @@ def main():
     ap.add_argument("--out", default="reference_ids")
     ap.add_argument("--suffix", default="b2",
                     help="written as <sp>_reference_<suffix>.txt / <sp>_simulation_<suffix>.txt")
-    ap.add_argument("--source-split", default="EUR,EAS,AFR",
-                    help="super-pops whose reference is the 1000 Genomes slice "
-                         "and whose donors are everything else (no withholding)")
+    ap.add_argument("--mode", choices=("benchmark", "lai"), default="benchmark",
+                    help="benchmark: 1000 Genomes is never a donor (its "
+                         "haplotypes sit inside the imputation servers' "
+                         "reference panels). lai: an even stratified split for "
+                         "every super-pop with no source rule, because the LAI "
+                         "and ADMIXTURE panels are not imputed against those "
+                         "servers and so carry no such circularity.")
+    ap.add_argument("--source-split", default="",
+                    help="deprecated and ignored; --mode now selects the policy")
     ap.add_argument("--kg-cohort", default="1KG",
                     help="value of the cohort column marking 1000 Genomes")
     ap.add_argument("--ref-fraction", type=float, default=REF_FRACTION_DEFAULT)
@@ -170,7 +176,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    source_split = {x.strip().upper() for x in args.source_split.replace(",", " ").split() if x.strip()}
+    _ = args.source_split  # deprecated; --mode selects the policy
 
     # --- read the panel ---------------------------------------------------
     rows = []
@@ -214,10 +220,18 @@ def main():
         # has memorised. That is circular in a way no split can repair, so the
         # exclusion is by SOURCE and applies to every super-pop, not only the
         # three that have enough 1000 Genomes to build a reference from.
-        kg = sorted(r["sample"] for r in members
-                    if r["cohort"].strip().upper() == args.kg_cohort.upper())
-        nonkg = [r for r in members
-                 if r["cohort"].strip().upper() != args.kg_cohort.upper()]
+        # In lai mode there is no source rule: every sample is eligible for
+        # either role, so the "non-1000G" pool is simply everyone and the
+        # 1000G top-up pool is empty. The rest of the allocation is identical,
+        # which is the point -- one stratified, deterministic code path, with
+        # the policy difference expressed only in who is eligible.
+        if args.mode == "lai":
+            kg, nonkg = [], list(members)
+        else:
+            kg = sorted(r["sample"] for r in members
+                        if r["cohort"].strip().upper() == args.kg_cohort.upper())
+            nonkg = [r for r in members
+                     if r["cohort"].strip().upper() != args.kg_cohort.upper()]
 
         n_ref, n_don, status = plan_sizes(
             n, args.ref_fraction, args.ref_floor, args.ref_target,
