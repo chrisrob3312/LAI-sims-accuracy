@@ -63,6 +63,12 @@ KEEP_DIR="${KEEP_DIR:-${PROJECT_ROOT}/panel_keep_files}"
 NAT_HGDP_RFMIX="${NAT_HGDP_RFMIX:-${REFS}/amr_rfmix.txt}"
 NAT_HGDPMXB_RFMIX="${NAT_HGDPMXB_RFMIX:-${REFS}/amr_hgdpmxb_rfmix.txt}"
 NAT_HGDPMXB_FULL_RFMIX="${NAT_HGDPMXB_FULL_RFMIX:-${KEEP_DIR}/panel5_HGDPMXB_FULL_IBS_YRI.keep}"
+# The HOMOG fork swaps ONLY the Indigenous American component for its
+# homogeneity-filtered list, keeping the same IBS and YRI references as every
+# other panel. That is the comparison it is for: whether filtering the NAT
+# reference on ADMIXTURE Q improves NAT calls. Swapping all three components
+# at once would confound which one caused a change.
+NAT_HOMOG_RFMIX="${NAT_HOMOG_RFMIX:-${REFS}/amr_homog_rfmix.txt}"
 IBS_RFMIX="${IBS_RFMIX:-${REFS}/eur_rfmix.txt}"
 YRI_RFMIX="${YRI_RFMIX:-${REFS}/afr_rfmix.txt}"
 PEL_RFMIX="${PEL_RFMIX:-${REFS}/pel_rfmix.txt}"
@@ -244,6 +250,7 @@ case "$TASK_PANEL" in
     NAT_PEL_EAS)        NAT_LIST="$PEL_EAS_RFMIX" ;;
     NAT_HGDPMXB)        NAT_LIST="$NAT_HGDPMXB_RFMIX" ;;
     NAT_HGDPMXB_FULL)   NAT_LIST="$NAT_HGDPMXB_FULL_RFMIX" ;;
+    NAT_HOMOG)          NAT_LIST="$NAT_HOMOG_RFMIX" ;;
     *) echo "ERROR: unknown panel ${TASK_PANEL}"; exit 1 ;;
 esac
 [[ -s "$NAT_LIST" ]] || { echo "ERROR: missing NAT list $NAT_LIST for ${TASK_PANEL}"; exit 1; }

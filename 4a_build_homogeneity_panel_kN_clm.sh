@@ -1020,6 +1020,44 @@ awk -F'\t' -v d="${HOMOG_DIR}/homog_${K}pop_by_superpop" '
 echo "  per-super_pop ID lists -> ${HOMOG_DIR}/homog_${K}pop_by_superpop/"
 
 # ---------------------------------------------------------------------------
+# Publish the homogeneous lists where the 3b HOMOG forks actually look.
+#
+# THE BUG THIS FIXES. 3b_homog, 3b_chip_homog and the FLARE homog arm all read
+# reference_ids/amr_homog_rfmix.txt. Nothing wrote it: this script put its
+# output in homog_${K}pop_by_superpop/AMR_homog_samples.txt and the two names
+# were never connected. So the HOMOG fork silently kept using whatever
+# amr_homog_rfmix.txt was left from an earlier run -- a K=5 list of 45 ids --
+# while every other arm used the new K=8 panel. The homog comparison would
+# have been measuring the wrong panel, and nothing in its output would say so.
+#
+# Versioned copies are written first and never overwritten, so each K keeps
+# its own list. The unversioned name the 3b scripts read is then updated, with
+# the previous contents preserved beside it.
+for _SP in $SUPERPOPS; do
+    _src="${HOMOG_DIR}/homog_${K}pop_by_superpop/${_SP}_homog_samples.txt"
+    [[ -s "$_src" ]] || continue
+    _lc=$(echo "$_SP" | tr 'A-Z' 'a-z')
+    _ver="${REFS}/${_lc}_homog_rfmix.k${K}.txt"
+    cp "$_src" "$_ver"
+    _n=$(awk 'NF' "$_ver" | wc -l)
+    echo "  ${_SP} homogeneous -> $(basename "$_ver") (${_n})"
+
+    _cur="${REFS}/${_lc}_homog_rfmix.txt"
+    if [[ "${UPDATE_HOMOG_RFMIX:-1}" == "1" ]]; then
+        if [[ -s "$_cur" ]] && ! cmp -s "$_cur" "$_ver"; then
+            _bak="${_cur%.txt}.superseded.txt"
+            cp "$_cur" "$_bak"
+            echo "    previous $(basename "$_cur") ($(awk 'NF' "$_cur" | wc -l) ids)"
+            echo "    preserved as $(basename "$_bak")"
+        fi
+        cp "$_ver" "$_cur"
+        echo "    $(basename "$_cur") updated to the K=${K} set (${_n})"
+    fi
+done
+echo "  NOTE: the 3b HOMOG forks read reference_ids/<sp>_homog_rfmix.txt at RUN"
+echo "  time, so an already-queued stage 5 picks up these lists."
+
+# ---------------------------------------------------------------------------
 # 8. Subset each per-chr phased BCF to the homogeneous samples (K=7 set).
 # ---------------------------------------------------------------------------
 echo "[$(date +%T)] subset per-chr BCFs to homog samples"
