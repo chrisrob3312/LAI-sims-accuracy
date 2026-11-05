@@ -231,10 +231,25 @@ echo "[$(date +%T)] [chr${CHR}] prepared ${NS} per-sample BCFs (${NEMPTY} with n
 # -m none keeps records biallelic; they were split in step 2 and the panel is
 # biallelic SNVs throughout.
 # --------------------------------------------------------------------------
-echo "[$(date +%T)] [chr${CHR}] bcftools merge (${NS} samples) + missing2ref"
+echo "[$(date +%T)] [chr${CHR}] bcftools merge (${NS} samples) + missing2ref + strip to GT"
 MERGED="${TMP}/almarri.merged.bcf"
+# STRIP EVERYTHING BUT GT.
+#
+# Long Ranger writes PL, AD, GQ and barcode fields per genotype. Kept, they
+# made the merged chr1 8.4 GB and the whole cohort ~100 GB for 137 samples --
+# about 34 bytes per genotype where GT alone is a few.
+#
+# Nothing downstream reads them. SHAPEIT5 phases from GT, the 1c merge only
+# joins samples, and bcftools merge across cohorts would otherwise build the
+# UNION of every cohort's FORMAT fields, writing Almarri's extras as missing
+# for HGDP+1KG, MXB and SGDP -- paying for them across the whole panel, not
+# just this cohort.
+#
+# INFO is dropped for the same reason: these are per-sample call annotations
+# whose meaning does not survive a merge anyway.
 bcftools merge -m none -l "$LIST" --threads "$THREADS" -Ou \
-  | bcftools +missing2ref -Ob -o "$MERGED" --
+  | bcftools +missing2ref -Ou -- \
+  | bcftools annotate -x 'INFO,^FORMAT/GT' --threads "$THREADS" -Ob -o "$MERGED"
 bcftools index "$MERGED"
 
 # --------------------------------------------------------------------------
