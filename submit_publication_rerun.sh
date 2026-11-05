@@ -322,7 +322,7 @@ EOF
     echo "[precheck] HGDP1KG_PATTERN resolves: $_probe"
 fi
 
-J2=""
+J2=""; J2B=""
 if want 2; then
     # Pass the panel-composition settings explicitly rather than relying on
     # sbatch's default environment inheritance: these decide WHICH SAMPLES get
@@ -371,9 +371,26 @@ fi
 # (START_STAGE=1) and submit stages 2-6 later with AFTER_JOB=<stage1 jobid>.
 echo
 echo "============ STAGE 3: homogeneity filter (K=8 + SGDP discovery) ============"
+# ----------------------------------------------------------------- STAGE 2B
+# KING de-duplication, BETWEEN the merge and ADMIXTURE.
+#
+# It must precede stage 3 and cannot follow it: a person present twice is
+# counted twice by ADMIXTURE and pulls their population's centroid twice as
+# hard, so the Q matrix that the homogeneity cut and the donor/reference split
+# both read is wrong before either is computed. Removing the duplicate
+# afterwards means redoing both.
+J2B=""
+if want 3 && [[ "${RUN_KING:-1}" == "1" ]]; then
+    echo
+    echo "============ STAGE 2B: KING de-duplication ============"
+    J2B=$(submit "stage2b_king_dedup" "$(dep_of "$J2")" ./1e_king_dedup_clm.sh)
+fi
+
 J3=""
 if want 3; then
-    J3=$(submit "stage3_homog_kN" "$(dep_of "$J2")" \
+    # Stage 3 waits on KING when it ran, so 4a reads a finished drop list
+    # rather than whatever happens to be on disk.
+    J3=$(submit "stage3_homog_kN" "$(dep_of "${J2B:-$J2}")" \
          ./4a_build_homogeneity_panel_kN_clm.sh)
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
@@ -506,6 +523,7 @@ echo "orchestrator complete — jobs queued with afterok chain:"
 row () { [[ -n "$2" ]] && printf '  %-32s = %s\n' "$1" "$2" || printf '  %-32s   (not submitted)\n' "$1"; }
 row "stage 1 (SGDP prep)"        "$J1"
 row "stage 2 (rebuild panel)"    "$J2"
+row "stage 2b (KING dedup)"      "$J2B"
 row "stage 3 (homog filter)"     "$J3"
 row "stage 4 (simulate)"         "$J4"
 row "stage 5a (WGS main sweep)"  "$J5a"

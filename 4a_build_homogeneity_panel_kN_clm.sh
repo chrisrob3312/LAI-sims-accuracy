@@ -639,8 +639,27 @@ fi
 # only really for NAT. Enforce it here for EVERY ancestry by unioning all
 # *_simulation.txt donor lists and excluding them from the homogeneous panel.
 # ---------------------------------------------------------------------------
+# Duplicate individuals found by 1e (the same person under two IDs across
+# HGDP, 1KG, MXB, SGDP and Almarri). They are folded in with the simulation
+# donors because both are "must not be in the homogeneous panel", and because
+# a duplicate kept here would be counted twice by every per-super-pop statistic
+# downstream as well as handing one copy to a method that was given the other.
+# Absent file = 1e has not run; that is allowed, and said so, rather than
+# silently treated as "no duplicates exist".
+DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 SIM_DONORS="${SIM_DONORS:-${ADM_DIR}/simulation_donors.all.txt}"
 : > "$SIM_DONORS"
+if [[ -s "$DUP_DROP" ]]; then
+    N_DUP=$(awk 'NF && $1 !~ /^#/' "$DUP_DROP" | wc -l)
+    echo "[$(date +%T)]   duplicate drop list: $(basename "$DUP_DROP") (${N_DUP} ids)"
+    awk 'NF && $1 !~ /^#/ {print $1}' "$DUP_DROP" >> "$SIM_DONORS"
+else
+    echo "[$(date +%T)]   NOTE: no duplicate drop list at ${DUP_DROP}"
+    echo "[$(date +%T)]   1e_king_dedup has not run. The panel may contain the"
+    echo "[$(date +%T)]   same person twice under two IDs, which ADMIXTURE counts"
+    echo "[$(date +%T)]   twice and which can put one copy in a donor set and the"
+    echo "[$(date +%T)]   other in a reference panel."
+fi
 for f in "${REFS}"/*_simulation.txt; do
     [[ -s "$f" ]] || continue
     echo "[$(date +%T)]   donor list: $(basename "$f") ($(awk 'NF' "$f" | wc -l) ids)"

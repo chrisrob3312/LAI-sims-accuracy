@@ -190,7 +190,36 @@ fi
 for f in "$PANEL" "$GMAP"; do
     [[ -s "$f" ]] || { echo "ERROR: missing $f"; exit 1; }
 done
-command -v java >/dev/null || { echo "ERROR: java not on PATH (FLARE is a jar)"; exit 1; }
+# FLARE's jar is compiled for Java 11 (class file version 55). The cluster's
+# default java is 8 (version 52), which fails with
+#     UnsupportedClassVersionError: admix/AdmixMain has been compiled by a
+#     more recent version of the Java Runtime
+# at class-load time -- after the job has started and the reference VCF has
+# been built. So the version is checked up front, and a newer JDK inside the
+# conda env is preferred over the system one when present.
+JAVA_BIN="${JAVA_BIN:-}"
+if [[ -z "$JAVA_BIN" ]]; then
+    if [[ -x "${CONDA_PREFIX}/bin/java" ]]; then JAVA_BIN="${CONDA_PREFIX}/bin/java"
+    else JAVA_BIN="$(command -v java || true)"; fi
+fi
+[[ -n "$JAVA_BIN" ]] || { echo "ERROR: no java on PATH (FLARE is a jar)"; exit 1; }
+# "1.8.0_x" -> 8 ; "11.0.2" / "17.0.1" -> 11 / 17
+JAVA_VER=$("$JAVA_BIN" -version 2>&1 | awk -F'"' '/version/ {print $2; exit}' \
+           | awk -F. '{ if ($1=="1") print $2; else print $1 }')
+echo "[$(date +%T)] java: ${JAVA_BIN} (major ${JAVA_VER:-?})"
+if [[ -z "$JAVA_VER" || "$JAVA_VER" -lt 11 ]]; then
+    cat >&2 <<EOF
+ERROR: FLARE needs Java 11 or newer; ${JAVA_BIN} is major ${JAVA_VER:-unknown}.
+
+  Install one into the conda env (simplest, no module needed):
+    conda install -n ${CONDA_ENV} -c conda-forge openjdk=17
+  or point at an existing JDK:
+    JAVA_BIN=/path/to/jdk-17/bin/java sbatch ... 3b_flare_wgs-jointcall_clm.sh
+  or look for a module:
+    module avail java 2>&1 | head
+EOF
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 1. The reference VCF and its ancestry map.
@@ -274,7 +303,7 @@ OVERLAP=$(comm -12 <(bcftools query -l "$GT_VCF" | sort -u) \
 # ---------------------------------------------------------------------------
 GEN_ARG="${FLARE_GEN:-$GEN}"
 echo "[$(date +%T)] [chr${CHR}] FLARE: gen=${GEN_ARG} min-mac=${FLARE_MIN_MAC}"
-java "-Xmx${FLARE_XMX}" -jar "$FLARE_JAR" \
+"$JAVA_BIN" "-Xmx${FLARE_XMX}" -jar "$FLARE_JAR" \
     ref="$REF_VCF" \
     ref-panel="$REF_PANEL" \
     gt="$GT_VCF" \
