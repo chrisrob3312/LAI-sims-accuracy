@@ -91,10 +91,20 @@ FLARE_SEED="${FLARE_SEED:-20261105}"
 GMAP_DIR="${GMAP_DIR:-${REPO_DIR}/resources/gmap_hg38}"
 GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.hg38.gmap.txt}"
 
+# CHIP density. Unset = WGS. Set both to run FLARE at array density, so the
+# RFMix-vs-FLARE comparison exists at chip density too and not only on WGS.
+#
+# The crop is applied to the REFERENCE AND THE TARGET ALIKE. Cropping only the
+# target would leave FLARE a WGS reference panel to match array data against,
+# which is a different (and easier) problem than the one RFMix is given in 5c,
+# so the comparison would not be like for like.
+CHIP_NAME="${CHIP_NAME:-}"
+CHIP_SNPS_TPL="${CHIP_SNPS_TPL:-}"
+
 ADMIX_POP="${ADMIX_POP:-Brasa}"
 GEN="${GEN:-12}"
 SIM_DIR="${SIM_DIR:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}}"
-FLARE_OUTDIR="${FLARE_OUTDIR:-${PROJECT_ROOT}/03_flare}"
+FLARE_OUTDIR="${FLARE_OUTDIR:-${PROJECT_ROOT}/03_flare${CHIP_NAME:+_${CHIP_NAME}}}"
 
 TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"
 DEFAULT_PANELS="NAT_HGDP"
@@ -285,6 +295,32 @@ bcftools convert --hapsample2vcf "${HAPS},${SAMP}" -Oz -o "$GT_VCF" 2>/dev/null 
     bcftools convert --hapsample2vcf "${HAPS}" --samples-file "${SAMP}" \
         -Oz -o "$GT_VCF"; }
 bcftools index -t "$GT_VCF"
+
+# --- optional chip crop, applied to BOTH sides --------------------------
+if [[ -n "$CHIP_SNPS_TPL" ]]; then
+    CHIP_SNPS=$(printf "$CHIP_SNPS_TPL" "$CHR")
+    [[ -s "$CHIP_SNPS" ]] || { echo "ERROR: missing chip site list $CHIP_SNPS"; exit 1; }
+    # The lists are chr:pos with a bare chromosome; the VCFs are chr-prefixed.
+    CHIP_REG="${TMP}/chip_regions.chr${CHR}.txt"
+    awk -F: 'NF==2 {print "chr"$1"\t"$2}' "$CHIP_SNPS" | sort -k1,1 -k2,2n > "$CHIP_REG"
+    N_SITES=$(wc -l < "$CHIP_REG")
+    echo "[$(date +%T)] [chr${CHR}] cropping to ${CHIP_NAME}: ${N_SITES} sites"
+    for _v in REF GT; do
+        _src="${TMP}/$( [[ $_v == REF ]] && echo ref || echo target ).chr${CHR}.vcf.gz"
+        _dst="${_src%.vcf.gz}.chip.vcf.gz"
+        # -T, not -R: a streaming targets filter, so this does not depend on
+        # the index being usable for random access over ~600k scattered sites.
+        bcftools view -T "$CHIP_REG" --threads "$THREADS" -Oz -o "$_dst" "$_src"
+        bcftools index -t "$_dst"
+        mv "$_dst" "$_src"; mv "${_dst}.tbi" "${_src}.tbi"
+    done
+    N_REF_SITES=$(bcftools index -n "$REF_VCF" 2>/dev/null || echo 0)
+    echo "[$(date +%T)] [chr${CHR}] after crop: ${N_REF_SITES} sites in the reference"
+    [[ "$N_REF_SITES" -gt 0 ]] || {
+        echo "ERROR: chip crop left no sites. The site list and the panel" >&2
+        echo "       probably disagree on contig naming or build." >&2; exit 5; }
+fi
+
 N_GT=$(bcftools query -l "$GT_VCF" | wc -l)
 echo "[$(date +%T)] [chr${CHR}] target: ${N_GT} simulated individuals"
 [[ "$N_GT" -gt 0 ]] || { echo "ERROR: target VCF has no samples"; exit 1; }
