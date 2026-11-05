@@ -55,10 +55,36 @@ set -u
 unset PYTHONHOME PYTHONPATH
 export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
-# Skip if already done.
+# Skip if already done -- but "done" must mean "done FROM THE CURRENT CHUNKS",
+# not merely "a file with this name exists".
+#
+# These outputs persist across runs and the panel behind them changes. The
+# June build left 22 .rechr.bcf files on disk; after SGDP and Almarri were
+# added to the merge, a rerun would have found them, skipped all 22, and
+# handed the next stage a panel missing two entire cohorts -- valid files,
+# plausible sizes, nothing in any log to say the phasing never happened.
+#
+# The sample count separates the two cases and costs one index read.
 if [[ -s "$RECHR" && -s "${RECHR}.csi" ]]; then
-    echo "[$(date +%T)] [chr${CHR}] rechr BCF already exists, skipping"
-    exit 0
+    _n_have=$(bcftools query -l "$RECHR" 2>/dev/null | wc -l)
+    # Compare against a chunk that is about to be ligated, not against the
+    # soft-union: the chunks are what this step actually consumes.
+    _probe=$(awk -v c="chr${CHR}" -F'\t' 'NR>1 && $2==c {print $3; exit}' "$CHUNKS_TSV")
+    _probe_bcf="${CHUNK_DIR}/chr${CHR}_chunk${_probe}.phased.bcf"
+    _n_want=0
+    [[ -s "$_probe_bcf" ]] && _n_want=$(bcftools query -l "$_probe_bcf" 2>/dev/null | wc -l)
+    if [[ "$_n_want" -gt 0 && "$_n_have" -eq "$_n_want" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] rechr BCF current (${_n_have} samples), skipping"
+        exit 0
+    fi
+    if [[ "$_n_want" -eq 0 ]]; then
+        echo "[$(date +%T)] [chr${CHR}] cannot read a chunk to compare against;"
+        echo "[$(date +%T)] [chr${CHR}] re-ligating rather than trusting the existing file"
+    else
+        echo "[$(date +%T)] [chr${CHR}] STALE: existing rechr has ${_n_have} samples,"
+        echo "[$(date +%T)] [chr${CHR}] the chunks have ${_n_want} -- re-ligating"
+    fi
+    rm -f "$RECHR" "${RECHR}.csi" "$PHASED" "${PHASED}.csi"
 fi
 
 # Build the ordered chunk-file list for this chr.

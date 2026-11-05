@@ -59,8 +59,23 @@ mkdir -p "$CHUNK_DIR"
 
 # Idempotent: skip if already done.
 if [[ -s "$PHASED_CHUNK" && -s "${PHASED_CHUNK}.csi" ]]; then
-    echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] already done, skipping"
-    exit 0
+    # "Exists" is not "current". These chunks persist across runs, and the
+    # panel they were phased from changes: adding SGDP and Almarri to the
+    # merge leaves June's chunks on disk, byte-valid and silently wrong. A
+    # rerun would skip every one of them and ligate a panel missing two whole
+    # cohorts, with nothing in any log saying so.
+    #
+    # The sample count is the cheap discriminator: it comes from the index
+    # header, and a chunk phased from a different panel has a different one.
+    _n_have=$(bcftools query -l "$PHASED_CHUNK" 2>/dev/null | wc -l)
+    _n_want=$(bcftools query -l "$SOFTUNION" 2>/dev/null | wc -l)
+    if [[ "$_n_have" -eq "$_n_want" && "$_n_have" -gt 0 ]]; then
+        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] already done (${_n_have} samples), skipping"
+        exit 0
+    fi
+    echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] STALE: has ${_n_have} samples,"
+    echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] soft-union has ${_n_want} -- rebuilding"
+    rm -f "$PHASED_CHUNK" "${PHASED_CHUNK}.csi"
 fi
 
 module load anaconda3/2024.06
