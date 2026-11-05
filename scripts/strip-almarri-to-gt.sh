@@ -80,11 +80,41 @@ if [[ "$S_OLD" -ne "$S_NEW" || "$R_OLD" -ne "$R_NEW" ]]; then
     exit 2
 fi
 
-# Index first, then the BCF, so the final path never holds a pair the resume
+# NOTHING IS OVERWRITTEN. The original is RENAMED aside, under a name that
+# says what it is, and the reduced file takes the path 1c reads. So the full
+# Long Ranger FORMAT set is still on disk and recoverable by renaming back.
+#
+# The alternative -- writing the reduced file in place -- destroys the only
+# copy. It is rebuildable from ~/almarri_vcfs via 1d, but that is 20-30
+# minutes per chromosome to undo a mistake that costs nothing to avoid.
+#
+# Delete the kept originals yourself once you are satisfied; this script never
+# does. The command is printed at the end.
+KEEP="${OUTDIR}/almarri_prepped_withformat.chr${CHR}.bcf"
+if [[ -e "$KEEP" ]]; then
+    echo "ERROR: $KEEP already exists -- refusing to clobber a previously" >&2
+    echo "       preserved original. Move or remove it first." >&2
+    rm -f "$TMP_OUT" "${TMP_OUT}.csi"
+    exit 3
+fi
+mv "$SRC" "$KEEP"
+mv "${SRC}.csi" "${KEEP}.csi"
+# Index first, then the BCF, so the final path never holds a pair a resume
 # check would accept as finished while it is incomplete.
 mv "${TMP_OUT}.csi" "${SRC}.csi"
 mv "$TMP_OUT" "$SRC"
 AFTER=$(stat -c %s "$SRC")
+echo "[$(date +%T)] [chr${CHR}] original preserved: $(basename "$KEEP")"
 echo "[$(date +%T)] [chr${CHR}] done: $((BEFORE/1024/1024)) MB -> $((AFTER/1024/1024)) MB "\
      "($(awk -v a="$BEFORE" -v b="$AFTER" 'BEGIN{printf "%.1fx", (b>0?a/b:0)}') smaller), "\
      "${S_NEW} samples, ${R_NEW} records unchanged"
+cat <<EOF
+[chr${CHR}] The full-FORMAT original is kept at:
+    ${KEEP}
+Nothing downstream reads it: SHAPEIT5 phases from GT, RFMix and FLARE read
+phased GT, ADMIXTURE reads PLINK genotypes made from GT, and the paper's
+GQ>20 filter was already applied in 1d before the merge -- so what was
+dropped is the evidence behind decisions already taken, not the decisions.
+Once every chromosome is reduced and 1c has run, reclaim the space with:
+    rm ${OUTDIR}/almarri_prepped_withformat.chr*.bcf*
+EOF
