@@ -160,10 +160,39 @@ echo "[precheck] all stage scripts present"
 # A partial submit with no AFTER_JOB would queue stage N with NO dependency,
 # so it would start immediately against inputs the skipped stages have not
 # produced yet -- and fail hours later, or worse, succeed on stale inputs.
-if [[ "$START_STAGE" -gt 1 && -z "$AFTER_JOB" ]]; then
-    die "START_STAGE=${START_STAGE} needs AFTER_JOB=<jobid of the stage before it>.
-       Without it stage ${START_STAGE} would be queued with no dependency and
-       start at once, before its inputs exist. Find the job id with:
+# AFTER_JOB=none means "the inputs are already on disk, start now". It exists
+# because the normal case after a staged recovery is that every upstream array
+# has ALREADY COMPLETED and there is no job left to depend on -- at which point
+# demanding a job id would force inventing one, or waiting on an unrelated job.
+# It is spelled out rather than silently allowed, because a stage queued with
+# no dependency starts immediately, and if the inputs are not actually there it
+# fails 22 times over.
+if [[ "$AFTER_JOB" == "none" ]]; then
+    AFTER_JOB=""
+    echo "[precheck] AFTER_JOB=none -- no dependency; inputs must already exist"
+    if want 2; then
+        _missing=0
+        for _c in $(seq 1 22); do
+            for _f in "${PROJECT_ROOT}/01_merged_phased_panel/mxb_lifted.chr${_c}.bcf" \
+                      "${PROJECT_ROOT}/01_merged_phased_panel/sgdp_prepped.chr${_c}.bcf"; do
+                [[ -s "$_f" ]] || { echo "  MISSING: $_f" >&2; _missing=$((_missing+1)); }
+            done
+            _a="${PROJECT_ROOT}/01_merged_phased_panel/almarri_prepped.chr${_c}.bcf"
+            if [[ -n "${REQUIRE_COHORTS:-}" && "$REQUIRE_COHORTS" == *ALMARRI* ]]; then
+                [[ -s "$_a" ]] || { echo "  MISSING: $_a" >&2; _missing=$((_missing+1)); }
+            fi
+        done
+        [[ "$_missing" -eq 0 ]] || die "AFTER_JOB=none but ${_missing} stage-2 input(s) are absent.
+       Stage 2 would start at once and fail on every chromosome.
+       Wait for the upstream arrays, or pass their job id as AFTER_JOB."
+        echo "[precheck] all stage-2 inputs present on disk"
+    fi
+elif [[ "$START_STAGE" -gt 1 && -z "$AFTER_JOB" ]]; then
+    die "START_STAGE=${START_STAGE} needs AFTER_JOB=<jobid of the stage before it>,
+       or AFTER_JOB=none if every upstream array has already completed and its
+       outputs are on disk (the inputs are then checked before anything is
+       queued). Without either, stage ${START_STAGE} would be queued with no
+       dependency and start before its inputs exist. Find a job id with:
          squeue -u \$USER --format='%.12i %.20j %.8T'"
 fi
 [[ "$START_STAGE" -le "$STOP_STAGE" ]] || die "START_STAGE > STOP_STAGE"
