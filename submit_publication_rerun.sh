@@ -97,12 +97,43 @@ submit() {
     if [[ -n "$DRY_RUN" ]]; then
         echo "        (dry run — not submitted)" >&2
         echo "PLACEHOLDER_${label}"
-    else
-        local jid
-        jid=$("${line[@]}")
-        echo "        submitted as job ${jid}" >&2
-        echo "$jid"
+        return 0
     fi
+
+    # Retry, then DIE. This cluster enforces a QOS submit limit, and a chain
+    # of array jobs can hit it partway through: sbatch prints "Slurm
+    # temporarily unable to accept job, sleeping and retrying", exhausts its
+    # own retries and returns nothing.
+    #
+    # Returning an empty job id here is worse than failing. The caller stores
+    # it, the next stage's --dependency is built from it, and the chain
+    # continues around the hole -- which is how a FLARE arm vanished from a
+    # submission while every other stage queued normally and the summary
+    # looked complete.
+    local jid="" attempt
+    for attempt in 1 2 3 4 5; do
+        jid=$("${line[@]}" 2>/dev/null || true)
+        # --parsable prints the bare id (or id;cluster)
+        jid="${jid%%;*}"
+        [[ "$jid" =~ ^[0-9]+$ ]] && break
+        jid=""
+        local wait=$((attempt * 20))
+        echo "        sbatch did not return a job id (attempt ${attempt}/5);" \
+             "retrying in ${wait}s" >&2
+        sleep "$wait"
+    done
+    if [[ -z "$jid" ]]; then
+        die "could not submit [${label}] after 5 attempts.
+
+       sbatch returned no job id. The usual cause here is the QOS submit
+       limit: too many array jobs queued at once. Jobs already submitted in
+       this run are LEFT QUEUED -- note their ids from the lines above, wait
+       for some to finish, and resume with
+         START_STAGE=<this stage> AFTER_JOB=<the id this stage depends on>
+       rather than re-running the whole chain, which would duplicate them."
+    fi
+    echo "        submitted as job ${jid}" >&2
+    echo "$jid"
 }
 
 # Stage 0 runs python on the LOGIN NODE, where `module load anaconda3` and an
