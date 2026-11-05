@@ -335,7 +335,18 @@ bcftools +fixref "${TMPDIR}/sgdp.chr${CHR}.hg38.norm.bcf" \
 # atomic, so the final path only ever holds a finished pair.
 PREP_TMP="${TMPDIR}/sgdp_prepped.chr${CHR}.partial.bcf"
 rm -f "$PREP_TMP" "${PREP_TMP}.csi"
-bcftools view "${TMPDIR}/sgdp.chr${CHR}.hg38.fixref.bcf" -r "chr${CHR}" -Ou \
+# -t, NOT -r. `-r` (regions) does an indexed random-access lookup, and the
+# fixref output above is never indexed, so -r failed with
+#     [E::idx_find_and_load] Could not retrieve index file for ...fixref.bcf
+#     Failed to read ...: could not load index
+# bcftools view then emitted nothing, bcftools sort read an empty stdin, and
+# the task died with "Input is not detected as bcf or vcf format" -- an error
+# about the SORT, three steps downstream of the actual cause.
+#
+# `-t` (targets) is a streaming filter: no index required. It is also the
+# right tool here regardless, because this reads the whole file into a sort,
+# so there is nothing for random access to skip.
+bcftools view "${TMPDIR}/sgdp.chr${CHR}.hg38.fixref.bcf" -t "chr${CHR}" -Ou \
   | bcftools sort -m 8G -T "${TMPDIR}/sort" -Ob -o "$PREP_TMP"
 bcftools index "$PREP_TMP"
 bcftools view -h "$PREP_TMP" >/dev/null 2>&1 || {
