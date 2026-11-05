@@ -73,23 +73,31 @@ import os
 import sys
 from collections import defaultdict
 
-REF_TARGET_DEFAULT = 50
+REF_TARGET_DEFAULT = 65      # cap on the reference panel
 REF_FLOOR_DEFAULT = 15
 DONOR_FLOOR_DEFAULT = 15
-REF_FRACTION_DEFAULT = 0.375
+REF_FRACTION_DEFAULT = 0.5   # even split until the cap bites
 
 
 def plan_sizes(n, ref_fraction, ref_floor, ref_target, donor_floor):
-    """-> (n_reference, n_donors, status). status '' when the split is usable."""
+    """-> (n_reference, n_donors, status). status '' when the split is usable.
+
+    Even split, capped. With the defaults (0.5, floor 15, cap 65):
+
+        N = 400 -> 65 / 335   N = 100 -> 50 / 50
+        N = 200 -> 65 / 135   N =  40 -> 20 / 20
+        N = 130 -> 65 /  65   N =  30 -> 15 / 15
+
+    so a small pool is halved and a large one gives the reference its cap and
+    everything else to donors -- which lands above 2/3 donors for any pool
+    over ~195 without that being a separate rule.
+    """
     if n < ref_floor + donor_floor:
         return 0, 0, "UNDERSUPPLIED"
     ref = int(round(ref_fraction * n))
     ref = max(ref_floor, min(ref_target, ref))
     don = n - ref
     if don < donor_floor:
-        # The target took so much that donors fall below their floor; give the
-        # donors their floor and let the reference keep the rest. Only reachable
-        # between the two floors and the target.
         don = donor_floor
         ref = n - don
     return ref, don, ""
@@ -192,47 +200,113 @@ def main():
           f"{'%don':>6}  note")
     print("-" * 72)
 
-    written, problems = [], []
+    written, problems, comp_lines = [], [], []
     for sp in sorted(by_sp):
         members = by_sp[sp]
         n = len(members)
 
-        if sp in source_split:
-            ref = sorted(r["sample"] for r in members
-                         if r["cohort"].strip().upper() == args.kg_cohort.upper())
-            don = sorted(r["sample"] for r in members
-                         if r["cohort"].strip().upper() != args.kg_cohort.upper())
-            note = "reference = 1000G slice, donors = the rest"
-            if len(ref) < args.ref_floor:
-                note = (f"*** only {len(ref)} 1000G samples -- below the "
-                        f"reference floor of {args.ref_floor}")
-                problems.append((sp, note))
-            pct = 100.0 * len(don) / n if n else 0
-            print(f"{sp:>9} {n:>6} {'by-source':>12} {len(ref):>6} {len(don):>7} "
-                  f"{pct:>5.0f}%  {note}")
+        # 1000 GENOMES IS NEVER A DONOR.
+        #
+        # The benchmark's imputation reference panels (TOPMed, Michigan, All of
+        # Us) all contain 1000 Genomes. A 1000 Genomes sample used as a
+        # simulation donor would therefore have its own haplotypes inside the
+        # server's panel, and the imputation would be scored on data the server
+        # has memorised. That is circular in a way no split can repair, so the
+        # exclusion is by SOURCE and applies to every super-pop, not only the
+        # three that have enough 1000 Genomes to build a reference from.
+        kg = sorted(r["sample"] for r in members
+                    if r["cohort"].strip().upper() == args.kg_cohort.upper())
+        nonkg = [r for r in members
+                 if r["cohort"].strip().upper() != args.kg_cohort.upper()]
+
+        n_ref, n_don, status = plan_sizes(
+            n, args.ref_fraction, args.ref_floor, args.ref_target,
+            args.donor_floor)
+        if status == "UNDERSUPPLIED":
+            note = (f"*** {n} < {args.ref_floor}+{args.donor_floor}: cannot "
+                    f"supply both roles -- DECIDE, do not default")
+            print(f"{sp:>9} {n:>6} {'--':>12} {'-':>6} {'-':>7} {'-':>6}  {note}")
+            problems.append((sp, note))
+            continue
+
+        # MATCHED COMPOSITION.
+        #
+        # The non-1000G samples are split EVENLY and stratified by population,
+        # so the reference and donor sides carry the same sub-population mix.
+        # The reference is then topped up from 1000 Genomes to its target.
+        #
+        # Splitting the non-1000G half evenly is what makes the two sides
+        # comparable: if the reference were taken whole from one source and the
+        # donors from another, a difference between them would be a difference
+        # between datasets, and the benchmark would read it as an ancestry
+        # effect. The 1000 Genomes top-up unavoidably adds populations the
+        # donor side cannot have -- that is the price of the no-donor rule
+        # above, and the per-population table below reports it rather than
+        # hiding it.
+        by_pop_nonkg = defaultdict(list)
+        for r in nonkg:
+            by_pop_nonkg[r["pop"].strip() or "NA"].append(r["sample"])
+
+        n_nonkg = len(nonkg)
+        # How many non-1000G go to the reference: half of them, but never more
+        # than the reference target, and never so many that donors starve.
+        ref_from_nonkg = min(n_nonkg // 2, n_ref)
+        if n_nonkg - ref_from_nonkg < args.donor_floor:
+            ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
+
+        ref_nonkg, don = allocate_stratified(by_pop_nonkg, ref_from_nonkg) \
+            if ref_from_nonkg > 0 else ([], sorted(r["sample"] for r in nonkg))
+        top_up = max(0, n_ref - len(ref_nonkg))
+        ref = sorted(ref_nonkg + kg[:top_up])
+
+        if len(don) < args.donor_floor:
+            note = (f"*** only {len(don)} donors available "
+                    f"({n_nonkg} non-1000G in total) -- below the donor floor "
+                    f"of {args.donor_floor}")
+            problems.append((sp, note))
         else:
-            n_ref, n_don, status = plan_sizes(
-                n, args.ref_fraction, args.ref_floor, args.ref_target,
-                args.donor_floor)
-            if status == "UNDERSUPPLIED":
-                note = (f"*** {n} < {args.ref_floor}+{args.donor_floor}: cannot "
-                        f"supply both roles -- DECIDE, do not default")
-                print(f"{sp:>9} {n:>6} {'--':>12} {'-':>6} {'-':>7} {'-':>6}  {note}")
-                problems.append((sp, note))
-                continue
-            by_pop = defaultdict(list)
-            for r in members:
-                by_pop[r["pop"].strip() or "NA"].append(r["sample"])
-            ref, don = allocate_stratified(by_pop, n_ref)
-            pct = 100.0 * len(don) / n if n else 0
-            print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
-                  f"{pct:>5.0f}%  {len(by_pop)} populations, stratified")
+            note = (f"{len(by_pop_nonkg)} non-1000G populations stratified; "
+                    f"ref = {len(ref_nonkg)} non-1000G + {len(ref)-len(ref_nonkg)} 1000G")
+        pct = 100.0 * len(don) / (len(ref) + len(don)) if (ref or don) else 0
+        print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
+              f"{pct:>5.0f}%  {note}")
+
+        # Composition report. The matched split is the whole point of
+        # stratifying, so the evidence that it worked is printed rather than
+        # assumed. A population present on one side only is named: that is
+        # either a 1000 Genomes population (reference-only by the no-donor
+        # rule) or a stratum too small to divide, and both are facts the
+        # methods have to state.
+        pop_of = {r["sample"]: (r["pop"].strip() or "NA") for r in members}
+        cr, cd = defaultdict(int), defaultdict(int)
+        for s in ref:
+            cr[pop_of[s]] += 1
+        for s in don:
+            cd[pop_of[s]] += 1
+        worst, worst_pop = 0.0, ""
+        oneside = []
+        for p in sorted(set(cr) | set(cd)):
+            pr = 100.0 * cr[p] / len(ref) if ref else 0.0
+            pd = 100.0 * cd[p] / len(don) if don else 0.0
+            if abs(pr - pd) > worst:
+                worst, worst_pop = abs(pr - pd), p
+            if (cr[p] == 0) != (cd[p] == 0):
+                oneside.append(f"{p}({'ref' if cd[p] == 0 else 'don'} only)")
+        comp_lines.append(
+            f"  {sp:<5} {len(set(cr) | set(cd)):>3} populations, "
+            f"largest share gap {worst:>5.1f}pp ({worst_pop})"
+            + (f"; one side only: {', '.join(oneside)}" if oneside else ""))
 
         overlap = set(ref) & set(don)
         if overlap:
             sys.exit(f"ERROR: {sp} has {len(overlap)} samples on BOTH sides. "
                      f"That is the circularity this script exists to prevent.")
         written.append((sp, ref, don))
+
+    if comp_lines:
+        print("\n[split] sub-population composition, reference vs donors:")
+        for line in comp_lines:
+            print(line)
 
     if args.dry_run:
         print("\n[split] --dry-run: nothing written")
