@@ -379,8 +379,14 @@ echo "============ STAGE 3: homogeneity filter (K=8 + SGDP discovery) ==========
 # hard, so the Q matrix that the homogeneity cut and the donor/reference split
 # both read is wrong before either is computed. Removing the duplicate
 # afterwards means redoing both.
+# Submitted only when STAGE 2 is in this invocation. Keying it to stage 3
+# instead meant that resuming at stage 3 -- the normal case when stage 2 is
+# already running and KING is already queued behind it -- submitted a SECOND
+# KING that re-did hours of concat and plink work, and chained stage 3 to the
+# duplicate rather than to the original. RUN_KING=1 forces it when stage 2 is
+# out of range and KING genuinely has not run.
 J2B=""
-if want 3 && [[ "${RUN_KING:-1}" == "1" ]]; then
+if want 3 && { want 2 || [[ "${RUN_KING:-}" == "1" ]]; }; then
     echo
     echo "============ STAGE 2B: KING de-duplication ============"
     J2B=$(submit "stage2b_king_dedup" "$(dep_of "$J2")" ./1e_king_dedup_clm.sh)
