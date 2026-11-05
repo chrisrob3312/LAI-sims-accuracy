@@ -69,13 +69,14 @@ for spec in \
     "2b simulate:2b_simu" \
     "RFMix WGS:3b_rfmix" \
     "RFMix WGS homog:3b_homog" \
-    "RFMix chip:3b_chip" \
+    "RFMix chip:3b_chip$" \
     "RFMix chip homog:3b_chip_" \
     "FLARE:3b_flare" \
     "deferred submit:defer_su" \
     "accuracy:finalize" ; do
     label="${spec%%:*}"; name="${spec##*:}"
-    ids=$(squeue -u "$U" -h -o '%i %j' 2>/dev/null | awk -v n="$name" '$2 ~ "^"n {print $1}' \
+    ids=$(squeue -u "$U" -h -o '%i %j' 2>/dev/null | awk -v n="$name" '{ pat = (n ~ /\$$/) ? "^" substr(n,1,length(n)-1) "$" : "^" n
+                       if ($2 ~ pat) print $1 }' \
           | sed 's/_\[.*//; s/_[0-9]*$//' | sort -u | tr '\n' ',' | sed 's/,$//')
     if [[ -z "$ids" ]]; then
         printf ' %-22s %-10s %s\n' "$label" "-" "not in queue"
@@ -94,19 +95,39 @@ echo
 echo " CHECKPOINTS"
 hr
 
-# 1. the stale-chunk check
-n_logs=$(ls "$LOG"/1b_chunk_*.out 2>/dev/null | wc -l)
-if [[ "$n_logs" -eq 0 ]]; then
-    printf ' %-34s %s\n' "stale-chunk rebuild" "not started (no chunk logs yet)"
+# 1. the stale-chunk check.
+#
+# SCOPED TO THE CURRENT JOB ID. Logs are named 1b_chunk_<task>_<jobid>.out and
+# they accumulate: June's run left hundreds behind. Globbing them all made
+# this report "483 skipped, 0 rebuilt -- June panel may be in use" for an
+# array that had not started, which is precisely the false alarm this script
+# exists to prevent. A check that cries wolf about old logs is worse than no
+# check, because the correct response to a real one is to stop the pipeline.
+CHUNK_JID=$(squeue -u "$U" -h -o '%i %j' 2>/dev/null \
+            | awk '$2 ~ /^1b_chunk/ {print $1}' | sed 's/_\[.*//; s/_[0-9]*$//' | head -1)
+if [[ -z "$CHUNK_JID" ]]; then
+    CHUNK_JID=$(sacct -n -X -o JobID,JobName%20 -S today 2>/dev/null \
+                | awk '$2 ~ /^1b_chunk/ {print $1}' | tail -1)
+fi
+if [[ -z "$CHUNK_JID" ]]; then
+    printf ' %-34s %s\n' "stale-chunk rebuild" "no chunk array found for this run"
 else
-    n_stale=$(grep -hc 'STALE' "$LOG"/1b_chunk_*.out 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-    n_skip=$(grep -hc 'already done, skipping' "$LOG"/1b_chunk_*.out 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-    if [[ "${n_skip:-0}" -gt 0 && "${n_stale:-0}" -eq 0 ]]; then
+    shopt -s nullglob
+    cur_logs=("$LOG"/1b_chunk_*_"${CHUNK_JID}".out)
+    shopt -u nullglob
+    if [[ ${#cur_logs[@]} -eq 0 ]]; then
         printf ' %-34s %s\n' "stale-chunk rebuild" \
-          "*** PROBLEM: ${n_skip} skipped, 0 rebuilt -- June panel may be in use"
+          "not started (job ${CHUNK_JID} has written no logs yet)"
     else
-        printf ' %-34s %s\n' "stale-chunk rebuild" \
-          "ok (${n_stale:-0} rebuilt, ${n_skip:-0} legitimately skipped, ${n_logs} logs)"
+        n_stale=$(grep -hc 'STALE' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+        n_skip=$(grep -hc 'already done, skipping' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+        if [[ "${n_skip:-0}" -gt 0 && "${n_stale:-0}" -eq 0 ]]; then
+            printf ' %-34s %s\n' "stale-chunk rebuild" \
+              "*** PROBLEM: ${n_skip} skipped, 0 rebuilt in job ${CHUNK_JID}"
+        else
+            printf ' %-34s %s\n' "stale-chunk rebuild" \
+              "ok (${n_stale:-0} rebuilt, ${n_skip:-0} skipped, ${#cur_logs[@]} logs, job ${CHUNK_JID})"
+        fi
     fi
 fi
 
@@ -117,11 +138,18 @@ if [[ -z "$newest" ]]; then
 else
     n_s=$(bcftools query -l "$newest" 2>/dev/null | wc -l)
     age=$(date -r "$newest" '+%Y-%m-%d %H:%M' 2>/dev/null)
-    if [[ "$n_s" -le 3448 ]]; then
-        printf ' %-34s %s\n' "phased panel" \
-          "*** CHECK: ${n_s} samples ($age) -- 3448 is the OLD June panel"
-    else
+    # A small panel is only a PROBLEM once this run should have replaced it.
+    # Until ligate finishes, the old files are simply still there, which is
+    # expected and not worth an alarm.
+    lig_done=$(squeue -u "$U" -h -o '%j' 2>/dev/null | grep -c '^1b_ligat' || true)
+    if [[ "$n_s" -gt 3448 ]]; then
         printf ' %-34s %s\n' "phased panel" "ok (${n_s} samples, $age)"
+    elif [[ "${lig_done:-0}" -gt 0 ]]; then
+        printf ' %-34s %s\n' "phased panel" \
+          "old build present (${n_s} samples, $age) -- ligate has not run yet, expected"
+    else
+        printf ' %-34s %s\n' "phased panel" \
+          "*** PROBLEM: ${n_s} samples ($age) and ligate is done -- old panel was not replaced"
     fi
 fi
 
