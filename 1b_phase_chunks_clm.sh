@@ -41,6 +41,26 @@ set -euo pipefail
 TASK=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job}
 THREADS=${SLURM_CPUS_PER_TASK:-32}
 
+# The environment is set up FIRST, before anything that runs a tool.
+#
+# It used to sit just above the SHAPEIT5 call, which was fine while nothing
+# above it needed a binary. The staleness check added below calls bcftools,
+# and with conda still unactivated that is a command not found: exit 127,
+# under `set -e`, after the task had already read its chunk row. The array
+# then failed as "Mixed [0-127]" -- tasks with no existing chunk skipped the
+# check and exited 0, tasks that found a June chunk died -- which reads like a
+# data problem and is not one.
+module load anaconda3/2024.06
+# shellcheck disable=SC1091
+source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
+conda activate "$CONDA_ENV"
+set -u
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
+command -v bcftools >/dev/null || { echo "ERROR: bcftools not on PATH after activating ${CONDA_ENV}"; exit 1; }
+
 [[ -s "$CHUNKS_TSV" ]] || { echo "ERROR: missing $CHUNKS_TSV"; exit 1; }
 
 # Read line $TASK+1 (skip header). Columns: chr_num chr chunk_idx phase_region ligate_region
@@ -77,17 +97,6 @@ if [[ -s "$PHASED_CHUNK" && -s "${PHASED_CHUNK}.csi" ]]; then
     echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] soft-union has ${_n_want} -- rebuilding"
     rm -f "$PHASED_CHUNK" "${PHASED_CHUNK}.csi"
 fi
-
-module load anaconda3/2024.06
-# shellcheck disable=SC1091
-source "$(conda info --base)/etc/profile.d/conda.sh"
-set +u
-conda activate "$CONDA_ENV"
-set -u
-
-# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
-unset PYTHONHOME PYTHONPATH
-export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] phase_common ${PHASE_REGION}"
 SHAPEIT5_phase_common \
