@@ -366,6 +366,37 @@ else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
 fi
 
+# ------------------------------------------------------------------ STAGE 3B
+# The benchmark donor/reference split, IN PARALLEL with stages 4-6.
+#
+# It depends on stage 3 and on nothing after it: the split is a function of
+# the homogeneity panel alone. Chaining it behind the RFMix sweep and the
+# accuracy tables would hold the genotyping-pipeline benchmark hostage to a
+# multi-day run it does not need, so it branches off stage 3 beside stage 4.
+#
+# Both modes are written: --mode lai for the LAI/ADMIXTURE panels, --mode
+# benchmark for the genotyping pipeline (where 1000 Genomes may not be a
+# donor). The script exits non-zero when a super-pop is too small to supply
+# both roles, which is a decision to make, not a failure to retry -- so this
+# runs inline and its exit status is reported rather than failing the chain.
+if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
+    echo
+    echo "============ STAGE 3B: benchmark donor/reference split ============"
+    if [[ -n "$J3" ]]; then
+        echo "  stage 3 is queued as ${J3}; the split needs its output, so run"
+        echo "  this once stage 3 completes (it takes seconds, no sbatch needed):"
+        echo
+        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
+        echo "      --panel ${PROJECT_ROOT}/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\"
+        echo "      --out reference_ids --suffix a  --mode lai"
+        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
+        echo "      --panel ${PROJECT_ROOT}/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\"
+        echo "      --out reference_ids --suffix b2 --mode benchmark"
+        echo
+        echo "  Nothing downstream in THIS chain waits on it."
+    fi
+fi
+
 # ---------------------------------------------------------------- STAGE 5
 # Full RFMix sweep on both WGS and chip-GSA density. Four parallel arrays:
 #   - 3b_wgs main array:        22 chr * 9 default panels = 198 tasks
@@ -381,7 +412,7 @@ CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
 
 echo
 echo "============ STAGE 5: full RFMix sweep (4 arrays) ============"
-J5a=""; J5b=""; J5c=""; J5d=""
+J5a=""; J5b=""; J5c=""; J5d=""; J5e=""
 if want 5; then
     _d5="$(dep_of "$J4")"
     J5a=$(submit "stage5_wgs_main" \
@@ -399,6 +430,18 @@ if want 5; then
     J5d=$(submit "stage5_chip_homog" \
           "--array=1-44%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
           ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
+
+    # FLARE on the SAME grid as 5a, in parallel with it. Same tracks, panels
+    # and chromosomes, so the only thing differing between the two sweeps is
+    # the method -- which is the whole point of running both. Off with
+    # RUN_FLARE=0 if the jar is not installed yet.
+    if [[ "${RUN_FLARE:-1}" == "1" && -f ./3b_flare_wgs-jointcall_clm.sh ]]; then
+        J5e=$(submit "stage5_flare_wgs" \
+              "--array=1-198%${THROTTLE} --mem=32G ${_d5}" \
+              ./3b_flare_wgs-jointcall_clm.sh)
+    else
+        echo "  (RUN_FLARE=0 or script absent -- FLARE arm not submitted)"
+    fi
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
 fi
@@ -413,7 +456,12 @@ echo "============ STAGE 6: accuracy pilot + push ============"
 J6=""
 if want 6; then
     if [[ -n "$J5a" ]]; then
-        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}"
+        # FLARE is included when it was submitted, because the accuracy tables
+        # are meant to carry RFMix AND FLARE side by side -- scoring before
+        # the FLARE arm lands would produce tables with one method in them.
+        # The benchmark split does NOT gate this: it branched off stage 3 and
+        # has nothing to do with scoring.
+        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}${J5e:+:${J5e}}"
     else
         _d6="$(dep_of "")"
     fi
@@ -435,6 +483,7 @@ row "stage 5a (WGS main sweep)"  "$J5a"
 row "stage 5b (WGS HOMOG fork)"  "$J5b"
 row "stage 5c (chip main sweep)" "$J5c"
 row "stage 5d (chip HOMOG fork)" "$J5d"
+row "stage 5e (FLARE sweep)"      "$J5e"
 row "stage 6 (accuracy + push)"  "$J6"
 if [[ "$STOP_STAGE" -lt 6 ]]; then
     echo
