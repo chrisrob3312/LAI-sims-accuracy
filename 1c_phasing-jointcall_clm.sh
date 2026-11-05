@@ -467,6 +467,48 @@ NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
 echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
 
+# ---------------------------------------------------------------------------
+# PHASE_MODE -- whole-chromosome (default) or hand off to the chunked path.
+#
+# phase_common on a whole chromosome of this panel takes about 30 hours, so 22
+# chromosomes at a throttle of 15 is roughly two and a half days, and stage 2
+# gates every later stage.
+#
+# The repo already has a tested chunked path (1b_phase_chunks + 1b_phase_ligate,
+# 8 cM windows with 2 cM overlap) which splits the same work into a few hundred
+# independent tasks. Its ligate step writes EXACTLY the path this script
+# writes, so it is a drop-in for step 6 and nothing downstream can tell the
+# difference.
+#
+# The one thing missing was the handover: the chunk script reads
+# ${OUTDIR}/merged_chr${CHR}.softunion.bcf, and this script had the identical
+# file one directory down in its own tmp. So PHASE_MODE=chunked publishes the
+# soft-union where the chunk array looks for it and stops.
+#
+# Everything ABOVE this point -- the four-cohort merge, the exclusions, the
+# cohort checks, the per-super-pop MAF soft union -- runs identically either
+# way. Only who does the phasing changes.
+PHASE_MODE="${PHASE_MODE:-whole}"
+if [[ "$PHASE_MODE" == "chunked" ]]; then
+    PUB="${OUTDIR}/merged_chr${CHR}.softunion.bcf"
+    echo "[$(date +%T)] [chr${CHR}] PHASE_MODE=chunked -- publishing the soft-union"
+    cp "$SOFTUNION" "${PUB}.partial"
+    bcftools index --threads "$THREADS" "${PUB}.partial"
+    # Index first, then the BCF: the chunk array checks for the BCF, so it must
+    # not appear before its index exists.
+    mv "${PUB}.partial.csi" "${PUB}.csi"
+    mv "${PUB}.partial" "$PUB"
+    echo "[$(date +%T)] [chr${CHR}] -> ${PUB} ($(bcftools index -n "$PUB") sites, "\
+         "$(bcftools query -l "$PUB" | wc -l) samples)"
+    echo "[$(date +%T)] [chr${CHR}] phasing is now 1b_phase_chunks + 1b_phase_ligate."
+    echo "[$(date +%T)] [chr${CHR}] ligate writes ${PHASED}, which is what this"
+    echo "[$(date +%T)] [chr${CHR}] script would have written, so stages 3+ are unchanged."
+    exit 0
+elif [[ "$PHASE_MODE" != "whole" ]]; then
+    echo "ERROR: PHASE_MODE must be 'whole' or 'chunked', got '${PHASE_MODE}'" >&2
+    exit 1
+fi
+
 # 6. SHAPEIT5 phase_common (joint re-phase: HGDP+1KG + MXB together)
 #    SHAPEIT5 writes its own .csi index after phasing, so we do NOT call
 #    `bcftools index` on $PHASED -- a second index would error

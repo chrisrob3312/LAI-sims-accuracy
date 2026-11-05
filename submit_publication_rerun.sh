@@ -366,6 +366,21 @@ if want 2; then
     [[ -n "${HGDP1KG_PATTERN:-}" ]] && _e2="${_e2},HGDP1KG_PATTERN=${HGDP1KG_PATTERN}"
     [[ -n "${REQUIRE_COHORTS:-}" ]] && _e2="${_e2},REQUIRE_COHORTS=${REQUIRE_COHORTS// /,}"
     [[ -n "${EXCLUDE_IDS:-}"     ]] && _e2="${_e2},EXCLUDE_IDS=${EXCLUDE_IDS}"
+    # PHASE_MODE=chunked makes stage 2 stop after the soft-union and hand the
+    # phasing to 1b_phase_chunks + 1b_phase_ligate. Stage 3 must then depend on
+    # LIGATE, not on this job, so the chain below is not the right shape --
+    # submit stages 3+ separately with AFTER_JOB set to the ligate id.
+    [[ -n "${PHASE_MODE:-}"      ]] && _e2="${_e2},PHASE_MODE=${PHASE_MODE}"
+    if [[ "${PHASE_MODE:-whole}" == "chunked" ]] && want 3; then
+        die "PHASE_MODE=chunked with stage 3 in range.
+
+       Stage 2 will only publish the soft-union; the phasing is then
+       1b_phase_chunks and 1b_phase_ligate, and stage 3 has to wait for
+       LIGATE rather than for stage 2. Submit stage 2 alone:
+         PHASE_MODE=chunked START_STAGE=2 STOP_STAGE=2 ... bash $0
+       then the chunk and ligate arrays, then
+         START_STAGE=3 RUN_KING=1 AFTER_JOB=<ligate id> bash $0"
+    fi
     case "$_e2" in
         *" "*) die "a value passed to stage 2 contains a space: ${_e2}" ;;
     esac
