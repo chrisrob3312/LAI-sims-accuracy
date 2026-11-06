@@ -126,7 +126,26 @@ ALMARRI_PREPPED="${ALMARRI_PREPPED:-${OUTDIR}/almarri_prepped.chr${CHR}.bcf}"
 # Exclusion is applied to EVERY cohort, not just HGDP+1KG, so an ID appearing
 # in two sources cannot slip in through the other one.
 # ----------------------------------------------------------------------------
-EXCLUDE_IDS="${EXCLUDE_IDS:-${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/reference_ids/panel_exclude_ids.txt}"
+# REPO_DIR must come from SLURM_SUBMIT_DIR, NOT from BASH_SOURCE.
+#
+# sbatch copies the batch script into Slurm's spool directory and runs it from
+# there, so under a job `dirname "${BASH_SOURCE[0]}"` is that spool directory
+# and not the checkout. This script had no REPO_DIR line at all, so the
+# fallback below resolved EXCLUDE_IDS to <spool>/reference_ids/panel_exclude_
+# ids.txt, which does not exist. The exclusion block then took its "no
+# exclusion list" branch and CHMI_CHMI3_WGS2 -- a hydatidiform-mole cell line
+# -- was merged into the panel. The run succeeded and said so only in a line
+# nobody was grepping for.
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
+EXCLUDE_IDS="${EXCLUDE_IDS:-${REPO_DIR}/reference_ids/panel_exclude_ids.txt}"
+# A missing exclusion list is now fatal rather than a note. Every name on that
+# list is there because it must not be in the panel; silently proceeding
+# without it produces exactly the panel the list exists to prevent.
+[[ -s "$EXCLUDE_IDS" ]] || {
+    echo "ERROR: no exclusion list at ${EXCLUDE_IDS}" >&2
+    echo "       REPO_DIR=${REPO_DIR} (from SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-unset})" >&2
+    echo "       Pass EXCLUDE_IDS=<path> explicitly, or submit from the repo." >&2
+    exit 1; }
 
 mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 

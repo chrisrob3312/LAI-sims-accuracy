@@ -647,12 +647,28 @@ fi
 # Absent file = 1e has not run; that is allowed, and said so, rather than
 # silently treated as "no duplicates exist".
 DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
+# The named exclusion list, read here as well as in 1c.
+#
+# Not redundancy for its own sake: 1c resolved this path from BASH_SOURCE,
+# which under sbatch points at Slurm's spool directory, so the list was never
+# found and CHMI_CHMI3_WGS2 went into the phased panel. 1c is fixed, but a
+# name on this list must not depend on one script having resolved one path
+# correctly -- the cost of it slipping through is a cell line in an ADMIXTURE
+# fit and possibly in a donor pool, which no downstream check would catch.
+#
+# Reading it here also means a panel that already contains such a sample can
+# be corrected WITHOUT re-phasing: the sample stays in the phased BCF, and is
+# simply never admitted to the homogeneous panel, the reference lists or the
+# donor pools.
+PANEL_EXCLUDE="${PANEL_EXCLUDE:-${REFS}/panel_exclude_ids.txt}"
 SIM_DONORS="${SIM_DONORS:-${ADM_DIR}/simulation_donors.all.txt}"
 : > "$SIM_DONORS"
 if [[ -s "$DUP_DROP" ]]; then
     N_DUP=$(awk 'NF && $1 !~ /^#/' "$DUP_DROP" | wc -l)
     echo "[$(date +%T)]   duplicate drop list: $(basename "$DUP_DROP") (${N_DUP} ids)"
     awk 'NF && $1 !~ /^#/ {print $1}' "$DUP_DROP" >> "$SIM_DONORS"
+elif [[ -s "$PANEL_EXCLUDE" ]]; then
+    :   # handled below; the note only matters when neither list exists
 else
     echo "[$(date +%T)]   NOTE: no duplicate drop list at ${DUP_DROP}"
     echo "[$(date +%T)]   1e_king_dedup has not run. The panel may contain the"
@@ -665,6 +681,24 @@ for f in "${REFS}"/*_simulation.txt; do
     echo "[$(date +%T)]   donor list: $(basename "$f") ($(awk 'NF' "$f" | wc -l) ids)"
     awk 'NF' "$f" >> "$SIM_DONORS"
 done
+# Named exclusions join the same drop set. They are reported separately
+# because "excluded by name" and "a simulation donor" are different facts
+# about a sample and the methods state them differently.
+if [[ -s "$PANEL_EXCLUDE" ]]; then
+    N_EXCL=$(awk 'NF && $1 !~ /^#/' "$PANEL_EXCLUDE" | wc -l)
+    echo "[$(date +%T)]   named exclusions: $(basename "$PANEL_EXCLUDE") (${N_EXCL} ids)"
+    while read -r _id; do
+        if grep -Fxq "$_id" "${PRUNED}.fam" 2>/dev/null \
+           || awk '{print $2}' "${PRUNED}.fam" 2>/dev/null | grep -Fxq "$_id"; then
+            echo "[$(date +%T)]     ${_id}: PRESENT in the panel -- excluding"
+        else
+            echo "[$(date +%T)]     ${_id}: not in the panel (nothing to exclude)"
+        fi
+    done < <(awk 'NF && $1 !~ /^#/ {print $1}' "$PANEL_EXCLUDE")
+    awk 'NF && $1 !~ /^#/ {print $1}' "$PANEL_EXCLUDE" >> "$SIM_DONORS"
+else
+    echo "[$(date +%T)]   WARNING: no named-exclusion list at ${PANEL_EXCLUDE}"
+fi
 sort -u -o "$SIM_DONORS" "$SIM_DONORS"
 echo "[$(date +%T)] simulation donors to exclude from the homog panel: $(wc -l < "$SIM_DONORS")"
 
