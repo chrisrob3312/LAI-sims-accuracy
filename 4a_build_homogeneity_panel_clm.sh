@@ -19,6 +19,13 @@
 # idle because nothing that needs these instruction sets can run there. An
 # earlier 1d_almarri failure on t02 -- empty logs, 4 MB RSS, never explained
 # -- was the same thing.
+#
+# mhgcp-c02 IS A SEPARATE QUESTION and the evidence above says nothing about
+# it. No task landed on c02 in that run, so it is neither condemned nor
+# cleared. It has the same specs as c00 and c01 (56 CPUs, 232 GB), which both
+# run this software without trouble and are NOT excluded, so the reason for
+# excluding c02 is something else -- unknown to this script. Four test tasks
+# would settle it and would add 56 CPUs.
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=01:00:00
 #SBATCH --time=48:00:00
