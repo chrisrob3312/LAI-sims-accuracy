@@ -58,35 +58,54 @@ echo
 # the resubmissions this chain has already been through.
 # --------------------------------------------------------------------------
 hr
-printf ' %-22s %-10s %s\n' "STAGE" "JOBID" "STATE"
+printf ' %-22s %-10s %-26s %s\n' "STAGE" "JOBID" "STATE" "TASKS"
 hr
-for spec in \
-    "1c prep (chunked):1c_phase" \
-    "phase chunks:1b_chunk" \
-    "ligate:1b_ligat" \
-    "KING dedup:1e_king" \
-    "4a ADMIXTURE K=8:4a_homog" \
-    "2b simulate:2b_simu" \
-    "RFMix WGS:3b_rfmix" \
-    "RFMix WGS homog:3b_homog" \
-    "RFMix chip:3b_chip$" \
-    "RFMix chip homog:3b_chip_" \
-    "FLARE:3b_flare" \
-    "deferred submit:defer_su" \
-    "accuracy:finalize" ; do
-    label="${spec%%:*}"; name="${spec##*:}"
-    ids=$(squeue -u "$U" -h -o '%i %j' 2>/dev/null | awk -v n="$name" '{ pat = (n ~ /\$$/) ? "^" substr(n,1,length(n)-1) "$" : "^" n
-                       if ($2 ~ pat) print $1 }' \
-          | sed 's/_\[.*//; s/_[0-9]*$//' | sort -u | tr '\n' ',' | sed 's/,$//')
-    if [[ -z "$ids" ]]; then
-        printf ' %-22s %-10s %s\n' "$label" "-" "not in queue"
-    else
-        for id in ${ids//,/ }; do
-            printf ' %-22s %-10s %s\n' "$label" "$id" "$(jstate "$id")"
-        done
+# Job ids come from sacct, NOT just squeue: a finished job leaves the queue,
+# and "not in queue" is the same ambiguity this script exists to remove --
+# it means completed, failed, or never submitted, and those need different
+# responses. The MOST RECENT id per name is the live one, which also skips
+# the cancelled batches whose delayed notifications keep arriving.
+SINCE="${SINCE:-$(date -d '3 days ago' +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)}"
+ALL=$(sacct -u "$U" -S "$SINCE" -n -X -P -o JobID,JobName,State 2>/dev/null)
+
+stage_row () {
+    local label="$1" name="$2" exact="${3:-}"
+    local jid
+    jid=$(printf '%s\n' "$ALL" | awk -F'|' -v n="$name" -v ex="$exact" '
+        { id=$1; sub(/_.*/, "", id)
+          if (ex == "1") { if ($2 == n) print id }
+          else          { if (index($2, n) == 1) print id } }' \
+        | sort -un | tail -1)
+    if [[ -z "$jid" ]]; then
+        printf ' %-22s %-10s %-26s %s\n' "$label" "-" "never submitted" ""
+        return
     fi
-done
+    local counts total
+    counts=$(printf '%s\n' "$ALL" | awk -F'|' -v j="$jid" '
+        { id=$1; sub(/_.*/, "", id); if (id == j) { st=$3; sub(/ .*/, "", st); c[st]++ } }
+        END { for (k in c) printf "%s:%d ", k, c[k] }')
+    total=$(printf '%s\n' "$ALL" | awk -F'|' -v j="$jid" '
+        { id=$1; sub(/_.*/, "", id); if (id == j) n++ } END { print n+0 }')
+    local flag=""
+    [[ "$counts" == *FAILED* || "$counts" == *CANCELLED* || "$counts" == *TIMEOUT* ]] && flag=" <<<"
+    printf ' %-22s %-10s %-26s %s%s\n' "$label" "$jid" "${counts% }" "$total" "$flag"
+}
+
+stage_row "1c prep (chunked)"   "1c_phase"
+stage_row "phase chunks"        "1b_chunk"
+stage_row "ligate"              "1b_ligat"
+stage_row "KING dedup"          "1e_king"
+stage_row "4a ADMIXTURE K=8"    "4a_homog"
+stage_row "2b simulate"         "2b_simu"
+stage_row "RFMix WGS"           "3b_rfmix"
+stage_row "RFMix WGS homog"     "3b_homog"
+stage_row "RFMix chip"          "3b_chip" 1
+stage_row "RFMix chip homog"    "3b_chip_homog" 1
+stage_row "FLARE (3 arms)"      "3b_flare"
+stage_row "accuracy"            "finalize"
 hr
+echo " <<< marks a job with failed or cancelled tasks."
+echo " FLARE runs as three separate arms; only the newest is shown here."
 echo
 
 # --------------------------------------------------------------------------
