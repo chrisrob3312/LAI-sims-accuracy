@@ -4,6 +4,21 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1b_chunk
 #SBATCH --partition=atkinson,mhgcp
+# DO NOT REMOVE mhgcp-t* FROM THIS EXCLUSION TO GAIN CONCURRENCY.
+#
+# Those nodes' CPUs lack instructions the SHAPEIT5 / bcftools builds in this
+# conda env are compiled with. A task dispatched to one dies instantly with
+# SIGILL -- exit 132, ~3 seconds wall clock, ~2 MB RSS, and an EMPTY log,
+# because the binary never reaches its first write.
+#
+# Measured 2026-11-07 on a 594-task chunk array run with the exclusion lifted:
+#   270 / 270 tasks that landed on t02,t05,t06,t07,t08,t10,t11  FAILED
+#     0 / 57  tasks that landed on a01, m00                     failed
+#
+# They look attractive because sinfo shows them idle with free CPUs. They are
+# idle because nothing that needs these instruction sets can run there. An
+# earlier 1d_almarri failure on t02 -- empty logs, 4 MB RSS, never explained
+# -- was the same thing.
 #SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=08:00:00
 #SBATCH --time-min=02:00:00
