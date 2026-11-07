@@ -157,8 +157,15 @@ else
           "not started (job ${CHUNK_JID} has written no logs yet)"
     else
         n_stale=$(grep -hc 'STALE' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-        n_skip=$(grep -hc 'already done, skipping' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-        if [[ "${n_skip:-0}" -gt 0 && "${n_stale:-0}" -eq 0 ]]; then
+        n_skip=$(grep -hc 'already done' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
+        # Slurm BUFFERS a running task's stdout: its log exists but is empty
+        # until the task ends. So "logs exist, counts are zero" means the tasks
+        # are still running, not that the check failed to fire -- and saying
+        # PROBLEM there would be the same false alarm as reading June's logs.
+        if [[ "${n_stale:-0}" -eq 0 && "${n_skip:-0}" -eq 0 ]]; then
+            printf ' %-34s %s\n' "stale-chunk rebuild" \
+              "running (${#cur_logs[@]} logs, none flushed yet -- Slurm buffers stdout)"
+        elif [[ "${n_skip:-0}" -gt 0 && "${n_stale:-0}" -eq 0 ]]; then
             printf ' %-34s %s\n' "stale-chunk rebuild" \
               "*** PROBLEM: ${n_skip} skipped, 0 rebuilt in job ${CHUNK_JID}"
         else
