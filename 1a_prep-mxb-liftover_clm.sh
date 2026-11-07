@@ -15,7 +15,7 @@
 # ============================================================================
 # DESCRIPTION
 # ============================================================================
-# One-shot prep step before 1b_phasing-jointcall_clm.sh:
+# One-shot prep step before 1c_phasing-jointcall_clm.sh:
 #   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
 #   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
 #      (handles strand flips AND ref/alt swaps that CrossMap silently mis-encodes)
@@ -57,7 +57,13 @@ mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # 1. Detect contig naming; rename to chr-prefixed if needed
 first_contig=$(bcftools view -h "$MXB_HG19" | awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}')
