@@ -65,8 +65,17 @@ hr
 # it means completed, failed, or never submitted, and those need different
 # responses. The MOST RECENT id per name is the live one, which also skips
 # the cancelled batches whose delayed notifications keep arriving.
+# sacct AND squeue, merged.
+#
+# sacct omits PENDING jobs: they have no start time, so a queued job is simply
+# absent and the table said "never submitted" for eleven jobs that were sitting
+# in the queue. Acting on that would mean resubmitting the whole chain and
+# duplicating it -- the exact failure this script is supposed to prevent.
 SINCE="${SINCE:-$(date -d '3 days ago' +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)}"
-ALL=$(sacct -u "$U" -S "$SINCE" -n -X -P -o JobID,JobName,State 2>/dev/null)
+ALL=$(
+  sacct -u "$U" -S "$SINCE" -n -X -P -o JobID,JobName,State 2>/dev/null
+  squeue -u "$U" -h -o '%i|%j|%T' 2>/dev/null | sed 's/_\[[^]]*\]//'
+)
 
 stage_row () {
     local label="$1" name="$2" exact="${3:-}"
@@ -131,8 +140,17 @@ fi
 if [[ -z "$CHUNK_JID" ]]; then
     printf ' %-34s %s\n' "stale-chunk rebuild" "no chunk array found for this run"
 else
+    # Array task logs use %j, the TASK's own job id, NOT the array master's,
+    # so a glob on the master id matches nothing -- which read as "no logs
+    # yet" while 25 chunks had completed. Scope by modification time against
+    # the array's submit time instead.
+    SUB=$(sacct -j "$CHUNK_JID" -n -X -o Submit 2>/dev/null | head -1)
     shopt -s nullglob
-    cur_logs=("$LOG"/1b_chunk_*_"${CHUNK_JID}".out)
+    if [[ -n "$SUB" ]]; then
+        cur_logs=($(find "$LOG" -name '1b_chunk_*.out' -newermt "$SUB" 2>/dev/null))
+    else
+        cur_logs=($(find "$LOG" -name '1b_chunk_*.out' -mtime -3 2>/dev/null))
+    fi
     shopt -u nullglob
     if [[ ${#cur_logs[@]} -eq 0 ]]; then
         printf ' %-34s %s\n' "stale-chunk rebuild" \
