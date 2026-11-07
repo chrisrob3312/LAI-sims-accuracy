@@ -135,23 +135,36 @@ Steps 1–4 are what this repository produces. Steps 5–13 run in
 | step | what | where | state |
 |---|---|---|---|
 | 1 | assemble the real-genome pool on GRCh38 | 1a / 1b / 1d | SGDP + Almarri done, MXB done |
-| 2 | de-duplicate people across sources (KING ≥ 0.354) | — | **not built** |
+| 2 | de-duplicate people across sources (KING ≥ 0.354) | `1e_king_dedup_clm.sh` | **built**, chained before 4a |
 | 3 | ADMIXTURE K = 8 → the Q file everything reads | 4a | pending stage 3 |
 | 4 | phase the donor panel jointly | 1c | pending stage 2 |
-| 5 | plan donor roles and model sizes | `plan_simset.R` + our splitter | splitter ready |
-| 6 | simulate admixed + control individuals | admix-simu | — |
-| 7 | add real test genomes to the truth | — | — |
-| 8 | deal everyone into the six chip × build cells | — | — |
+| 5 | plan donor roles and model sizes | `split-homog-donors-reference.py --mode benchmark` | **built** |
+| 6 | simulate admixed + control individuals | admix-simu | **not built** |
+| 7 | add real test genomes to the truth | `assemble-benchmark-cohort.py` | **built** |
+| 8 | deal everyone into the six chip × build cells | `assemble-benchmark-cohort.py` | **built** |
 | 9 | chip site lists in both builds | `build-chip-manifest-sites.py` | **GSA done** (596,591 sites); Affy 6.0 and 500K pending |
-| 10 | write the chip files per chip × build × chr | — | — |
-| 11 | tables, checksums, provenance | — | — |
+| 10 | write the chip files per chip × build × chr | — | **not built** |
+| 11 | tables, checksums, provenance | — | **not built** |
 | 12 | `ingest_simset.sh` intake check | — | — |
 | 13 | hand over | — | — |
 
-**Step 2 has no owner yet.** SGDP re-sequenced individuals who are also in
-HGDP, and the same person can appear under two IDs across HGDP, 1KG, MXB and
-Almarri. If one copy is a donor and the other a test sample, the method has
-seen the test sample's haplotypes. `1c` deduplicates by *sample ID* at the
-merge, which catches identical identifiers but not the same person under two
-different ones. A KING run over the merged panel is what catches that, and it
-is not written.
+Steps 2, 5, 7 and 8 need only the Q file, so all four run within minutes of
+stage 3 landing. Steps 6, 10 and 11 are the remaining gap, and 6 and 10 belong
+in `genotyping_pipeline/benchmarking/simulate/` rather than here.
+
+**Step 2 is built.** SGDP re-sequenced individuals who are also in HGDP, and
+the same person can appear under two IDs across HGDP, 1KG, MXB and Almarri. If
+one copy is a donor and the other a test sample, the method has seen the test
+sample's haplotypes. `1c` deduplicates by *sample ID* at the merge, which
+catches identical identifiers but not the same person under two different ones.
+`1e_king_dedup_clm.sh` runs KING-robust genome-wide over the merged panel
+between the merge and ADMIXTURE, drops only pairs above 0.354, and keeps the
+non-1KG copy so the surviving record stays donor-eligible.
+
+**The same four exclusions apply to test samples as to donors.** A real genome
+is test-eligible only if it is not a donor, not in the reference panel, not
+1000 Genomes, and not in `sgdp_server_panel_ids.txt` — an SGDP cohort label
+does not establish absence from an imputation server's panel, which is the
+donor-leak class that file exists to close. `assemble-benchmark-cohort.py`
+enforces all four and refuses to run if the split is missing, because without
+it every panel sample looks test-eligible.
