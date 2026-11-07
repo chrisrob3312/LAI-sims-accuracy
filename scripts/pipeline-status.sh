@@ -71,11 +71,19 @@ hr
 # absent and the table said "never submitted" for eleven jobs that were sitting
 # in the queue. Acting on that would mean resubmitting the whole chain and
 # duplicating it -- the exact failure this script is supposed to prevent.
+#
+# But a RUNNING array task is reported by BOTH commands, so a plain
+# concatenation counts it twice: 41 running chunks read as "RUNNING:82" and a
+# 594-task array reported a total of 110. Normalise the collapsed pending
+# range (3746039_[68-594%120]) to the master id in both sources, then keep the
+# first row per task id. sacct runs first on purpose: a task that finishes
+# between the two calls is then recorded as COMPLETED, not RUNNING.
 SINCE="${SINCE:-$(date -d '3 days ago' +%Y-%m-%d 2>/dev/null || date +%Y-%m-%d)}"
-ALL=$(
+RAW=$(
   sacct -u "$U" -S "$SINCE" -n -X -P -o JobID,JobName,State 2>/dev/null
-  squeue -u "$U" -h -o '%i|%j|%T' 2>/dev/null | sed 's/_\[[^]]*\]//'
+  squeue -u "$U" -h -o '%i|%j|%T' 2>/dev/null
 )
+ALL=$(printf '%s\n' "$RAW" | sed 's/_\[[^]]*\]//' | awk -F'|' 'NF && !seen[$1]++')
 
 stage_row () {
     local label="$1" name="$2" exact="${3:-}"
@@ -93,8 +101,21 @@ stage_row () {
     counts=$(printf '%s\n' "$ALL" | awk -F'|' -v j="$jid" '
         { id=$1; sub(/_.*/, "", id); if (id == j) { st=$3; sub(/ .*/, "", st); c[st]++ } }
         END { for (k in c) printf "%s:%d ", k, c[k] }')
-    total=$(printf '%s\n' "$ALL" | awk -F'|' -v j="$jid" '
-        { id=$1; sub(/_.*/, "", id); if (id == j) n++ } END { print n+0 }')
+    # Array SIZE, not row count. squeue collapses every pending task of an
+    # array into one line, so counting rows understates a mid-flight array
+    # badly -- 594 tasks showed as 110. Take the high-water task index from
+    # the raw text instead, reading both "_58" and "_[68-594%120]".
+    total=$(printf '%s\n' "$RAW" | awk -F'|' -v j="$jid" '
+        { id=$1; sub(/_.*/, "", id); if (id != j) next
+          if (match($1, /_\[[0-9]+-[0-9]+/)) {
+              seg = substr($1, RSTART + 2); sub(/-/, " ", seg)
+              split(seg, a, " "); hi = a[2] + 0
+              if (hi > mx) mx = hi
+          } else if (match($1, /_[0-9]+$/)) {
+              v = substr($1, RSTART + 1) + 0
+              if (v > mx) mx = v
+          } }
+        END { print (mx > 0 ? mx : 1) }')
     local flag=""
     [[ "$counts" == *FAILED* || "$counts" == *CANCELLED* || "$counts" == *TIMEOUT* ]] && flag=" <<<"
     printf ' %-22s %-10s %-26s %s%s\n' "$label" "$jid" "${counts% }" "$total" "$flag"
@@ -156,22 +177,58 @@ else
         printf ' %-34s %s\n' "stale-chunk rebuild" \
           "not started (job ${CHUNK_JID} has written no logs yet)"
     else
-        n_stale=$(grep -hc 'STALE' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-        n_skip=$(grep -hc 'already done' "${cur_logs[@]}" 2>/dev/null | paste -sd+ | bc 2>/dev/null)
-        # Slurm BUFFERS a running task's stdout: its log exists but is empty
-        # until the task ends. So "logs exist, counts are zero" means the tasks
-        # are still running, not that the check failed to fire -- and saying
-        # PROBLEM there would be the same false alarm as reading June's logs.
-        if [[ "${n_stale:-0}" -eq 0 && "${n_skip:-0}" -eq 0 ]]; then
+        # grep -c | paste | bc had three failure points and silently yielded an
+        # empty string on any of them. grep -l | wc -l always yields a clean
+        # integer, and counting LOGS (not lines) is what the question asks.
+        n_stale=$(grep -lF 'STALE: has'   "${cur_logs[@]}" 2>/dev/null | wc -l)
+        n_skip=$( grep -lF 'already done' "${cur_logs[@]}" 2>/dev/null | wc -l)
+        n_run=$(  grep -lF 'phase_common' "${cur_logs[@]}" 2>/dev/null | wc -l)
+        n_done=$( grep -lF 'DONE ->'      "${cur_logs[@]}" 2>/dev/null | wc -l)
+        #
+        # THE FOURTH STATE. The staleness block in 1b only runs when a chunk
+        # file is already on disk. On a from-scratch build there is nothing to
+        # compare against, so the task prints neither "already done" nor
+        # "STALE" and goes straight to phase_common -- and 0 rebuilt/0 skipped
+        # is then the correct, expected reading, not a check that failed to
+        # fire. Distinguish that from a genuinely silent log by whether the
+        # task got as far as phase_common.
+        if [[ "$n_skip" -gt 0 && "$n_stale" -eq 0 && "$n_done" -eq 0 ]]; then
+            printf ' %-34s %s\n' "stale-chunk rebuild" \
+              "*** PROBLEM: ${n_skip} skipped, 0 rebuilt, 0 written -- old chunks in use"
+        elif [[ "$n_run" -gt 0 ]]; then
+            printf ' %-34s %s\n' "stale-chunk rebuild" \
+              "ok (${n_done} written, ${n_run} phasing, ${n_stale} stale-rebuilt, ${n_skip} skipped)"
+        else
+            # Slurm buffers a running task's stdout, so an empty log is a task
+            # that has not flushed, not a check that did not fire.
             printf ' %-34s %s\n' "stale-chunk rebuild" \
               "running (${#cur_logs[@]} logs, none flushed yet -- Slurm buffers stdout)"
-        elif [[ "${n_skip:-0}" -gt 0 && "${n_stale:-0}" -eq 0 ]]; then
-            printf ' %-34s %s\n' "stale-chunk rebuild" \
-              "*** PROBLEM: ${n_skip} skipped, 0 rebuilt in job ${CHUNK_JID}"
-        else
-            printf ' %-34s %s\n' "stale-chunk rebuild" \
-              "ok (${n_stale:-0} rebuilt, ${n_skip:-0} skipped, ${#cur_logs[@]} logs, job ${CHUNK_JID})"
         fi
+    fi
+fi
+
+# 1b. soft-union sample count -- the SAME 3921 check, available ~10h earlier.
+#
+# Every chunk phases against ${PANEL_DIR}/merged_<chr>.softunion.bcf, which 1c
+# wrote. Whatever sample count that file carries is what ligate will emit and
+# what stages 4-6 will measure, so there is no reason to wait for the ligated
+# panel to find out whether the cohort additions made it through. If this says
+# 3448 the chunk array is phasing the wrong panel and should be cancelled now,
+# not after 594 tasks have finished.
+su=$(ls -t "$PANEL_DIR"/merged_chr*.softunion.bcf 2>/dev/null | head -1)
+if [[ -z "$su" ]]; then
+    printf ' %-34s %s\n' "soft-union input (3921?)" "not started (1c has written no soft-union)"
+else
+    n_su=$(bcftools query -l "$su" 2>/dev/null | wc -l)
+    if [[ "$n_su" -eq 3921 ]]; then
+        printf ' %-34s %s\n' "soft-union input (3921?)" \
+          "ok (${n_su} samples in $(basename "$su") -- chunks are phasing the new panel)"
+    elif [[ "$n_su" -gt 3448 ]]; then
+        printf ' %-34s %s\n' "soft-union input (3921?)" \
+          "${n_su} samples -- more than the old 3448 but not 3921, check 1c cohort adds"
+    else
+        printf ' %-34s %s\n' "soft-union input (3921?)" \
+          "*** PROBLEM: only ${n_su} samples -- chunks are phasing the OLD panel"
     fi
 fi
 
