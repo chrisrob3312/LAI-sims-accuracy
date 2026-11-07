@@ -20,13 +20,13 @@
 # earlier 1d_almarri failure on t02 -- empty logs, 4 MB RSS, never explained
 # -- was the same thing.
 #
-# mhgcp-c02 IS A SEPARATE QUESTION and the evidence above says nothing about
-# it. No task landed on c02 in that run, so it is neither condemned nor
-# cleared. It has the same specs as c00 and c01 (56 CPUs, 232 GB), which both
-# run this software without trouble and are NOT excluded, so the reason for
-# excluding c02 is something else -- unknown to this script. Four test tasks
-# would settle it and would add 56 CPUs.
-#SBATCH --exclude=mhgcp-c02,mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+# mhgcp-c02 WAS on this list and has been removed deliberately. It has the
+# same specs as c00 and c01 (56 CPUs, 232 GB), both of which run this software
+# without trouble and were never excluded, and no evidence ties c02 to the
+# instruction-set problem above -- no task ever landed on it. The exclusion
+# looks like it dates from c02 simply being busy. Re-add it only if a task
+# actually fails there, and write down what happened.
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time-min=00:15:00
 #SBATCH --time=06:00:00
 #SBATCH --mem=64G
