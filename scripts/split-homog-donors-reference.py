@@ -103,6 +103,47 @@ def plan_sizes(n, ref_fraction, ref_floor, ref_target, donor_floor):
     return ref, don, ""
 
 
+def allocate_clustered(by_pop, n_ref, cluster_of):
+    """Stratified allocation that never splits a relative cluster.
+
+    Members are collapsed to their cluster representative, the clusters are
+    allocated by the same largest-remainder rule, and the result is expanded.
+    A cluster therefore lands entirely on one side, which is what the intake's
+    cross-role rule requires -- and the counts are approximate rather than
+    exact, because a cluster of 3 cannot be split 1/2. That is the trade: an
+    off-by-two reference panel against a cohort the intake refuses.
+    """
+    rep_pop, rep_members = {}, defaultdict(list)
+    for pop, members in by_pop.items():
+        for m in members:
+            r = cluster_of(m)
+            rep_pop[r] = pop
+            rep_members[r].append(m)
+    by_pop_rep = defaultdict(list)
+    for r, pop in rep_pop.items():
+        by_pop_rep[pop].append(r)
+    # Weight each representative by its cluster size so the largest-remainder
+    # pass is working in units of SAMPLES, not clusters.
+    target_reps = {}
+    for pop, reps in by_pop_rep.items():
+        reps.sort()
+    total = sum(len(v) for v in by_pop.values())
+    if total <= 0:
+        return [], []
+    want_frac = n_ref / float(total)
+    ref_ids, don_ids = [], []
+    for pop in sorted(by_pop_rep):
+        reps = sorted(by_pop_rep[pop], key=lambda r: (-len(rep_members[r]), r))
+        quota = want_frac * sum(len(rep_members[r]) for r in reps)
+        taken = 0
+        for r in reps:
+            if taken + len(rep_members[r]) <= quota + 1e-9:
+                ref_ids.extend(sorted(rep_members[r])); taken += len(rep_members[r])
+            else:
+                don_ids.extend(sorted(rep_members[r]))
+    return sorted(ref_ids), sorted(don_ids)
+
+
 def allocate_stratified(by_pop, n_ref):
     """Largest-remainder allocation of n_ref reference slots across populations.
 
@@ -181,6 +222,18 @@ def main():
     ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
     ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
+    ap.add_argument("--relatedness", default="",
+                    help="KING table (1e's king.kin0). Relatives at or above "
+                         "--role-kinship are kept TOGETHER in one role. Since "
+                         "2b59278 ingest_simset.sh REFUSES any pair >= 0.177 "
+                         "sitting in two different roles (donor / reference / "
+                         "real test), and that check runs after the whole "
+                         "build. Disjointness by identity is not enough: a "
+                         "donor whose sibling is a test genome passes every "
+                         "earlier check.")
+    ap.add_argument("--role-kinship", type=float, default=0.177,
+                    help="kinship at or above which two samples must share a "
+                         "role (default 0.177, first degree)")
     ap.add_argument("--anchors-to-reference", action="store_true",
                     help="OPTIONAL. Pin supervised ADMIXTURE anchors (the "
                          "`assigned` column) to the REFERENCE side. Anchors "
@@ -273,6 +326,56 @@ def main():
     print(f"\n{'super_pop':>9} {'N':>6} {'mode':>12} {'ref':>6} {'donors':>7} "
           f"{'%don':>6}  note")
     print("-" * 72)
+
+    # RELATIVE CLUSTERS. Union-find over pairs at or above --role-kinship, so
+    # a chain (A-B, B-C) lands in one cluster even where A and C are not
+    # themselves related: the intake's rule is pairwise, and splitting a chain
+    # anywhere leaves a cross-role pair behind.
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[ry] = rx
+    n_rel_pairs = 0
+    if args.relatedness:
+        if not os.path.exists(args.relatedness):
+            sys.exit(f"ERROR: --relatedness {args.relatedness} does not exist.")
+        with open(args.relatedness) as fh:
+            head = None
+            for line in fh:
+                f = line.split()
+                if not f:
+                    continue
+                if head is None:
+                    head = [c.lstrip("#") for c in f]
+                    def _f(c):
+                        for n in c:
+                            if n in head:
+                                return head.index(n)
+                        return -1
+                    i1 = _f(("ID1", "IID1", "FID1"))
+                    i2 = _f(("ID2", "IID2", "FID2"))
+                    ik = _f(("KINSHIP", "Kinship", "KIN", "PropIBD"))
+                    if min(i1, i2, ik) < 0:
+                        sys.exit(f"ERROR: {args.relatedness} header {head} has "
+                                 f"no ID1/ID2/KINSHIP columns")
+                    continue
+                if len(f) <= max(i1, i2, ik):
+                    continue
+                try:
+                    k = float(f[ik])
+                except ValueError:
+                    continue
+                if k >= args.role_kinship:
+                    union(f[i1], f[i2]); n_rel_pairs += 1
+        print(f"[split] relatedness: {n_rel_pairs} pair(s) >= "
+              f"{args.role_kinship} will be kept within one role")
 
     written, problems, comp_lines = [], [], []
     no_donor_sps = {s.strip().upper() for s in args.no_donor_superpops.split(",")
@@ -382,8 +485,12 @@ def main():
         if n_nonkg - ref_from_nonkg < args.donor_floor:
             ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
 
-        ref_nonkg, don = allocate_stratified(by_pop_nonkg, ref_from_nonkg) \
-            if ref_from_nonkg > 0 else ([], sorted(r["sample"] for r in nonkg))
+        if ref_from_nonkg <= 0:
+            ref_nonkg, don = [], sorted(r["sample"] for r in nonkg)
+        elif args.relatedness:
+            ref_nonkg, don = allocate_clustered(by_pop_nonkg, ref_from_nonkg, find)
+        else:
+            ref_nonkg, don = allocate_stratified(by_pop_nonkg, ref_from_nonkg)
 
         # ANCHORS PINNED TO THE REFERENCE SIDE.
         #

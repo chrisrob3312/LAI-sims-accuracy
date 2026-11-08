@@ -53,7 +53,13 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 THREADS="${SLURM_CPUS_PER_TASK:-4}"
 MAF="${MAF:-0.05}"
 PRUNE="${PRUNE:-200 50 0.2}"
-KING_MIN="${KING_MIN:-0.0442}"   # third degree; below this is noise here
+# UNFILTERED by default. The contract's identity/king.kin0 is "the output of
+# plink2 --make-king-table, unfiltered (no --king-table-filter)", and intake
+# 7.identity needs the COMPLETE pair table over every donor, LAI reference and
+# real test sample. A filtered table omits the pairs it was asked about, so the
+# check cannot be run on it. Set KING_MIN to filter for a quick look only --
+# never for the table that ships.
+KING_MIN="${KING_MIN:-}"
 
 if [[ -z "${CONDA_PREFIX:-}" || "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
     # shellcheck disable=SC1091
@@ -130,13 +136,19 @@ plink2 --vcf cohort.all.vcf.gz --maf "$MAF" --snps-only --max-alleles 2 \
        --indep-pairwise $PRUNE --out prune --threads "$THREADS" --silent
 echo "[$(date +%T)] $(wc -l < prune.prune.in) markers kept"
 
+KFILT=(); [[ -n "$KING_MIN" ]] && KFILT=(--king-table-filter "$KING_MIN")
+if [[ -z "$KING_MIN" ]]; then
+    echo "[$(date +%T)] king table UNFILTERED (contract: identity/king.kin0)"
+else
+    echo "[$(date +%T)] king table filtered at ${KING_MIN} -- NOT contract-conformant"
+fi
 plink2 --vcf cohort.all.vcf.gz --extract prune.prune.in \
-       --make-king-table --king-table-filter "$KING_MIN" \
+       --make-king-table "${KFILT[@]}" \
        --out "${OUTDIR}/cohort_king" --threads "$THREADS" --silent
 
 KT="${OUTDIR}/cohort_king.kin0"
 [[ -s "$KT" ]] || { echo "ERROR: plink2 wrote no king table at ${KT}" >&2; exit 5; }
-echo "[$(date +%T)] $(( $(wc -l < "$KT") - 1 )) pair(s) at kinship >= ${KING_MIN}"
+echo "[$(date +%T)] $(( $(wc -l < "$KT") - 1 )) pair(s) in the king table"
 
 SUM="${REPO_DIR}/scripts/cohort-power-summary.py"
 if [[ -s "$SUM" ]]; then
