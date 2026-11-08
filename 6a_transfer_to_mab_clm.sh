@@ -489,16 +489,92 @@ run_lai_refpanel () {
              "${HOMOG_DIR}/homog_composition.k${K}.tsv"; do
         [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
     done
+
+    # THE FULL PANEL, WRITTEN EXPLICITLY.
+    #
+    # "Donors included" was an assertion, and two things made it untrue of the
+    # files actually in this tree:
+    #
+    #  1. The tree ships the LAI-mode SPLIT -- <sp>_reference_lai.txt plus
+    #     <sp>_simulation_lai.txt. Reading the first as "the reference panel"
+    #     gives roughly HALF the homogeneous samples, silently.
+    #
+    #  2. homog_<K>pop_samples.txt is 4a's included==1, and 4a sets
+    #     included=0 for anything in ${REFS}/*_simulation.txt -- an
+    #     UNVERSIONED glob that the suffixed lists written here do not match.
+    #     So whether donors are in that file depends on whether a legacy
+    #     unversioned donor list happens to be sitting on disk.
+    #
+    # So the union is computed and written under a name that cannot be
+    # misread. Every donor was drawn from the homogeneous pool, so the union
+    # of the panel list and the split halves IS every homogeneous sample.
+    local FULL="$STAGE/lai_full_panel_samples.txt"
+    {
+        [[ -s "${HOMOG_DIR}/homog_${K}pop_samples.txt" ]] && \
+            awk 'NF && $1 !~ /^#/ {print $1}' "${HOMOG_DIR}/homog_${K}pop_samples.txt"
+        for sp in $SUPERPOPS_T; do
+            for role in reference simulation; do
+                if f=$(role_file "$sp" "$role" "$LAI_SUFFIX"); then
+                    awk 'NF && $1 !~ /^#/ {print $1}' "$f"
+                fi
+            done
+        done
+        # Legacy unversioned donor lists are what 4a's glob actually reads, so
+        # their members may have been dropped from included==1 and must come
+        # back into the full panel.
+        for f in "${REFS}"/*_simulation.txt; do
+            [[ -s "$f" ]] && awk 'NF && $1 !~ /^#/ {print $1}' "$f"
+        done
+    } 2>/dev/null | sort -u > "$FULL"
+    local N_FULL N_HOMOG N_LEGACY=0
+    N_FULL=$(grep -c . "$FULL" || true)
+    N_HOMOG=$(awk 'NF' "${HOMOG_DIR}/homog_${K}pop_samples.txt" 2>/dev/null | wc -l)
+    for f in "${REFS}"/*_simulation.txt; do
+        [[ -s "$f" ]] && N_LEGACY=$((N_LEGACY + $(awk 'NF && $1 !~ /^#/' "$f" | wc -l)))
+    done
+    echo "[$(date +%T)] LAI full panel: ${N_FULL} samples "\
+         "(homog list ${N_HOMOG}, unversioned donor lists ${N_LEGACY})"
+    if [[ "$N_LEGACY" -gt 0 ]]; then
+        echo "[$(date +%T)]   NOTE: ${N_LEGACY} id(s) in unversioned"
+        echo "[$(date +%T)]   ${REFS}/*_simulation.txt -- 4a excluded these from"
+        echo "[$(date +%T)]   homog_${K}pop_samples.txt. They ARE in"
+        echo "[$(date +%T)]   lai_full_panel_samples.txt."
+    fi
+
     write_provenance "$STAGE" \
         "LAI / GWAS reference panel (donors INCLUDED)" \
-"  Donors are NOT withheld. Every homogeneous sample is in the reference.
-  Use this panel for FLARE and for the GWAS, where no genome is simulated
-  from these haplotypes, so there is no circularity to avoid and excluding
-  donors would only shrink the panel.
+"  THREE SAMPLE LISTS ARE IN HERE AND THEY ARE NOT INTERCHANGEABLE. Reading
+  the wrong one costs you half the panel without any error.
 
-  Do NOT use it to score the benchmarking cohort: those test genomes were
-  simulated from donor haplotypes that are present here, which would make
-  the method's own input its answer key." \
+    lai_full_panel_samples.txt     EVERY homogeneous sample, donors
+                                   INCLUDED, 1000 Genomes included. ** THIS
+                                   IS THE ONE FOR FLARE AND THE GWAS. **
+                                   Nothing is simulated from these
+                                   haplotypes in that work, so there is no
+                                   circularity to avoid and withholding
+                                   donors would only shrink the panel.
+
+    <sp>_reference_lai.txt         The reference HALF of the LAI-accuracy
+    <sp>_simulation_lai.txt        split, and the donor half. For the LAI
+                                   ACCURACY PAPER, where donors must be
+                                   withheld from the reference or the
+                                   accuracy measurement is circular. Each
+                                   file is about half its super-pop; their
+                                   union is the full panel above.
+
+    homog_${K}pop_samples.txt         4a's included==1. Normally the same as the
+                                   full panel, but 4a drops anything listed
+                                   in an UNVERSIONED ${REFS}/*_simulation.txt,
+                                   so it can be smaller. The transfer log
+                                   reports when that happened.
+
+  lai_ref_panel_samples.k${K}.tsv is the full Q table, every sample including
+  included==0, and is the ancestry covariate for GWAS and power simulations.
+
+  Do NOT use anything in here to score the benchmarking cohort: those test
+  genomes were simulated from donor haplotypes present here, which would
+  make the method's own input its answer key. Use
+  ${HARMONIZATION_SUBDIR}/benchmark_reference_panel/ for that." \
         "lai (suffix ${LAI_SUFFIX})"
     do_rsync "$STAGE" "lai_reference_panel"
 }
