@@ -82,8 +82,32 @@ seen them.
 
 | sample_type | who | what it adds |
 |---|---|---|
-| `real_homogeneous` | top ADMIXTURE component ≥ 0.93 | real rare variation and real haplotype structure that simulation cannot produce; includes OCE and OTH, which have no simulated model at all |
-| `real_admixed` | top component < 0.93 — naturally admixed | real admixture, with the correlation structure between ancestry and genotype that a simulation idealises away |
+| `real_homogeneous` | top Q ≥ threshold **and** argmax == assigned super-pop | real rare variation and real haplotype structure that simulation cannot produce |
+| `real_admixed` | below the threshold, or argmax disagrees with the label | real admixture, with the correlation structure between ancestry and genotype that a simulation idealises away |
+| `real_unassigned` | argmax is **OTH**, the empirical leftover cluster at K=8 | the multiracial-like individuals a real diverse cohort carries. No reference ancestry fits them, so they are neither homogeneous nor admixed between named components |
+
+Thresholds are **tiered**, matching what 4a applies to the panel: 0.95 for
+EUR/EAS/AFR, 0.93 for AMR/OCE/MEN/SAS. Classifying test genomes on a flat
+0.93 while the panel uses a tiered bar would admit samples to
+`real_homogeneous` that the panel itself rejects.
+
+**Eligibility is NOT `included == 1`.** 4a sets that only when
+`max_Q >= threshold` AND the argmax matches the assigned super-pop, so gating
+on it admits only homogeneous samples — which makes `real_admixed` empty by
+construction and drops every OTH sample, since 4a excludes the leftover
+cluster from the homogeneous panel on purpose. Eligibility is decided from the
+role lists instead (not a donor, not in either reference panel, not 1KG, not
+in `sgdp_server_panel_ids.txt`, not a named exclusion, not a KING duplicate
+drop), and `included` is carried as a reported column.
+
+**Include every OCE and OTH sample not in a reference panel.** These are the
+groups that cannot be pooled into a stratified analysis, so they have to be
+tested directly rather than inferred from a neighbouring super-pop. A separate
+`reference_support` column records `full` / `thin` (< 25 reference samples) /
+`none`, because whether a matching reference panel exists is a property of the
+PANEL, not of the person — keeping them apart is what lets "imputation with a
+thin reference" be asked separately from "imputation on someone no reference
+fits".
 
 **They have no tracts.** A real genome has a WGS truth, but nobody recorded
 which ancestry each of its segments came from. Inferred tracts would be
@@ -120,12 +144,21 @@ reduce SASEUR's n; accept the reuse and report the kinship distribution; or
 drop SASEUR to control-only and rely on real admixed SAS for the imputation
 readings. The LAI reading is the one that suffers either way.
 
-**OCE.** ~20 donors and ~20 reference. Likely answer: **no OCE-containing
-admixture model at all** — OCE enters as `real_homogeneous` test samples and as
-an ADMIXTURE/LAI reference group, and is never simulated. Doc 19 already
-assumes this: OCE and OTHER have no reference panel and no model.
+**OCE.** **Decided: no OCE-containing admixture model.** Doc 19 already assumes
+it, and Table 1 has no OCE model, so every OCE sample withheld as a donor was
+withheld for nothing. Run the split with `--no-donor-superpops OCE`: the
+reference takes its planned share and the remainder is left *unallocated*, so
+the assembler picks it up as test genomes.
 
-Neither is defaulted. Both are decided when stage 3 prints the counts.
+Note the sizing trap this exposed — `min(n, ref_target)` would take all ~20
+OCE as reference and leave **zero** OCE test samples, which is the gap putting
+OCE in the cohort was meant to close. The reference-only path uses the same
+`plan_sizes` policy as a split group with no donor floor, so ~20 OCE gives
+15 reference / 5 test. That is thin either way and should be reported as a
+limitation rather than smoothed over: the OCE imputation reading rests on a
+handful of genomes.
+
+**SAS is not defaulted.** It is decided when stage 3 prints the counts.
 
 ## 6. Build order
 

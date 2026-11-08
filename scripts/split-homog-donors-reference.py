@@ -181,6 +181,13 @@ def main():
     ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
     ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
+    ap.add_argument("--no-donor-superpops", default="",
+                    help="comma-separated super-pops that get a reference but "
+                         "NO donors, because no simulation model draws on "
+                         "them (OCE is the case this exists for: Table 1 has "
+                         "no OCE model, so an OCE donor is withheld for "
+                         "nothing). Their non-reference samples are left "
+                         "unallocated and so stay test-eligible.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -235,6 +242,11 @@ def main():
     print("-" * 72)
 
     written, problems, comp_lines = [], [], []
+    no_donor_sps = {s.strip().upper() for s in args.no_donor_superpops.split(",")
+                    if s.strip()}
+    if no_donor_sps:
+        print(f"[split] reference-only super-pops (no donors): "
+              f"{sorted(no_donor_sps)}")
     for sp in sorted(by_sp):
         members = by_sp[sp]
         n = len(members)
@@ -268,6 +280,39 @@ def main():
                         or r["sample"].strip() in server_ids)
             kg = sorted(r["sample"] for r in members if _is_kg(r))
             nonkg = [r for r in members if not _is_kg(r)]
+
+        # A super-pop that no simulation model draws on needs no donors. OCE
+        # is the case this exists for: Table 1 has no OCE model, so every OCE
+        # sample withheld as a donor is withheld for nothing -- and in a group
+        # that thin, those samples are worth far more as test genomes, since
+        # OCE and OTH are precisely the ancestries that cannot be pooled into
+        # a stratified analysis and so have to be tested directly.
+        if sp in no_donor_sps:
+            # The reference takes up to its target and the REMAINDER IS LEFT
+            # UNALLOCATED, which is the whole point: an unallocated sample is
+            # neither donor nor reference, so the cohort assembler picks it up
+            # as a test genome. Making all of them reference instead would
+            # leave this super-pop with no test samples at all, which for OCE
+            # would mean no OCE reading anywhere in the benchmark.
+            by_pop_all = defaultdict(list)
+            for r in members:
+                by_pop_all[r["pop"].strip() or "NA"].append(r["sample"])
+            # NOT min(n, ref_target). For a group of ~20 that takes every
+            # sample as reference and leaves NO test genomes -- which for OCE
+            # would mean the benchmark has no OCE imputation reading at all,
+            # the exact gap that putting OCE in the cohort was meant to close.
+            # Use the same sizing policy as a split group, with no donor floor
+            # since there are no donors, and leave the remainder unallocated
+            # so the assembler picks it up as test samples.
+            n_ref_only, _nd, _st = plan_sizes(
+                n, args.ref_fraction, args.ref_floor, args.ref_target, 0)
+            n_ref_only = min(n_ref_only, n)
+            ref, rest = allocate_stratified(by_pop_all, n_ref_only)
+            print(f"{sp:>9} {n:>6} {'ref-only':>12} {len(ref):>6} {0:>7} "
+                  f"{0:>5.0f}%  no model draws on {sp}: 0 donors, "
+                  f"{len(rest)} left for the test pool")
+            written.append((sp, ref, []))
+            continue
 
         n_ref, n_don, status = plan_sizes(
             n, args.ref_fraction, args.ref_floor, args.ref_target,

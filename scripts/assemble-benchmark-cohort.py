@@ -114,6 +114,24 @@ def read_list(path):
     return out
 
 
+def role_list(refs_dir, sp, role, suffix):
+    """Read <sp>_<role>_<suffix>.txt, trying both letter cases.
+
+    split-homog-donors-reference.py lowercases the super-pop in the filename
+    (eur_reference_bench.txt). Looking only for the upper-case spelling finds
+    nothing, every panel sample then looks test-eligible, and the cohort would
+    be built with donors in the test set. Try both rather than depend on which
+    convention the splitter happens to use.
+    """
+    for name in (f"{sp.lower()}_{role}_{suffix}.txt",
+                 f"{sp}_{role}_{suffix}.txt",
+                 f"{sp.upper()}_{role}_{suffix}.txt"):
+        p = os.path.join(refs_dir, name)
+        if os.path.exists(p):
+            return read_list(p)
+    return set()
+
+
 def threshold_for(sp, flat):
     if flat is not None:
         return flat
@@ -160,6 +178,14 @@ def main():
                     help="ids inside an imputation server's reference panel; "
                          "these cannot be test samples either")
     ap.add_argument("--kg-cohort", default="1KG")
+    ap.add_argument("--panel-exclude", default="reference_ids/panel_exclude_ids.txt",
+                    help="named exclusions (e.g. the CHMI hydatidiform-mole "
+                         "cell line); not test-eligible")
+    ap.add_argument("--dup-drop", default="reference_ids/panel_duplicate_drop_ids.txt",
+                    help="KING duplicate drops from 1e; not test-eligible")
+    ap.add_argument("--thin-reference", type=int, default=25,
+                    help="a super-pop whose benchmark reference list is "
+                         "smaller than this is marked reference_support=thin")
     ap.add_argument("--flat-threshold", type=float, default=None,
                     help="use one homogeneity threshold for every super-pop "
                          "(the plan document's literal 0.93) instead of the "
@@ -180,8 +206,8 @@ def main():
     donors, refs = set(), set()
     sps = set(r[idx["super_pop"]] for r in rows) | set(COMPONENT_POOL.values())
     for sp in sorted(x for x in sps if x and x != "NA"):
-        donors |= read_list(os.path.join(a.refs, f"{sp}_simulation_{a.suffix}.txt"))
-        refs   |= read_list(os.path.join(a.refs, f"{sp}_reference_{a.suffix}.txt"))
+        donors |= role_list(a.refs, sp, "simulation", a.suffix)
+        refs   |= role_list(a.refs, sp, "reference",  a.suffix)
     server = read_list(a.server_panel_ids)
 
     if not donors and not refs:
@@ -197,11 +223,42 @@ def main():
                  f"refusing to build a cohort on it.")
 
     # ---- step 7: classify the real test genomes ------------------------
+    #
+    # WHY `included` IS NOT THE ELIGIBILITY TEST.
+    # 4a sets included=1 only when max_Q >= the homogeneity threshold AND the
+    # supervised argmax matches the assigned super-pop. Gating on it therefore
+    # admits ONLY homogeneous samples, which makes real_admixed empty by
+    # construction -- and real_admixed is the category that contributes real
+    # admixture with the ancestry/genotype correlation structure a simulation
+    # idealises away. It also drops every OTH sample, since 4a excludes the
+    # leftover cluster from the homogeneous panel on purpose.
+    #
+    # Those are exactly the people a harmonization pipeline has to handle: the
+    # multiracial individuals who fit no single reference ancestry, and the
+    # thinly represented groups that cannot be pooled into a stratified
+    # analysis. Excluding them would test the pipeline only on the cases it
+    # finds easy.
+    #
+    # But included=0 is overloaded -- it also marks donors, super_pop=NA, and
+    # (via 4a's exclusion set) named exclusions and KING duplicate drops, and
+    # the TSV does not record which branch fired. So eligibility is decided
+    # from the role lists directly, and `included` is carried as a reported
+    # column rather than used as a filter.
+    panel_excl = read_list(a.panel_exclude)
+    dup_drop = read_list(a.dup_drop)
+    ref_sizes = {}
+    for sp in sorted(x for x in sps if x and x != "NA"):
+        ref_sizes[sp] = len(role_list(a.refs, sp, "reference", a.suffix))
+
+    def support_for(sp):
+        n = ref_sizes.get(sp, 0)
+        if n == 0:
+            return "none"
+        return "thin" if n < a.thin_reference else "full"
+
     test, excl = [], defaultdict(list)
     for r in rows:
         s = r[idx["sample"]]
-        if r[idx["included"]].strip() not in ("1", "TRUE", "True", "true"):
-            excl["not in panel"].append(s); continue
         if s in donors:
             excl["donor"].append(s); continue
         if s in refs:
@@ -210,21 +267,53 @@ def main():
             excl["1000 Genomes (in server panels)"].append(s); continue
         if s in server:
             excl["inside a server reference panel"].append(s); continue
+        if s in panel_excl:
+            excl["named panel exclusion"].append(s); continue
+        if s in dup_drop:
+            excl["KING duplicate drop"].append(s); continue
+        sp = r[idx["super_pop"]]
+        if sp in ("", "NA"):
+            excl["super_pop unresolved"].append(s); continue
         try:
             q = float(r[idx["max_Q_sup"]])
         except ValueError:
             excl["unparseable max_Q_sup"].append(s); continue
-        sp = r[idx["super_pop"]]
+        ap = r[idx["argmax_pop_sup"]]
         thr = threshold_for(sp, a.flat_threshold)
+        # OTH is the empirical leftover cluster at K=8. It is not a reference
+        # ancestry, so an OTH sample is neither homogeneous (there is no
+        # ancestry for it to be homogeneous FOR) nor admixed between named
+        # components. It gets its own label.
+        if sp == "OTH" or ap == "OTH":
+            stype = "real_unassigned"
+            # Support is "none" by definition, not whatever the sample's
+            # metadata label happens to have. An OTH sample's assigned
+            # super-pop is a label the supervised Q contradicts, so reading
+            # support off it would report a reference panel that does not
+            # cover this person.
+            support = "none"
+        elif q >= thr and ap == sp:
+            stype = "real_homogeneous"
+            support = support_for(sp)
+        else:
+            stype = "real_admixed"
+            support = support_for(sp)
         test.append({
             "sample": s,
             "cohort": r[idx["cohort"]],
             "pop": r[idx["pop"]],
             "super_pop": sp,
-            "argmax_pop_sup": r[idx["argmax_pop_sup"]],
+            "argmax_pop_sup": ap,
             "max_Q_sup": q,
             "threshold": thr,
-            "sample_type": "real_homogeneous" if q >= thr else "real_admixed",
+            "sample_type": stype,
+            # The person's ancestry and whether a matching reference panel
+            # exists are different facts, and conflating them would make it
+            # impossible to ask "how does imputation do when the reference is
+            # thin?" separately from "how does it do on people no reference
+            # fits?". So support is its own column.
+            "reference_support": support,
+            "panel_included": r[idx["included"]].strip(),
         })
 
     # ---- step 8: deal into the six chip x build cells ------------------
@@ -240,7 +329,8 @@ def main():
     man = f"{a.out}_manifest.tsv"
     with open(man, "w") as g:
         cols = ["sample", "cohort", "pop", "super_pop", "argmax_pop_sup",
-                "max_Q_sup", "threshold", "sample_type", "chip", "build"]
+                "max_Q_sup", "threshold", "sample_type", "reference_support",
+                "panel_included", "chip", "build"]
         g.write("\t".join(cols) + "\n")
         for t in sorted(test, key=lambda x: x["sample"]):
             g.write("\t".join(str(t[c]) for c in cols) + "\n")
@@ -293,13 +383,37 @@ def main():
     by = defaultdict(lambda: defaultdict(int))
     for t in test:
         by[t["argmax_pop_sup"]][t["sample_type"]] += 1
-    w(f" {'component':<12}{'homogeneous':>13}{'admixed':>10}{'total':>8}")
+    sup_of = {}
+    for t in test:
+        sup_of[t["argmax_pop_sup"]] = t["reference_support"]
+    w(f" {'component':<12}{'homog':>8}{'admixed':>9}{'unassigned':>12}"
+      f"{'total':>8}{'ref':>7}")
     for c in sorted(by):
-        h = by[c]["real_homogeneous"]; m = by[c]["real_admixed"]
-        w(f" {c:<12}{h:>13}{m:>10}{h+m:>8}")
+        h = by[c]["real_homogeneous"]
+        m = by[c]["real_admixed"]
+        u = by[c]["real_unassigned"]
+        w(f" {c:<12}{h:>8}{m:>9}{u:>12}{h+m+u:>8}{sup_of.get(c, '?'):>7}")
     th = sum(1 for t in test if t["sample_type"] == "real_homogeneous")
-    tm = len(test) - th
-    w(f" {'TOTAL':<12}{th:>13}{tm:>10}{len(test):>8}")
+    tm = sum(1 for t in test if t["sample_type"] == "real_admixed")
+    tu = sum(1 for t in test if t["sample_type"] == "real_unassigned")
+    w(f" {'TOTAL':<12}{th:>8}{tm:>9}{tu:>12}{len(test):>8}")
+    w("")
+    w(" real_homogeneous  top Q >= threshold and argmax == assigned super-pop")
+    w(" real_admixed      naturally admixed, or argmax disagrees with the label")
+    w(" real_unassigned   OTH, the empirical leftover cluster at K=8 -- no")
+    w("                   reference ancestry fits, so it is neither homogeneous")
+    w("                   nor admixed between named components. These are the")
+    w("                   multiracial-like individuals a real diverse cohort")
+    w("                   carries, and every one not in a reference panel is")
+    w("                   included here on purpose.")
+    w("")
+    w(" ref column: full / thin (< %d reference samples) / none. A thin or"
+      % a.thin_reference)
+    w(" absent reference panel is a property of the PANEL, not of the person,")
+    w(" which is why it is separate from sample_type: it lets 'imputation with")
+    w(" a thin reference' be asked apart from 'imputation on someone no")
+    w(" reference fits'. OCE and OTH are the groups that cannot be pooled into")
+    w(" a stratified analysis, and they are in the cohort for that reason.")
     w("")
     w(" Real genomes are scored for imputation accuracy, calibration and")
     w(" retention ONLY. They have no recorded tracts, so they are never")
@@ -334,8 +448,7 @@ def main():
     w("-" * 72)
     dn = defaultdict(int)
     for sp in sorted(set(COMPONENT_POOL.values())):
-        dn[sp] = len(read_list(os.path.join(a.refs,
-                                            f"{sp}_simulation_{a.suffix}.txt")))
+        dn[sp] = len(role_list(a.refs, sp, "simulation", a.suffix))
     need_by_comp = defaultdict(int)
     for name, comp, _p, _g, n, _pr in MODELS:
         for c in comp:
@@ -361,11 +474,30 @@ def main():
     w(f"      {oce_h} real_homogeneous + {oce_m} real_admixed OCE test samples")
     w("      carry the OCE reading instead. Confirm OCE stays unsimulated.")
     w("")
+    # Donors allocated for a component no model draws on are doing nothing,
+    # and in a thin super-pop those are exactly the samples that would be
+    # worth more as test genomes.
+    unused = []
+    for sp in sorted(dn):
+        comp = [c for c, p in COMPONENT_POOL.items() if p == sp]
+        if dn[sp] > 0 and not any(need_by_comp.get(c, 0) > 0 for c in comp):
+            unused.append((sp, dn[sp]))
+    if unused:
+        w(" DONORS ALLOCATED BUT UNUSED BY ANY MODEL")
+        for sp, n_u in unused:
+            w(f"      {sp}: {n_u} donors withheld, no model draws on them.")
+        w("      Nothing simulates from these, so they are withheld for no")
+        w("      benefit while being exactly the samples a thin group needs as")
+        w("      test genomes. Re-run the split with")
+        w("        --no-donor-superpops " + ",".join(sp for sp, _ in unused))
+        w("      to return them to the test pool.")
+        w("")
     w("=" * 72)
-    w(" NOT BUILT BY THIS SCRIPT: step 6 (simulate the 2,160), step 10")
-    w(" (write chip files per chip x build x chr), step 11 (tables,")
-    w(" checksums, provenance). Steps 6 and 10 run in")
-    w(" genotyping_pipeline/benchmarking/simulate/.")
+    w(" NEXT: step 6  6b_simulate_benchmark_cohort_clm.sh  (the 2,160)")
+    w("       step 7  6c_extract_real_test_genomes_clm.sh (the real half)")
+    w("       transfer 6a_transfer_to_mab_clm.sh benchmark")
+    w(" NOT BUILT: step 10 (chip files per chip x build x chr),")
+    w("            step 11 (tables, checksums, provenance).")
     w("=" * 72)
 
     with open(rep, "w") as g:

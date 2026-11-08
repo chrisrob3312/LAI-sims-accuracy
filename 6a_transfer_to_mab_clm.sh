@@ -313,11 +313,26 @@ SUPERPOPS_T="${SUPERPOPS_T:-EUR EAS AFR AMR SAS MEN OCE}"
 SIMSET_DIR="${SIMSET_DIR:-${PROJECT_ROOT}/06_benchmark_simset}"
 REAL_DIR="${REAL_DIR:-${PROJECT_ROOT}/07_benchmark_real}"
 
+# split-homog-donors-reference.py LOWERCASES the super-pop in the filename
+# (eur_reference_bench.txt). Looking only for the upper-case spelling finds
+# nothing, and "nothing" here reads as "no lists were produced" -- which would
+# make the distinction check pass vacuously on two empty sets. Resolve the
+# spelling instead of assuming one.
+role_file () {   # $1 = super-pop, $2 = reference|simulation, $3 = suffix
+    local sp="$1" kind="$2" sfx="$3" f
+    for f in "${REFS}/$(echo "$sp" | tr 'A-Z' 'a-z')_${kind}_${sfx}.txt" \
+             "${REFS}/${sp}_${kind}_${sfx}.txt"; do
+        if [[ -s "$f" ]]; then printf '%s\n' "$f"; return 0; fi
+    done
+    return 1
+}
+
 ids_union () {   # $1 = reference|simulation, $2 = suffix
     local kind="$1" sfx="$2" sp f
     for sp in $SUPERPOPS_T; do
-        f="${REFS}/${sp}_${kind}_${sfx}.txt"
-        if [[ -s "$f" ]]; then awk 'NF && $1 !~ /^#/ {print $1}' "$f"; fi
+        if f=$(role_file "$sp" "$kind" "$sfx"); then
+            awk 'NF && $1 !~ /^#/ {print $1}' "$f"
+        fi
     done | sort -u
 }
 
@@ -412,11 +427,12 @@ write_provenance () {   # $1 = stage dir, $2 = title, $3 = donor policy, $4 = su
 run_lai_refpanel () {
     local STAGE="${PROJECT_ROOT}/.stage_lai_reference_panel"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
-    local sp f n=0
+    local sp role f n=0
     for sp in $SUPERPOPS_T; do
-        for f in "${REFS}/${sp}_reference_${LAI_SUFFIX}.txt" \
-                 "${REFS}/${sp}_simulation_${LAI_SUFFIX}.txt"; do
-            [[ -s "$f" ]] && { ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1)); }
+        for role in reference simulation; do
+            if f=$(role_file "$sp" "$role" "$LAI_SUFFIX"); then
+                ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1))
+            fi
         done
     done
     if [[ "$n" -eq 0 ]]; then
@@ -444,11 +460,12 @@ run_lai_refpanel () {
 run_benchmark_refpanel () {
     local STAGE="${PROJECT_ROOT}/.stage_benchmark_reference_panel"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
-    local sp f n=0
+    local sp role f n=0
     for sp in $SUPERPOPS_T; do
-        for f in "${REFS}/${sp}_reference_${BENCH_SUFFIX}.txt" \
-                 "${REFS}/${sp}_simulation_${BENCH_SUFFIX}.txt"; do
-            [[ -s "$f" ]] && { ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1)); }
+        for role in reference simulation; do
+            if f=$(role_file "$sp" "$role" "$BENCH_SUFFIX"); then
+                ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1))
+            fi
         done
     done
     if [[ "$n" -eq 0 ]]; then
@@ -468,8 +485,7 @@ run_benchmark_refpanel () {
         {
             printf 'super_pop\tn_reference\tn_1KG\tn_other\n'
             for sp in $SUPERPOPS_T; do
-                f="${REFS}/${sp}_reference_${BENCH_SUFFIX}.txt"
-                [[ -s "$f" ]] || continue
+                f=$(role_file "$sp" reference "$BENCH_SUFFIX") || continue
                 awk -F'\t' -v sp="$sp" '
                   NR==FNR { if ($1 !~ /^#/ && NF) r[$1]=1; next }
                   FNR==1  { for(i=1;i<=NF;i++){if($i=="sample")si=i; if($i=="cohort")ci=i} next }
