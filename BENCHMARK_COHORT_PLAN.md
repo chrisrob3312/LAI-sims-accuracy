@@ -108,6 +108,40 @@ the exclusions can.
 policy: donors included, for the GWAS and FLARE work where nothing is
 simulated from these haplotypes.
 
+## 1c. Two independent checks on the simulated demography
+
+The `.dat` generation lines are the one assumption in step 6 that cannot fail
+loudly: `mixer` simulates whatever history it parses and says nothing if that
+is not the history intended. Two checks run at the end of every chromosome in
+6b, using **different statistics over the same truth** so a bug in one does
+not reproduce in the other.
+
+| script | statistic | catches |
+|---|---|---|
+| `validate-simset-tracts.py` | ancestry **switches** per Morgan | tract lengths inconsistent with intended generations |
+| `cohort-ancestry-summary.py` | ancestry **fractions** per individual | mean vs target, and between-individual spread |
+
+**The ancestry means are NOT a sufficient check, and this is the trap.** The
+pulse proportions come off the `.dat`'s first line and survive even when the
+terminal generation line is ignored. So a cohort where every model silently ran
+a single generation shows means matching target to within sampling noise. The
+signal is in the **between-individual SD**:
+
+$$\mathrm{SD} \approx \sqrt{\frac{p(1-p)}{2(g-1)L}}$$
+
+Per chromosome (L ≈ 1.4 M) that is ≈ 0.30 at g = 2 against ≈ 0.077 at g = 16 —
+a factor of four. Verified on synthetic fixtures: a cohort that ran one pulse
+instead of its intended generations shows **correct means with SDs 4–5× too
+wide**, flagged uniformly across every high-generation model.
+
+Both checks are blind to the gen-2 models (MENEUR, EASEUR, SASEUR), since gen
+2 *is* the failure mode. The gen 7/16/30 models are what make it detectable.
+
+The real half has no truth tracts, so its ancestry comes from the supervised
+ADMIXTURE Q and is reported for **inspection, not pass/fail** — whether each
+group looks like the ancestry it claims, and whether the cohort spans the
+space the models were chosen to cover.
+
 ## 2. Where each component's haplotypes come from
 
 Donors are the `--mode benchmark` donor half from

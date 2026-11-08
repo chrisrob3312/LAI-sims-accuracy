@@ -339,12 +339,35 @@ echo "[$(date +%T)] [${CHR}] breakpoints + seeds archived in ${PROV_DIR}"
 # remembered. It does not fail the task -- the output is still a valid
 # realisation of SOME demography, and one chromosome's deviation is noisy --
 # but the verdict lands in the log next to the run that produced it.
+#
+# TWO CHECKS, DELIBERATELY DIFFERENT STATISTICS over the same truth, so a bug
+# in one does not reproduce in the other:
+#
+#   validate-simset-tracts.py    counts ancestry SWITCHES per Morgan
+#   cohort-ancestry-summary.py   measures ancestry FRACTIONS per individual
+#
+# The second exists because the ancestry MEANS stay correct under the failure
+# -- the pulse proportions come off the .dat's first line and survive even
+# when the terminal generation line is ignored -- so checking means alone is a
+# false reassurance. It is the between-individual SPREAD that carries the
+# signal: ~0.30 at gen 2 against ~0.077 at gen 16 per chromosome. A cohort
+# that silently ran one generation shows right means with SDs several times
+# too wide, uniformly.
 VALIDATE="${VALIDATE:-${REPO_DIR}/scripts/validate-simset-tracts.py}"
+ANCSUM="${ANCSUM:-${REPO_DIR}/scripts/cohort-ancestry-summary.py}"
 if [[ -s "$VALIDATE" ]] && command -v python3 >/dev/null; then
     echo "[$(date +%T)] [${CHR}] validating tract lengths against intended generations"
     python3 -I "$VALIDATE" --simset "$OUTDIR" --individuals "$INDIV_TSV" \
         --chr "$CHR" || {
         echo "[$(date +%T)] [${CHR}] *** TRACT VALIDATION FAILED -- read the table above"
         echo "[$(date +%T)] [${CHR}] *** do not score this cohort until it passes"
+    }
+fi
+if [[ -s "$ANCSUM" ]] && command -v python3 >/dev/null; then
+    echo "[$(date +%T)] [${CHR}] ancestry proportions: mean AND between-individual spread"
+    python3 -I "$ANCSUM" --simset "$OUTDIR" --individuals "$INDIV_TSV" \
+        --chr "$CHR" --out "${PROV_DIR}/ancestry_summary.${CHR}.txt" || {
+        echo "[$(date +%T)] [${CHR}] *** ANCESTRY SPREAD DISAGREES WITH THE INTENDED GENERATIONS"
+        echo "[$(date +%T)] [${CHR}] *** note the MEANS can look right while this fails"
     }
 fi
