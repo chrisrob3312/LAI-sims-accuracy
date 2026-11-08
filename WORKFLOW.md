@@ -1,0 +1,437 @@
+# Benchmark cohort & reference panel — build workflow
+
+Reference for how the panel and the benchmarking cohort are built, what every
+script does, and what each check catches. Companion to
+`BENCHMARK_COHORT_PLAN.md` (who is in the cohort) and
+`BENCHMARK_PANEL_DESIGN.md` (who may be a donor vs a reference).
+
+Everything runs on **taco (mhgcp)**. Branch: `claude/setup-shapeit5-conda-xlcdl`.
+
+---
+
+## 1. Two products from one source
+
+The same joint-called panel produces two deliverables with **opposite donor
+policies**, and nothing inside a BCF says which policy produced it:
+
+| product | donors | for |
+|---|---|---|
+| **LAI / GWAS reference panel** | **included** | FLARE, the GWAS, power simulations |
+| **Benchmark reference panel** | **excluded** | scoring the benchmark cohort's ancestry calls |
+| **Benchmark cohort** | — | the test genomes themselves (real + simulated) |
+
+Neither panel is an **imputation** reference. Imputation runs against the
+external servers — **TOPMed, All of Us, Michigan (1000 Genomes)**. The panels
+here are for supervised ADMIXTURE and local-ancestry inference only.
+
+---
+
+## 2. Stage map, in run order
+
+| stage | script | what it produces |
+|---|---|---|
+| 1a | `1a_prep-mxb-liftover_clm.sh` | MXB lifted to GRCh38 |
+| 1b | `1b_sgdp_liftover_clm.sh` | SGDP lifted to GRCh38 |
+| 1d | `1d_almarri_prep_clm.sh` | 137 Almarri per-chr BCFs |
+| 1c | `1c_phasing-jointcall_clm.sh` | cohort assembly + soft-union sites (**3,921 samples**) |
+| 1b | `1b_phase_prep_clm.sh` → `1b_phase_chunks_clm.sh` → `1b_phase_ligate_clm.sh` | phased panel (594 chunks, 8 cM / 2 cM overlap) |
+| 1e | `1e_king_dedup_clm.sh` | duplicate drops (KING > 0.354) |
+| 4a | `4a_build_homogeneity_panel_kN_clm.sh` | **ADMIXTURE K=8 Q table** — everything downstream reads this |
+| 5 | `scripts/split-homog-donors-reference.py` | donor / reference lists, per mode |
+| 7+8 | `scripts/assemble-benchmark-cohort.py` | cohort manifests + chip/build assignment |
+| 6 | `6b_simulate_benchmark_cohort_clm.sh` | the 2,160 simulated genomes + truth tracts |
+| 7 | `6c_extract_real_test_genomes_clm.sh` | real test genomes, per-chr BCF |
+| 9 | `scripts/build-chip-manifest-sites.py` | chip site lists, both builds |
+| 10 | `6d_write_chip_cells_clm.sh` | chip × build × chr cell files |
+| 10b | `6e_cohort_kinship_clm.sh` | genome-wide kinship → effective N |
+| transfer | `6a_transfer_to_mab_clm.sh` | everything to mab |
+
+Status helper: `bash scripts/pipeline-status.sh` — merges `sacct` + `squeue`
+(deduplicated; a running array task is reported by both) and runs the
+checkpoints.
+
+---
+
+## 3. Panel creation
+
+### 1c — cohort assembly
+Adds SGDP, Almarri and restored samples to the 3,448-sample joint call →
+**3,921**. Applies `reference_ids/panel_exclude_ids.txt` (named exclusions,
+e.g. `CHMI_CHMI3_WGS2`, a hydatidiform-mole cell line).
+
+> `REPO_DIR` must resolve correctly or `EXCLUDE_IDS` points at Slurm's spool
+> directory and the exclusion silently does nothing. This happened: the panel
+> came out at exactly 3,921, which *looked* like confirmation but was the
+> arithmetic of the exclusion not happening.
+
+### 1b — chunked phasing
+SHAPEIT5 `phase_common` per 8 cM chunk (2 cM overlap, 594 chunks), then
+`ligate`. Each chunk is **idempotent with a staleness check**: if the chunk
+file exists, its sample count is compared to the soft-union's. Equal → skip;
+different → rebuild. If no chunk file exists it phases fresh and prints
+neither message, which is the normal from-scratch case.
+
+### 1e — KING de-duplication
+Genome-wide KING-robust between the merge and ADMIXTURE. Drops **only**
+pairs > 0.354 (duplicate/MZ). Keep-priority: non-1KG → MXB/Almarri →
+lexicographic. Catches the same person under two IDs across HGDP / 1KG / MXB /
+Almarri, which `1c`'s ID-level de-duplication cannot.
+
+### 4a — ADMIXTURE K=8
+Three stages: anchor discovery across all 7 pools → supervised ADMIXTURE at
+K=8 → homogeneity filter.
+
+Writes `lai_ref_panel_samples.k8.tsv`, the Q table everything downstream
+reads: `sample, cohort, pop, super_pop, Q_sup_*, max_Q_sup, argmax_pop_sup,
+Q_unsup_*, sup_unsup_agree, included`.
+
+**Tiered homogeneity thresholds:** 0.95 for EUR/EAS/AFR, 0.93 for
+AMR/OCE/MEN/SAS.
+
+**`included == 1` requires `max_Q ≥ threshold` AND `argmax == assigned
+super_pop`**, and is 0 for donors, `super_pop = NA`, OTH, named exclusions and
+KING duplicate drops. It is *not* a general-purpose eligibility flag — see §5.
+
+`super_pop_of()` harmonises the vocabulary: **MXB → AMR**, SGDP via its own
+table, **CSA → SAS**, **MID → MEN**. Anything else → `NA`. It aborts if its two
+vocabularies don't overlap.
+
+> The HOMOG panel is HGDP + 1KG + MXB joint-called and Q-filtered. **It
+> includes MXB samples** — it is not MXB-free.
+
+---
+
+## 4. Step 5 — the donor / reference split
+
+`scripts/split-homog-donors-reference.py`
+
+- `reference = clamp(round(0.5 × N), 15, 65)`, donors take the rest.
+- Stratified by population (largest-remainder) so **both sides carry a
+  proportional share of every sub-population** — otherwise a difference
+  between sides is a difference between datasets read as an ancestry effect.
+- `--mode benchmark`: **1000 Genomes is never a donor**, because the external
+  imputation servers contain 1KG. Reference = 1KG + a stratified share of the
+  non-1KG samples.
+- `--mode lai`: no source rule; every sample eligible for either role.
+- `--no-donor-superpops OCE`: reference only, **no donors**, remainder left
+  *unallocated* so the assembler takes it as test genomes. Table 1 has no OCE
+  model, so an OCE donor is withheld for nothing.
+
+### The suffix trap
+Both modes write `<sp>_reference_<suffix>.txt`. **Run them with the same
+suffix and the second silently overwrites the first** — one panel on disk,
+nothing in the filename saying which policy made it, and an even chance the
+benchmark is scored against a donor-inclusive reference. Use distinct
+suffixes: `lai` and `bench`.
+
+Filenames are **lowercase** (`eur_reference_bench.txt`). Consumers resolve
+either case; looking only for uppercase finds nothing, and "nothing" reads as
+"no lists were produced".
+
+---
+
+## 5. Steps 7 + 8 — cohort assembly
+
+`scripts/assemble-benchmark-cohort.py` — needs only the Q file and the split,
+so it runs within minutes of 4a landing.
+
+### The four exclusions (test eligibility)
+Each closes a different way a method could already have seen the haplotypes:
+
+1. **donor** — its haplotypes built the simulated test genomes
+2. **reference panel** — it's in the ADMIXTURE/LAI reference
+3. **1000 Genomes** — the external servers contain 1KG
+4. **`sgdp_server_panel_ids.txt`** — SGDP re-sequenced 41 1KG individuals under
+   other IDs; a cohort column reading "SGDP" does *not* establish absence from
+   a server panel
+
+Plus named exclusions and KING duplicate drops.
+
+> **Eligibility is NOT `included == 1`.** That flag requires `max_Q ≥
+> threshold`, so gating on it admits only homogeneous samples — making
+> `real_admixed` **empty by construction** and dropping every OTH sample.
+> `included` is carried as a reported column instead.
+
+### Sample types
+
+| `sample_type` | rule |
+|---|---|
+| `real_homogeneous` | `max_Q ≥ threshold(argmax)` |
+| `real_admixed` | below that threshold |
+| `real_unassigned` | argmax is **OTH** — no reference ancestry fits |
+
+**The threshold is keyed on the ADMIXTURE argmax, not the metadata label.**
+"Is this genome homogeneous?" is about the ancestry the Q actually found, so a
+sample at Q=0.97 on EUR is measured against EUR's 0.95 whatever its label
+says. Label agreement is recorded separately in `label_concordant`; folding it
+into the type would turn a metadata problem into a false biological claim.
+
+`reference_support` = `full` / `thin` (<25 reference samples) / `none`. Kept
+separate from `sample_type` because whether a matching reference panel exists
+is a property of the **panel**, not the person — that separation is what lets
+"imputation with a thin reference" be asked apart from "imputation on someone
+no reference fits". **OCE and OTH are in the cohort precisely because they
+can't be pooled into a stratified analysis.**
+
+### The three designs
+
+| `--design` | imputation runs | build effect | chip effect | sim per cell |
+|---|---|---|---|---|
+| `one-cell` | 1× ≈ 2,660 | between-individual | between-individual | 360 |
+| **`paired-builds`** (default) | 2× ≈ 5,320 | **within-individual** | between-individual | **720** |
+| `full` | 6× ≈ 15,960 | within-individual | **within-individual** | 2,160 |
+
+The two readings are not symmetric. The **build effect** is "did the
+liftover change *this person's* answer?" — a within-individual question, so
+every individual goes on both builds. The **chip effect** is marker density, a
+property of the array, so an ancestry-balanced between-individual comparison
+is adequate — and splitting chips is what keeps the cost at 2× not 6×.
+
+`chips` and `builds` are **comma-separated lists**; 6d tests membership, not
+equality (an equality test against `"hg19,hg38"` matches nothing and would
+yield empty cells rather than an error).
+
+The deal **rotates each group's starting unit**. A fixed start sends every
+group's remainder to unit 0, and a cell-size imbalance is indistinguishable
+from a chip effect.
+
+### Outputs
+`benchmark_cohort_manifest.tsv` (real), `..._simset_individuals.tsv` (2,160
+rows, one per simulated individual), `..._simset_roster.tsv` (counts),
+`..._counts.txt` (the human-readable report).
+
+> Per-individual rows matter: step 6 simulates and step 10 masks, so both must
+> agree which individual is in which cell. Counts alone can't express that,
+> and independent deals would disagree.
+
+---
+
+## 6. Step 6 — simulation
+
+`6b_simulate_benchmark_cohort_clm.sh` — one task per chromosome, all 13 models
+inside. Components are extracted **once** per chromosome and reused, since
+`plink2 --export haps` over 3,921 samples dominates the runtime (22 tasks, not
+286).
+
+Models, generations and proportions come from the roster, not from the script,
+so Table 1 lives in exactly one place.
+
+**Gen-0 controls bypass admix-simu.** A single-ancestry individual has no
+admixture to recombine, so donor haplotype *pairs* are sampled directly and a
+constant-ancestry `.hanc` written. That is what makes a control's error pure
+method error.
+
+### Reproducibility is by preservation, not seeding
+`mixer` draws the recombination breakpoints, takes no seed and ships without
+source. So each unit archives its `.bp` — which **is** the recombination
+realisation — plus `SIMU_SEED`. `FROM_BP` replays exactly; `FROM_BP` set with
+a missing `.bp` is a hard error, not a silent fresh draw.
+
+### The one assumption that can't fail loudly
+The `.dat` **generation lines**. `simu-mix.pl` validates the header's
+population labels, but the generation lines go to the `mixer` binary, which
+accepts a differently-shaped history **without complaining** and simulates the
+wrong demography. `--dat-only` prints all thirteen `.dat` files and exits,
+needing no panel, conda env or Slurm context.
+
+---
+
+## 7. Step 7 (data) — real test genomes
+
+`6c_extract_real_test_genomes_clm.sh` — subsets the phased panel to the
+manifest's test-eligible individuals, one BCF per chromosome.
+
+**It applies no policy of its own.** The four exclusions live in the
+assembler; a second implementation here would drift, and the drifting copy
+would put a donor in the test set. It reads column 1 and hard-fails if any
+listed sample is absent from the panel rather than letting `--force-samples`
+ship a smaller cohort than the manifest claims.
+
+---
+
+## 8. Step 10 — chip × build × chr cells
+
+`6d_write_chip_cells_clm.sh` + `scripts/lift-cell-to-hg19.py`
+
+Real individuals (from 6c) and simulated ones (from 6b's haplotypes) are
+subset to the chip's sites, merged, and written per chip × build × chr.
+
+**hg19 cells use the chip's NATIVE hg19 manifest**, never a down-lift of the
+hg38 sites. A down-lift contains only probes that map back cleanly, by
+construction, so it would hide every probe the pipeline's own CrossMap drops,
+moves or strand-flips — which is part of what the benchmark measures.
+
+### The allele-orientation problem
+**GT is an index into REF/ALT.** Between builds a site can:
+
+| class | | GT |
+|---|---|---|
+| `same` | alleles identical | unchanged |
+| `flip` | alleles complemented (strand flip) | **unchanged** — complementing both leaves indices alone |
+| `swap` | REF and ALT exchanged | **FLIPPED 0↔1** |
+| `flip_swap` | complemented *and* exchanged | **FLIPPED** |
+| `unresolvable` | no correspondence | dropped |
+
+Missing `swap` writes a perfectly valid VCF with **inverted alt-allele dosage**
+at exactly the sites where the builds disagree about the reference allele. An
+imputation benchmark on it reports inflated error that reads as a *pipeline*
+problem, not a coordinate bug.
+
+**Palindromic sites are irreducibly ambiguous** — at A/T or C/G, complement
+*equals* swap. Those are resolved from the vendor strand column alone and
+**counted separately** in the report rather than absorbed. GSA: 6,422 of
+596,591 (1.08%).
+
+### Guards
+- `bcftools reheader -s` renames **positionally**, so each model's `.haps`
+  individual count is checked against the roster — a mismatch would shift
+  every ID and file genotypes under the wrong person.
+- Each finished cell's sample count is checked against the number assigned.
+  A cell that silently loses individuals makes a chip effect and an ancestry
+  effect inseparable.
+
+---
+
+## 9. Step 10b — kinship and effective N
+
+`6e_cohort_kinship_clm.sh` + `scripts/cohort-power-summary.py`
+
+**Both halves carry power and GWAS simulations.** ~500 real genomes alone is
+too few; ~2,660 together is workable. But simulated individuals from a finite
+donor pool are cryptic relatives **by construction** — SAS at ~24 donors for
+200 SASEUR individuals is the binding case.
+
+That need not bias anything: the GWAS uses **GENESIS with a GRM**, which models
+relatedness rather than pruning it. What relatedness costs is **effective**
+sample size:
+
+```
+N_eff = N² / Σᵢⱼ Rᵢⱼ        R = the GRM (2 × kinship off-diagonal)
+```
+
+**Power calculations must use N_eff, not the roster count.** On a synthetic
+thin-donor fixture, 60 SASEUR individuals came out behaving like 5.
+
+Not an array — kinship is genome-wide and per-chromosome estimates can't be
+averaged. LD-pruned first; kinship on correlated markers is inflated. Drops
+nobody: this is measurement, not de-duplication (that's 1e).
+
+**It also catches a leak nothing else can:** a real test genome related to a
+simulated one at second degree or closer means a donor, or a donor's close
+relative, is in the test set.
+
+---
+
+## 10. Step 9 — chip manifests
+
+`scripts/build-chip-manifest-sites.py` joins vendor **GRCh37 + GRCh38**
+manifests on probe ID and resolves REF/ALT against each FASTA (half the array
+is minus-strand, so the vendor allele column can't be trusted).
+
+GSA v1.0: 618,540 probes → **596,591 sites**, 6,422 palindromic.
+
+`scripts/inventory-chip-manifests.py` reports what's on disk. Two
+**independent** blockers per chip:
+- **both native builds** — one alone isn't buildable, and a liftover is not a
+  substitute
+- **a readable format** — `read_annotated()` requires tab-separated
+  `Name/Chr/MapInfo/Alleles`, so an Affymetrix `annot.csv` can't be read at all
+
+---
+
+## 11. Transfer — `6a_transfer_to_mab_clm.sh`
+
+```
+/mount/genepi2/Joint_called_hgdp_1kg_plus_mxbiobank_wgs_ref_panel/
+├── lai_reference_panel/                        donors INCLUDED
+│   ├── lai_full_panel_samples.txt              ← FOR FLARE + THE GWAS
+│   ├── <sp>_reference_lai.txt / _simulation_lai.txt   ← LAI accuracy paper
+│   └── lai_ref_panel_samples.k8.tsv            full Q table
+└── genotype_harmonization_pipeline_testing/
+    ├── README.txt
+    ├── benchmark_reference_panel/               donors EXCLUDED
+    └── benchmark_cohort/{real,simulated}/       the test genomes
+```
+
+**Three sample lists in the LAI tree are not interchangeable.**
+`<sp>_reference_lai.txt` is about **half** its super-pop (the split's reference
+half). `lai_full_panel_samples.txt` is the union — every homogeneous sample,
+donors and 1KG included. Reading the wrong one costs half the panel with no
+error.
+
+`homog_8pop_samples.txt` is 4a's `included == 1`, and 4a drops anything in an
+**unversioned** `reference_ids/*_simulation.txt` — a glob the suffixed lists
+don't match. So whether donors are in that file depends on leftover files; the
+transfer log reports when that happened.
+
+Scopes: `help`, `verify` (no credentials needed), `panels`, `benchmark`, `all`.
+
+---
+
+## 12. Every check — what it catches, and what it can't
+
+| check | where | catches | blind to |
+|---|---|---|---|
+| **panel distinction** | `6a verify` | the suffix collision; donor-in-reference; 1KG donors. Runs **before any bytes move** | — |
+| **label vocabulary** | assembler | a cohort's super_pop outside the canonical set — which would silently take the relaxed threshold, read reference size 0, and never match the argmax | a *canonical* but wrong label (reported as discordance instead) |
+| **label concordance** | assembler | a super-pop discordant for most of its samples = unharmonised cohort | — |
+| **soft-union sample count** | `pipeline-status.sh` | chunks phasing the old 3,448 panel — available ~10 h before ligate | — |
+| **chunk staleness** | `1b` | a chunk left from a previous panel | — |
+| **tract lengths** | `validate-simset-tracts.py` | the `.dat` terminal line ignored → every model runs as one pulse | **gen-2 models** (gen 2 *is* the failure mode) |
+| **ancestry mean + SD** | `cohort-ancestry-summary.py` | same failure via a **different statistic**. The **means stay correct** under it — the between-individual SD is what carries the signal | gen-2 models |
+| **allele orientation** | `lift-cell-to-hg19.py` | `swap` → inverted dosage on hg19 cells | palindromic sites (strand-resolved, counted separately) |
+| **positional reheader** | 6d, 6e | a model's `.haps` count ≠ roster → every ID shifted | — |
+| **cell sample count** | 6d | a cell that lost or gained individuals | — |
+| **real↔simulated kinship** | `6e` | a donor or close relative in the test set | — |
+| **N_eff** | `cohort-power-summary.py` | donor reuse inflating nominal N | — |
+| **manifest ⊆ panel** | 6c | manifest built against a different panel | — |
+
+Two checks deliberately use **different statistics over the same truth**
+(switches per Morgan vs fractions per individual) so a bug in one doesn't
+reproduce in the other. Both are blind to gen-2 models, which is the argument
+for keeping gen 7/16/30 in Table 1.
+
+---
+
+## 13. Run order after 4a lands
+
+```bash
+# verify 4a
+grep -E 'named exclusions|PRESENT in the panel' $P/logs/4a_homog*.out
+grep -c CHMI $P/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv   # must be 0
+
+# split (BOTH modes, DISTINCT suffixes)
+python3 -I scripts/split-homog-donors-reference.py --panel $T --mode lai       --suffix lai
+python3 -I scripts/split-homog-donors-reference.py --panel $T --mode benchmark --suffix bench \
+        --no-donor-superpops OCE
+
+# assemble + report
+python3 -I scripts/assemble-benchmark-cohort.py --panel $T --refs reference_ids \
+        --suffix bench --design paired-builds --out results/benchmark_cohort
+python3 -I scripts/cohort-composition-report.py --panel $T --refs reference_ids --suffix bench
+
+# build
+sbatch 6b_simulate_benchmark_cohort_clm.sh     # 22 tasks, simulate
+sbatch 6c_extract_real_test_genomes_clm.sh     # 22 tasks, real
+sbatch 6d_write_chip_cells_clm.sh              # 22 tasks, cells
+sbatch 6e_cohort_kinship_clm.sh                # 1 job, genome-wide
+
+# transfer
+./6a_transfer_to_mab_clm.sh verify
+./6a_transfer_to_mab_clm.sh all
+```
+
+---
+
+## 14. Known gaps
+
+| gap | state |
+|---|---|
+| **Step 11** — tables, checksums, provenance | not built |
+| **Affy 6.0 / 500K site lists** | need a GRCh38 vendor manifest **and** an Affymetrix reader |
+| **GSA v2.0** | needs its vendor GRCh38 A1 manifest |
+| **`.dat` generation-line format** | assumption; validated from output, not from the format spec |
+| **6d / 6e bcftools pipelines** | untested against real data (orientation logic *is* unit-tested) |
+| **FLARE invocation** | untested against the real jar |
+| **SAS decision** | deferred to real counts: reduce n, accept reuse and report N_eff, or control-only |
+| **`SIMSET_CONTRACT.md`** | the copy in hand is **v1** (4 models, one build, no real genomes); Doc 20's appendix is v2 |
