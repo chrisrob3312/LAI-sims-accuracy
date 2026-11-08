@@ -88,6 +88,37 @@ Q_unsup_*, sup_unsup_agree, included`.
 **Tiered homogeneity thresholds:** 0.95 for EUR/EAS/AFR, 0.93 for
 AMR/OCE/MEN/SAS.
 
+**Anchor selection — two floors, not one.** Stage A takes each super-pop's
+draw-pool members with cluster Q **≥ `ANCHOR_MIN_Q` (0.93)**, sorted
+descending, **capped at `ANCHOR_CAP` (50)** — the "top 25–50 ≥ 0.93" rule from
+the NAT/Mexican accuracy pipeline. Two separate floors matter, and they fail
+differently:
+
+| floor | what it stops | failure if absent |
+|---|---|---|
+| `ANCHOR_MIN_Q` = 0.93 | an **admixed** sample becoming an anchor | that sample *defines* the ancestry in the prior, and every Q estimate for the component inherits it |
+| `ANCHOR_FLOOR` = 10 | a super-pop's prior resting on **2–3 samples** | the label is populated so ADMIXTURE runs happily, but the component is estimated from a handful |
+
+The second is the quiet one. 4a previously failed only on a label with **zero**
+anchors — because that is what makes `ADMIXTURE --supervised` refuse to run —
+so a super-pop with two passed silently and then fed the homogeneity call, the
+donor/reference split, the test genomes' `sample_type` and the GWAS ancestry
+covariate. **OCE, MEN and SAS are where this bites.**
+
+A thin set is a loud **warning**, not an error — a thin super-pop may be a fact
+for the methods rather than a reason to stop. `ANCHOR_FLOOR_FATAL=1` makes it
+stop. Counts, floors and the cap are written to
+`04_homogeneity_panel/anchor_summary.k8.tsv`, so "how many exemplars defined
+this ancestry" is answerable later without re-reading logs.
+
+> **Do not lower `ANCHOR_MIN_Q` to fill a thin set.** That admits admixed
+> samples as the definition of a pure ancestry, which is worse than a small set
+> of clean ones.
+
+`ANCHOR_MIN_Q_STRICT` optionally tiers the Q floor (0.95 for EUR/EAS/AFR, as
+the homogeneity threshold does). **Off by default** — 0.93 uniform is what the
+previous pipeline used, and changing it silently would move every anchor set.
+
 **`included == 1` requires `max_Q ≥ threshold` AND `argmax == assigned
 super_pop`**, and is 0 for donors, `super_pop = NA`, OTH, named exclusions and
 KING duplicate drops. It is *not* a general-purpose eligibility flag — see §5.
@@ -443,6 +474,7 @@ Scopes: `help`, `verify` (no credentials needed), `panels`, `benchmark`, `all`.
 | **real↔simulated kinship** | `6e` | a donor or close relative in the test set | — |
 | **N_eff** | `cohort-power-summary.py` | donor reuse inflating nominal N | — |
 | **manifest ⊆ panel** | 6c | manifest built against a different panel | — |
+| **anchor sufficiency** | 4a | a super-pop whose supervised prior rests on fewer than `ANCHOR_FLOOR` exemplars — ADMIXTURE runs regardless, so nothing else would say so | nothing; it writes `anchor_summary.k8.tsv` either way |
 | **supervised anchors** | assembler | a 1KG anchor used as a donor (anchor status is no exemption from the no-1KG rule); reports anchor counts and roles | an empty `assigned` column, which it reports rather than assumes |
 
 Two checks deliberately use **different statistics over the same truth**

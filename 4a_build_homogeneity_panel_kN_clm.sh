@@ -165,6 +165,32 @@ REFS="${REFS:-${REPO_DIR}/reference_ids}"
 K="${K:-8}"
 ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
 ANCHOR_CAP="${ANCHOR_CAP:-50}"
+# A COUNT floor to go with the Q floor. ANCHOR_MIN_Q stops an ADMIXED sample
+# from becoming an anchor; this stops a super-pop's whole prior from resting on
+# a handful of samples. Both matter and they fail differently:
+#
+#   no Q floor      -> an admixed sample DEFINES that ancestry in the prior,
+#                      and every Q estimate for the component inherits it
+#   no count floor  -> the label is populated, so ADMIXTURE runs happily, but
+#                      the component is estimated from 2-3 exemplars
+#
+# The second is the quiet one. 4a only ever failed on a label with ZERO
+# anchors, because that is what makes ADMIXTURE --supervised refuse to run; a
+# super-pop with two passed silently and then fed the homogeneity call, the
+# donor/reference split, the test-genome sample_type and the GWAS ancestry
+# covariate. OCE, MEN and SAS are where this is likely to bite.
+#
+# A warning rather than an error by default: a thin super-pop may be a fact to
+# report in the methods rather than a reason to stop. ANCHOR_FLOOR_FATAL=1
+# makes it stop.
+ANCHOR_FLOOR="${ANCHOR_FLOOR:-10}"
+ANCHOR_FLOOR_FATAL="${ANCHOR_FLOOR_FATAL:-0}"
+# Optional tiering of the Q floor, mirroring HOMOG_THRESHOLD_STRICT. OFF by
+# default: 0.93 uniform is what the NAT/Mexican accuracy pipeline used, and
+# changing it silently would move every anchor set. Set ANCHOR_MIN_Q_STRICT to
+# apply a stricter floor to the deeply sampled super-pops, which can meet it.
+ANCHOR_MIN_Q_STRICT="${ANCHOR_MIN_Q_STRICT:-}"
+ANCHOR_STRICT_SUPERPOPS="${ANCHOR_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
 HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 
 # TIERED homogeneity cut. HOMOG_THRESHOLD above is the FLOOR and the default
@@ -274,7 +300,7 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # ---------------------------------------------------------------------------
 # Verify required inputs.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}  ANCHOR_CAP=${ANCHOR_CAP}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD}"
+echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}${ANCHOR_MIN_Q_STRICT:+ (strict ${ANCHOR_MIN_Q_STRICT} for ${ANCHOR_STRICT_SUPERPOPS})}  ANCHOR_CAP=${ANCHOR_CAP}  ANCHOR_FLOOR=${ANCHOR_FLOOR}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD}"
 echo "[$(date +%T)] verifying inputs"
 for CHR in {1..22}; do
     F="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
@@ -583,6 +609,55 @@ if [[ -n "$EMPTY_LABELS" ]]; then
     echo "       that super-pop's candidate pool, or drop K." >&2
     echo "       The cluster map and per-super-pop counts are above." >&2
     exit 6
+fi
+
+# ---------------------------------------------------------------------------
+# ANCHOR SUFFICIENCY. Written to a file as well as the log, because the anchor
+# set is the thing every downstream Q depends on and "how many exemplars
+# defined this ancestry" has to be answerable later without re-reading logs.
+# ---------------------------------------------------------------------------
+ANCHOR_SUMMARY="${ANCHOR_SUMMARY:-${HOMOG_DIR}/anchor_summary.k${K}.tsv}"
+mkdir -p "$(dirname "$ANCHOR_SUMMARY")"
+{
+    printf 'super_pop	n_anchors	min_Q_floor	cap	below_count_floor
+'
+    THIN=""
+    for SP in $SUPERPOPS OTH; do
+        if [[ "$SP" == "OTH" ]]; then F="$OTH_ANCHORS"; else F="$(anchors_for "$SP")"; fi
+        N=$(awk 'NF' "$F" 2>/dev/null | wc -l)
+        # The strict floor applies only if ANCHOR_MIN_Q_STRICT is set.
+        FLOOR="$ANCHOR_MIN_Q"
+        if [[ -n "$ANCHOR_MIN_Q_STRICT" ]]            && [[ ",${ANCHOR_STRICT_SUPERPOPS}," == *",${SP},"* ]]; then
+            FLOOR="$ANCHOR_MIN_Q_STRICT"
+        fi
+        BELOW=0
+        if [[ "$N" -lt "$ANCHOR_FLOOR" ]]; then BELOW=1; THIN="${THIN} ${SP}(${N})"; fi
+        printf '%s	%d	%s	%s	%d
+' "$SP" "$N" "$FLOOR" "$ANCHOR_CAP" "$BELOW"
+    done
+} > "$ANCHOR_SUMMARY"
+echo "[$(date +%T)] anchor summary -> ${ANCHOR_SUMMARY}"
+THIN=$(awk -F'	' -v fl="$ANCHOR_FLOOR" 'NR>1 && $5==1 {printf " %s(%d)", $1, $2}' "$ANCHOR_SUMMARY")
+if [[ -n "$THIN" ]]; then
+    echo "[$(date +%T)] ============================================================"
+    echo "[$(date +%T)] THIN ANCHOR SETS (below ANCHOR_FLOOR=${ANCHOR_FLOOR}):${THIN}"
+    echo "[$(date +%T)]"
+    echo "[$(date +%T)] Each of these super-pops' ancestry is defined in the"
+    echo "[$(date +%T)] supervised prior by that many exemplars. ADMIXTURE will"
+    echo "[$(date +%T)] run -- the labels are populated -- but every Q estimate"
+    echo "[$(date +%T)] for those components rests on them, and so do the"
+    echo "[$(date +%T)] homogeneity calls, the donor/reference split, the test"
+    echo "[$(date +%T)] genomes' sample_type and the GWAS ancestry covariate."
+    echo "[$(date +%T)]"
+    echo "[$(date +%T)] Report it in the methods, or widen the candidate pool."
+    echo "[$(date +%T)] Do NOT lower ANCHOR_MIN_Q to fill the set: that admits"
+    echo "[$(date +%T)] admixed samples as the definition of a pure ancestry,"
+    echo "[$(date +%T)] which is worse than a small set of clean ones."
+    echo "[$(date +%T)] ============================================================"
+    if [[ "$ANCHOR_FLOOR_FATAL" == "1" ]]; then
+        echo "ERROR: ANCHOR_FLOOR_FATAL=1 and thin anchor sets present:${THIN}" >&2
+        exit 7
+    fi
 fi
 
 # ---------------------------------------------------------------------------
