@@ -48,6 +48,27 @@ AFAM2, 16 for the Latino models, 30 for MENA3. Tract length falls as
 generations rise, so this spans the range over which local-ancestry callers
 degrade — a method that looks fine at gen 2 can fail at gen 30.
 
+## 1a. Where it lands on mab
+
+Both benchmark trees ship under one parent, kept apart from the GWAS panel
+beside it, because their donor policies are opposite and nothing inside a BCF
+says which one produced it:
+
+```
+/mount/genepi2/Joint_called_hgdp_1kg_plus_mxbiobank_wgs_ref_panel/
+├── lai_reference_panel/                        donors INCLUDED — GWAS + FLARE
+└── genotype_harmonization_pipeline_testing/
+    ├── README.txt                              scoring rules, the 3 exclusions
+    ├── benchmark_reference_panel/               donors EXCLUDED — ADMIXTURE/LAI
+    └── benchmark_cohort/
+        ├── real/                                real test genomes
+        └── simulated/                           the 2,160 + truth tracts
+```
+
+The parent carries a `README.txt` so the folder explains itself to whoever
+opens it, rather than depending on this being remembered. Override the parent
+name with `HARMONIZATION_SUBDIR`.
+
 ## 1b. Which reference goes with which reading
 
 The two reference panels this repository ships are for **supervised ADMIXTURE

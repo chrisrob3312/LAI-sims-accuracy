@@ -275,11 +275,17 @@ run_hg19_homog () {
 #                               to avoid and withholding donors would only
 #                               shrink it.
 #
-#   benchmark_reference_panel/  ADMIXTURE + LAI REFERENCE. 1000 Genomes plus a
-#                               population-stratified share of the non-1KG
+# The two benchmark trees sit under one parent,
+# ${HARMONIZATION_SUBDIR}/ (genotype_harmonization_pipeline_testing by
+# default), so the harmonization project cannot be confused with the GWAS
+# one next to it -- their donor policies are opposite:
+#
+#   <parent>/benchmark_reference_panel/
+#                               ADMIXTURE + LAI REFERENCE. 1000 Genomes plus
+#                               a population-stratified share of the non-1KG
 #                               samples, donors EXCLUDED.
 #
-#   benchmark_cohort/           THE COHORT. The test genomes themselves --
+#   <parent>/benchmark_cohort/  THE COHORT. The test genomes themselves --
 #                               real/ (real individuals drawn from HGDP, SGDP,
 #                               MXB, Almarri) and simulated/ (the 2,160 with
 #                               their truth tracts) -- plus the manifests that
@@ -347,6 +353,11 @@ SUPERPOPS_T="${SUPERPOPS_T:-EUR EAS AFR AMR SAS MEN OCE}"
 # The cohort's two halves on disk.
 SIMSET_DIR="${SIMSET_DIR:-${PROJECT_ROOT}/06_benchmark_simset}"
 REAL_DIR="${REAL_DIR:-${PROJECT_ROOT}/07_benchmark_real}"
+# Everything for the genotype harmonization pipeline's testing lives under one
+# parent on mab, kept apart from lai_reference_panel/ so the two projects
+# cannot be picked up interchangeably. The donor policies are opposite and
+# nothing inside a BCF says which one produced it.
+HARMONIZATION_SUBDIR="${HARMONIZATION_SUBDIR:-genotype_harmonization_pipeline_testing}"
 
 # split-homog-donors-reference.py LOWERCASES the super-pop in the filename
 # (eur_reference_bench.txt). Looking only for the upper-case spelling finds
@@ -492,6 +503,91 @@ run_lai_refpanel () {
     do_rsync "$STAGE" "lai_reference_panel"
 }
 
+run_harmonization_readme () {
+    # A README at the parent, so the folder explains itself to whoever opens
+    # it on mab rather than depending on this conversation being remembered.
+    # The reference/imputation distinction is the thing most likely to be got
+    # wrong, so it leads.
+    local STAGE="${PROJECT_ROOT}/.stage_harmonization_readme"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    cat > "$STAGE/README.txt" <<EOF
+GENOTYPE HARMONIZATION PIPELINE -- TESTING MATERIAL
+===================================================
+
+generated   $(date '+%Y-%m-%d %H:%M:%S %Z')
+source      ${PROJECT_ROOT}
+repo        $(cd "$REPO_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown) @ $(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+WHAT IS IN HERE
+
+  benchmark_reference_panel/   ADMIXTURE + LAI reference, donors EXCLUDED
+  benchmark_cohort/            the test genomes
+      real/                      real HGDP / SGDP / MXB / Almarri individuals
+      simulated/                 the 2,160, per chromosome, with truth tracts
+
+WHICH REFERENCE GOES WITH WHICH READING
+
+  global ancestry Q (ADMIXTURE)        benchmark_reference_panel/
+  local ancestry (FLARE / RFMix)       benchmark_reference_panel/
+  imputation accuracy / calibration    TOPMed, All of Us, Michigan (1000
+                                       Genomes) -- the EXTERNAL servers
+  power and GWAS simulations           real genotypes + the ADMIXTURE Q as
+                                       the ancestry covariate
+
+NEITHER TREE IN HERE IS AN IMPUTATION PANEL. Imputation goes to the external
+servers. The panel here is for ADMIXTURE and local-ancestry inference only.
+
+WHAT NOT TO USE
+
+  ../lai_reference_panel/ is the SAME KIND of panel with the OPPOSITE donor
+  policy -- donors INCLUDED. It is for the GWAS and FLARE work, where nothing
+  is simulated from those haplotypes. Scoring this cohort against it would
+  hand FLARE and RFMix the exact haplotypes they are meant to infer, because
+  these test genomes were simulated FROM those donors. Nothing inside a BCF
+  says which policy produced it, which is why the two live in separate trees.
+
+THE THREE EXCLUSIONS, AND WHY EACH IS DIFFERENT
+
+  1KG is IN benchmark_reference_panel/ and that is correct: this panel never
+  imputes, so 1KG here cannot leak a test genome's haplotypes into an
+  imputation answer, and for ADMIXTURE and LAI it is simply more reference
+  data.
+
+  1KG is NEVER a donor and never a real test genome: the external servers all
+  contain 1KG, so such a genome would be imputed against its own haplotypes.
+  Same reason sgdp_server_panel_ids.txt is barred from both roles -- SGDP
+  re-sequenced 1KG individuals under other identifiers, and the servers hold
+  those people whatever the cohort column says.
+
+  Donors are excluded from benchmark_reference_panel/ for a third reason: the
+  simulated test genomes are built FROM donor haplotypes.
+
+The imputation readings rest ENTIRELY on the test samples being absent from
+TOPMed, All of Us and Michigan. Nothing about the panels in here can
+establish that -- only those exclusions can.
+
+SCORING RULES
+
+  simulated individuals   local ancestry AND imputation. They have recorded
+                          truth tracts (.hanc) and the .bp recombination
+                          realisation that regenerates them.
+  real individuals        imputation accuracy / calibration / retention, and
+                          power / GWAS simulations. NEVER local ancestry:
+                          nobody recorded which ancestry each segment came
+                          from, and inferred tracts would be another method's
+                          output, not truth.
+  gen-0 controls          no admixture to get wrong, so their error is pure
+                          method error, and their imputation accuracy is the
+                          ceiling the admixed individuals of that component
+                          are measured against.
+
+Each subdirectory has its own PROVENANCE.txt with the donor policy, the split
+mode and the repo commit. The HOMOG panel is HGDP + 1KG + MXB joint-called and
+filtered by supervised ADMIXTURE; it INCLUDES MXB samples.
+EOF
+    do_rsync "$STAGE" "${HARMONIZATION_SUBDIR}"
+}
+
 run_benchmark_refpanel () {
     local STAGE="${PROJECT_ROOT}/.stage_benchmark_reference_panel"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
@@ -557,7 +653,7 @@ run_benchmark_refpanel () {
   simulated test genomes are built FROM donor haplotypes, so a donor left
   here hands FLARE and RFMix the haplotypes they are meant to infer." \
         "benchmark (suffix ${BENCH_SUFFIX})"
-    do_rsync "$STAGE" "benchmark_reference_panel"
+    do_rsync "$STAGE" "${HARMONIZATION_SUBDIR}/benchmark_reference_panel"
 }
 
 run_benchmark_cohort () {
@@ -660,7 +756,7 @@ run_benchmark_cohort () {
            cohort is absent from those servers -- no 1KG, and nothing in
            sgdp_server_panel_ids.txt, on either the donor or the test side." \
         "benchmark (suffix ${BENCH_SUFFIX})"
-    do_rsync "$STAGE" "benchmark_cohort"
+    do_rsync "$STAGE" "${HARMONIZATION_SUBDIR}/benchmark_cohort"
 }
 
 case "$SCOPE" in
@@ -670,7 +766,7 @@ case "$SCOPE" in
         # start -- a half-finished wrong transfer on mab is worse than none.
         verify_panel_distinction
         ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" \
-            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/{reference_lists,lai_reference_panel,benchmark_reference_panel,benchmark_cohort/{real,simulated}}"
+            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/{reference_lists,lai_reference_panel} '${MAB_BASE}/${HARMONIZATION_SUBDIR}'/{benchmark_reference_panel,benchmark_cohort/{real,simulated}}"
         run_hg38_all
         run_hg38_homog
         run_hg38_homog_k
@@ -679,6 +775,7 @@ case "$SCOPE" in
         run_hg19_homog_k
         run_reference_lists
         run_lai_refpanel
+        run_harmonization_readme
         run_benchmark_refpanel
         run_benchmark_cohort
         ;;
@@ -693,21 +790,25 @@ case "$SCOPE" in
     reference_lists)    run_reference_lists ;;
     panels)             verify_panel_distinction; run_lai_refpanel; run_benchmark_refpanel ;;
     lai_reference_panel) verify_panel_distinction; run_lai_refpanel ;;
-    benchmark_reference_panel) verify_panel_distinction; run_benchmark_refpanel ;;
-    benchmark_cohort)   run_benchmark_cohort ;;
-    benchmark)          verify_panel_distinction; run_benchmark_refpanel; run_benchmark_cohort ;;
+    benchmark_reference_panel) verify_panel_distinction; run_harmonization_readme; run_benchmark_refpanel ;;
+    benchmark_cohort)   run_harmonization_readme; run_benchmark_cohort ;;
+    benchmark)          verify_panel_distinction; run_harmonization_readme; run_benchmark_refpanel; run_benchmark_cohort ;;
     verify)             verify_panel_distinction; exit $? ;;
     help|--help|-h)     SCOPE_HELP=1 ;&
     *)
         [[ "${SCOPE_HELP:-0}" == "1" ]] || echo "Unknown scope: $SCOPE"
         echo "Usage: $0 <scope>"
         echo ""
-        echo "  REFERENCE PANELS -- what a method is GIVEN"
+        echo "  ADMIXTURE / LAI REFERENCE PANELS -- what a method is GIVEN."
+        echo "  Neither is an imputation panel: imputation runs against the"
+        echo "  external servers (TOPMed, All of Us, Michigan/1000 Genomes)."
         echo "    lai_reference_panel        donors INCLUDED; for FLARE and the GWAS"
         echo "    benchmark_reference_panel  1KG + population-stratified others,"
-        echo "                               donors EXCLUDED; what the harmonization"
-        echo "                               pipeline imputes against"
+        echo "                               donors EXCLUDED; for scoring the"
+        echo "                               benchmark cohort's ancestry calls"
         echo "    panels                     both of the above"
+        echo ""
+        echo "  Both benchmark trees ship under ${HARMONIZATION_SUBDIR}/"
         echo ""
         echo "  THE COHORT -- what a method is TESTED ON"
         echo "    benchmark_cohort           real/ + simulated/ test genomes, truth"
