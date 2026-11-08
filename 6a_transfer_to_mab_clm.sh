@@ -76,11 +76,17 @@ MAB_SSH_OPTS="${MAB_SSH_OPTS:-}"
 
 set -euo pipefail
 
-# The "verify" scope moves nothing, so it must not demand credentials: the
-# whole point is to check the split locally before deciding to ship.
-if [[ "$MAB_USER" == "<USERNAME>" && "${1:-all}" != "verify" ]]; then
+# The scopes that move nothing must not demand credentials: the whole point of
+# "verify" is to check the split locally before deciding to ship, and asking
+# for a username before printing the usage text is just unhelpful.
+case "${1:-all}" in
+    verify|help|--help|-h) NEEDS_CRED=0 ;;
+    *)                     NEEDS_CRED=1 ;;
+esac
+if [[ "$MAB_USER" == "<USERNAME>" && "$NEEDS_CRED" == "1" ]]; then
     echo "ERROR: edit MAB_USER at the top of $0 (or export MAB_USER=...) before running."
     echo "       To check the two panels without transferring: $0 verify"
+    echo "       For the list of scopes:                       $0 help"
     exit 1
 fi
 
@@ -132,6 +138,13 @@ do_rsync () {
         --include='*.vcf.gz' --include='*.vcf.gz.csi' --include='*.vcf.gz.tbi' \
         --include='*.tsv' --include='*.txt' \
         --include='.manifest.txt' \
+        --include='PROVENANCE.txt' \
+        `# the simulated cohort's own formats: .hanc is the truth tracts and` \
+        `# .bp the recombination realisation that regenerates a unit, so both` \
+        `# must travel -- without .bp the cohort cannot be reproduced.` \
+        --include='*.hanc' --include='*.hanc2' --include='*.bp' \
+        --include='*.phgeno' --include='*.haps' --include='*.sample' \
+        --include='*.snp' --include='*.dat' \
         --exclude='*' \
         "$src/" \
         "${MAB_USER}@${MAB_HOST}:${remote_full}/"
@@ -249,25 +262,42 @@ run_hg19_homog () {
 }
 
 # ===========================================================================
-# THE TWO REFERENCE PANELS, AND WHY THEY MUST NOT BE CONFUSED
+# THREE TREES: TWO REFERENCE PANELS AND THE COHORT ITSELF
 #
-# Both go to mab, and they are different products of the same Q file:
+# A reference panel and a cohort are different KINDS of thing -- one is what a
+# method is given, the other is what it is tested on -- so they get separate
+# trees and names that say which is which:
 #
-#   lai_reference_panel/   every homogeneous sample, donors INCLUDED. This is
-#                          what the GWAS and FLARE run against. Nothing is
-#                          simulated there, so there are no donors to
-#                          withhold, and withholding them would only shrink
-#                          the panel for no benefit.
+#   lai_reference_panel/        REFERENCE. Every homogeneous sample, donors
+#                               INCLUDED. What the GWAS and FLARE run against.
+#                               Nothing is simulated from these haplotypes, so
+#                               there is no circularity to avoid and
+#                               withholding donors would only shrink it.
 #
-#   benchmark_cohort/      the donor-EXCLUDED reference, plus the cohort
-#                          manifest. Here the same individuals' haplotypes
-#                          were used to simulate the test genomes, so a donor
-#                          left in the reference turns the method's own input
-#                          into its answer key.
+#   benchmark_reference_panel/  REFERENCE. 1000 Genomes plus a
+#                               population-stratified share of the non-1KG
+#                               samples, donors EXCLUDED. What the genotype
+#                               harmonization pipeline imputes and infers
+#                               against. 1KG belongs HERE and nowhere near the
+#                               donor side: the servers' own panels contain it,
+#                               which is fine for a reference and circular for
+#                               a donor.
 #
-# Shipping the wrong one is silent in both directions: a donor-inclusive
-# reference inflates the benchmark, and a donor-excluded reference needlessly
-# weakens the GWAS. Nothing in a BCF says which policy produced it.
+#   benchmark_cohort/           THE COHORT. The test genomes themselves --
+#                               real/ (real individuals drawn from HGDP, SGDP,
+#                               MXB, Almarri) and simulated/ (the 2,160 with
+#                               their truth tracts) -- plus the manifests that
+#                               say who is in which chip x build cell.
+#
+# An earlier revision shipped the benchmark REFERENCE lists under the name
+# benchmark_cohort/ and shipped no cohort at all. That is the same failure as
+# the suffix collision below: a name asserting one thing while holding
+# another, with nothing inside to contradict it.
+#
+# Shipping the wrong reference panel is silent in both directions: a
+# donor-inclusive reference inflates the benchmark, and a donor-excluded
+# reference needlessly weakens the GWAS. Nothing in a BCF says which policy
+# produced it.
 #
 # THE SUFFIX COLLISION. Both modes of split-homog-donors-reference.py write
 # <sp>_reference_<suffix>.txt. Run them with the SAME suffix and the second
@@ -279,6 +309,9 @@ LAI_SUFFIX="${LAI_SUFFIX:-lai}"
 BENCH_SUFFIX="${BENCH_SUFFIX:-bench}"
 BENCH_OUT="${BENCH_OUT:-${REPO_DIR}/results}"
 SUPERPOPS_T="${SUPERPOPS_T:-EUR EAS AFR AMR SAS MEN OCE}"
+# The cohort's two halves on disk.
+SIMSET_DIR="${SIMSET_DIR:-${PROJECT_ROOT}/06_benchmark_simset}"
+REAL_DIR="${REAL_DIR:-${PROJECT_ROOT}/07_benchmark_real}"
 
 ids_union () {   # $1 = reference|simulation, $2 = suffix
     local kind="$1" sfx="$2" sp f
@@ -408,8 +441,8 @@ run_lai_refpanel () {
     do_rsync "$STAGE" "lai_reference_panel"
 }
 
-run_benchmark_cohort () {
-    local STAGE="${PROJECT_ROOT}/.stage_benchmark_cohort"
+run_benchmark_refpanel () {
+    local STAGE="${PROJECT_ROOT}/.stage_benchmark_reference_panel"
     rm -rf "$STAGE"; mkdir -p "$STAGE"
     local sp f n=0
     for sp in $SUPERPOPS_T; do
@@ -422,26 +455,124 @@ run_benchmark_cohort () {
         echo "WARNING: no benchmark split lists with suffix '${BENCH_SUFFIX}'; skipping"
         return 0
     fi
-    for f in "${BENCH_OUT}/benchmark_cohort_manifest.tsv" \
-             "${BENCH_OUT}/benchmark_cohort_simset_roster.tsv" \
-             "${BENCH_OUT}/benchmark_cohort_counts.txt" \
-             "${BENCH_OUT}/cohort_composition.txt" \
-             "${REFS}/known_duplicate_pairs.tsv" \
+    for f in "${REFS}/known_duplicate_pairs.tsv" \
              "${REFS}/sgdp_server_panel_ids.txt" \
+             "${HOMOG_DIR}/homog_composition.k${K}.tsv" \
              "$SAMPLES_TSV_K"; do
         [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
     done
+    # Composition of the reference side, so "population balanced" is auditable
+    # rather than asserted. Per super-pop: how many came from 1000 Genomes and
+    # how many from everything else.
+    if [[ -s "$SAMPLES_TSV_K" ]]; then
+        {
+            printf 'super_pop\tn_reference\tn_1KG\tn_other\n'
+            for sp in $SUPERPOPS_T; do
+                f="${REFS}/${sp}_reference_${BENCH_SUFFIX}.txt"
+                [[ -s "$f" ]] || continue
+                awk -F'\t' -v sp="$sp" '
+                  NR==FNR { if ($1 !~ /^#/ && NF) r[$1]=1; next }
+                  FNR==1  { for(i=1;i<=NF;i++){if($i=="sample")si=i; if($i=="cohort")ci=i} next }
+                  (si && ci && ($si in r)) { t++; if ($ci=="1KG") k++; else o++ }
+                  END { printf "%s\t%d\t%d\t%d\n", sp, t+0, k+0, o+0 }' \
+                  "$f" "$SAMPLES_TSV_K"
+            done
+        } > "$STAGE/reference_panel_composition_${BENCH_SUFFIX}.tsv"
+    fi
     write_provenance "$STAGE" \
-        "Benchmarking cohort reference panel (donors EXCLUDED)" \
-"  Donors are withheld from the reference, and no 1000 Genomes sample is a
-  donor. Both exclusions exist to stop a method being scored against
-  haplotypes it was given: the simulated test genomes are built from the
-  donor half, and the imputation servers' own panels contain 1KG.
+        "Benchmark REFERENCE PANEL (donors EXCLUDED, 1KG included)" \
+"  This is the panel the genotype harmonization pipeline imputes and infers
+  AGAINST. It is not the cohort -- the test genomes are in benchmark_cohort/.
 
-  benchmark_cohort_manifest.tsv carries the real test genomes with their
-  sample_type (real_homogeneous / real_admixed) and chip x build cell.
-  Real genomes have no recorded tracts, so they are scored for imputation
-  accuracy, calibration and retention only -- never for local ancestry." \
+  Composition: 1000 Genomes, plus a population-stratified share of the
+  non-1KG samples so both sides carry a proportional slice of every
+  population. See reference_panel_composition_${BENCH_SUFFIX}.tsv.
+
+  Donors are withheld from this reference, and no 1000 Genomes sample is
+  ever a donor. The two exclusions close different holes: the simulated test
+  genomes are built from the donor half, and the imputation servers' own
+  panels already contain 1KG, so a 1KG donor would be imputed against its
+  own haplotypes." \
+        "benchmark (suffix ${BENCH_SUFFIX})"
+    do_rsync "$STAGE" "benchmark_reference_panel"
+}
+
+run_benchmark_cohort () {
+    # THE COHORT ITSELF: the test genomes, not the panel they are scored
+    # against. real/ and simulated/ are separate subtrees because they are
+    # scored differently -- see PROVENANCE.txt.
+    local STAGE="${PROJECT_ROOT}/.stage_benchmark_cohort"
+    rm -rf "$STAGE"; mkdir -p "$STAGE/real" "$STAGE/simulated"
+    local f d n_real=0 n_sim=0
+
+    for f in "${REAL_DIR}"/*.bcf "${REAL_DIR}"/*.bcf.csi; do
+        [[ -e "$f" ]] || continue
+        ln -sf "$f" "$STAGE/real/$(basename "$f")"; n_real=$((n_real+1))
+    done
+    for d in "${SIMSET_DIR}"/chr*; do
+        [[ -d "$d" ]] || continue
+        mkdir -p "$STAGE/simulated/$(basename "$d")"
+        for f in "$d"/*.hanc "$d"/*.haps "$d"/*.sample "$d"/*.phgeno \
+                 "$d"/*.snp "$d"/*.dat "$d"/*.bp; do
+            [[ -e "$f" ]] || continue
+            ln -sf "$f" "$STAGE/simulated/$(basename "$d")/$(basename "$f")"
+            n_sim=$((n_sim+1))
+        done
+    done
+    if [[ -d "${SIMSET_DIR}/provenance" ]]; then
+        ln -sfn "${SIMSET_DIR}/provenance" "$STAGE/simulated/provenance"
+    fi
+
+    # The manifests belong with the cohort: they are what says who is in it.
+    for f in "${BENCH_OUT}/benchmark_cohort_manifest.tsv" \
+             "${BENCH_OUT}/benchmark_cohort_simset_individuals.tsv" \
+             "${BENCH_OUT}/benchmark_cohort_simset_roster.tsv" \
+             "${BENCH_OUT}/benchmark_cohort_counts.txt" \
+             "${BENCH_OUT}/cohort_composition.txt"; do
+        [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+    done
+
+    if [[ "$n_real" -eq 0 && "$n_sim" -eq 0 ]]; then
+        echo "WARNING: no cohort data found."
+        echo "         real genomes:  ${REAL_DIR}      (run 6c_extract_real_test_genomes_clm.sh)"
+        echo "         simulated:     ${SIMSET_DIR}    (run 6b_simulate_benchmark_cohort_clm.sh)"
+        echo "         Skipping benchmark_cohort -- shipping manifests with no"
+        echo "         genomes would put an empty cohort on mab under a name"
+        echo "         saying otherwise."
+        return 0
+    fi
+    echo "[$(date +%T)] cohort: ${n_real} real files, ${n_sim} simulated files"
+
+    write_provenance "$STAGE" \
+        "Benchmark COHORT (the test genomes)" \
+"  real/       real individuals from HGDP, SGDP, MXB and Almarri. Outside
+              every imputation server panel, outside the donor set and
+              outside both reference panels. Labelled real_homogeneous or
+              real_admixed in benchmark_cohort_manifest.tsv.
+
+              SCORED FOR IMPUTATION ACCURACY, CALIBRATION AND RETENTION
+              ONLY. A real genome has a WGS truth but nobody recorded which
+              ancestry each segment came from, so it is never scored for
+              local-ancestry accuracy -- inferred tracts would be another
+              method's output, not truth.
+
+  simulated/  the 2,160 (1,800 admixed + 360 single-ancestry controls),
+              per chromosome, with .hanc truth tracts and the .bp
+              recombination realisation that regenerates them. Scored for
+              local ancestry AND imputation.
+
+              The gen-0 controls have no admixture to get wrong, so their
+              error is pure method error and their imputation accuracy is
+              the ceiling the admixed individuals of that component are
+              measured against.
+
+  Every individual is on exactly one chip and one build; the cell is in
+  benchmark_cohort_simset_individuals.tsv (simulated) and
+  benchmark_cohort_manifest.tsv (real). Truth stays GRCh38 for everyone.
+
+  Score this cohort against benchmark_reference_panel/, NOT
+  lai_reference_panel/ -- the latter contains the donors these genomes were
+  simulated from." \
         "benchmark (suffix ${BENCH_SUFFIX})"
     do_rsync "$STAGE" "benchmark_cohort"
 }
@@ -453,7 +584,7 @@ case "$SCOPE" in
         # start -- a half-finished wrong transfer on mab is worse than none.
         verify_panel_distinction
         ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" \
-            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/{reference_lists,lai_reference_panel,benchmark_cohort}"
+            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/{reference_lists,lai_reference_panel,benchmark_reference_panel,benchmark_cohort/{real,simulated}}"
         run_hg38_all
         run_hg38_homog
         run_hg38_homog_k
@@ -462,6 +593,7 @@ case "$SCOPE" in
         run_hg19_homog_k
         run_reference_lists
         run_lai_refpanel
+        run_benchmark_refpanel
         run_benchmark_cohort
         ;;
     hg38)               run_hg38_all; run_hg38_homog; run_hg38_homog_k ;;
@@ -473,18 +605,34 @@ case "$SCOPE" in
     hg19/homog_5pop)    run_hg19_homog ;;
     hg19/homog_k)       run_hg19_homog_k ;;
     reference_lists)    run_reference_lists ;;
-    panels)             verify_panel_distinction; run_lai_refpanel; run_benchmark_cohort ;;
+    panels)             verify_panel_distinction; run_lai_refpanel; run_benchmark_refpanel ;;
     lai_reference_panel) verify_panel_distinction; run_lai_refpanel ;;
-    benchmark_cohort)   verify_panel_distinction; run_benchmark_cohort ;;
+    benchmark_reference_panel) verify_panel_distinction; run_benchmark_refpanel ;;
+    benchmark_cohort)   run_benchmark_cohort ;;
+    benchmark)          verify_panel_distinction; run_benchmark_refpanel; run_benchmark_cohort ;;
     verify)             verify_panel_distinction; exit $? ;;
+    help|--help|-h)     SCOPE_HELP=1 ;&
     *)
-        echo "Unknown scope: $SCOPE"
-        echo "Usage: $0 [all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg38/homog_k | hg19/all_samples | hg19/homog_5pop | hg19/homog_k | reference_lists | panels | lai_reference_panel | benchmark_cohort | verify]"
+        [[ "${SCOPE_HELP:-0}" == "1" ]] || echo "Unknown scope: $SCOPE"
+        echo "Usage: $0 <scope>"
         echo ""
-        echo "  verify               check the two panels are distinct, move nothing"
-        echo "  panels               both reference panels (LAI donor-inclusive + benchmark donor-excluded)"
-        echo "  lai_reference_panel  donors INCLUDED -- for FLARE and the GWAS"
-        echo "  benchmark_cohort     donors EXCLUDED -- for scoring the benchmarking cohort"
+        echo "  REFERENCE PANELS -- what a method is GIVEN"
+        echo "    lai_reference_panel        donors INCLUDED; for FLARE and the GWAS"
+        echo "    benchmark_reference_panel  1KG + population-stratified others,"
+        echo "                               donors EXCLUDED; what the harmonization"
+        echo "                               pipeline imputes against"
+        echo "    panels                     both of the above"
+        echo ""
+        echo "  THE COHORT -- what a method is TESTED ON"
+        echo "    benchmark_cohort           real/ + simulated/ test genomes, truth"
+        echo "                               tracts and the cell manifests"
+        echo "    benchmark                  benchmark_reference_panel + benchmark_cohort"
+        echo ""
+        echo "  OTHER"
+        echo "    verify                     check the panels are distinct, move nothing"
+        echo "    all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg38/homog_k"
+        echo "    hg19/all_samples | hg19/homog_5pop | hg19/homog_k | reference_lists"
+        [[ "${SCOPE_HELP:-0}" == "1" ]] && exit 0
         exit 1
         ;;
 esac
