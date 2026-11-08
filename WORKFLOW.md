@@ -261,6 +261,34 @@ accepts a differently-shaped history **without complaining** and simulates the
 wrong demography. `--dat-only` prints all thirteen `.dat` files and exits,
 needing no panel, conda env or Slurm context.
 
+### Did it simulate what we planned?
+
+Three things must agree, and `cohort-ancestry-summary.py` names the failing
+link rather than just reporting a mismatch:
+
+```
+roster (the plan)  →  .dat (what write_dat wrote)  →  .hanc (what mixer did)
+```
+
+| verdict | meaning |
+|---|---|
+| **LINK 1** | the archived `.dat` ≠ the roster. `write_dat` is wrong; `mixer` simulated its input faithfully. Re-simulating without fixing `write_dat` reproduces the error |
+| **PERMUTED** | the `.dat` matched the plan but the realized ancestry is a *reordering* of it — the `.dat` header order and the `-POP` argument order disagree, so `.hanc`'s ancestry indices point at the wrong components. Not a demography error |
+| **LINK 2** | `.dat` matched the plan, realized means don't match the `.dat` — `mixer` didn't produce the proportions in its own input |
+| **spread only** | proportions right, SD wrong = the demography is wrong while the pulse survived (it comes off the `.dat`'s *first* line) |
+
+Two bounds worth knowing:
+
+- **The mean's bound comes from the OBSERVED spread (`SD/√n`), not from the
+  intended generations.** Deriving it from `gen` is circular — whether the sim
+  ran at `gen` is the question — and data generated at the wrong generation
+  count is *more* variable than `gen` predicts, so a gen-derived bound is too
+  tight and reports a mean failure for a demography failure.
+- **A permutation is only claimed when the identity assignment actually fails
+  and some reordering fits clearly better** (identity misfit > bound, best
+  reordering < bound/2). LAT3's 0.50/0.45/0.05 sit closer together than the
+  noise at modest n, so sorted-value agreement alone proves nothing.
+
 ---
 
 ## 7. Step 7 (data) — real test genomes
@@ -406,6 +434,7 @@ Scopes: `help`, `verify` (no credentials needed), `panels`, `benchmark`, `all`.
 | **chunk staleness** | `1b` | a chunk left from a previous panel | — |
 | **tract lengths** | `validate-simset-tracts.py` | the `.dat` terminal line ignored → every model runs as one pulse | **gen-2 models** (gen 2 *is* the failure mode) |
 | **ancestry mean + SD** | `cohort-ancestry-summary.py` | same failure via a **different statistic**. The **means stay correct** under it — the between-individual SD is what carries the signal | gen-2 models |
+| **roster → .dat → .hanc chain** | `cohort-ancestry-summary.py` | *which* link broke: `.dat` ≠ roster blames `write_dat`; realized ≠ `.dat` blames `mixer`; a reordering blames the component order | nothing, when the `.dat` was never archived — it says so |
 | **allele orientation** | `lift-cell-to-hg19.py` | `swap` → inverted dosage on hg19 cells | palindromic sites (strand-resolved, counted separately) |
 | **positional reheader** | 6d, 6e | a model's `.haps` count ≠ roster → every ID shifted | — |
 | **cell sample count** | 6d | a cell that lost or gained individuals | — |
