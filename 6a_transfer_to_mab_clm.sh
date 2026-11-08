@@ -76,8 +76,11 @@ MAB_SSH_OPTS="${MAB_SSH_OPTS:-}"
 
 set -euo pipefail
 
-if [[ "$MAB_USER" == "<USERNAME>" ]]; then
+# The "verify" scope moves nothing, so it must not demand credentials: the
+# whole point is to check the split locally before deciding to ship.
+if [[ "$MAB_USER" == "<USERNAME>" && "${1:-all}" != "verify" ]]; then
     echo "ERROR: edit MAB_USER at the top of $0 (or export MAB_USER=...) before running."
+    echo "       To check the two panels without transferring: $0 verify"
     exit 1
 fi
 
@@ -245,10 +248,212 @@ run_hg19_homog () {
     fi
 }
 
+# ===========================================================================
+# THE TWO REFERENCE PANELS, AND WHY THEY MUST NOT BE CONFUSED
+#
+# Both go to mab, and they are different products of the same Q file:
+#
+#   lai_reference_panel/   every homogeneous sample, donors INCLUDED. This is
+#                          what the GWAS and FLARE run against. Nothing is
+#                          simulated there, so there are no donors to
+#                          withhold, and withholding them would only shrink
+#                          the panel for no benefit.
+#
+#   benchmark_cohort/      the donor-EXCLUDED reference, plus the cohort
+#                          manifest. Here the same individuals' haplotypes
+#                          were used to simulate the test genomes, so a donor
+#                          left in the reference turns the method's own input
+#                          into its answer key.
+#
+# Shipping the wrong one is silent in both directions: a donor-inclusive
+# reference inflates the benchmark, and a donor-excluded reference needlessly
+# weakens the GWAS. Nothing in a BCF says which policy produced it.
+#
+# THE SUFFIX COLLISION. Both modes of split-homog-donors-reference.py write
+# <sp>_reference_<suffix>.txt. Run them with the SAME suffix and the second
+# overwrites the first -- one panel on disk, nothing in the filename saying
+# which policy made it, and a 50/50 chance the benchmark ships a
+# donor-inclusive reference. So the two modes get distinct suffixes, and
+# verify_panel_distinction() refuses to ship if they end up identical anyway.
+LAI_SUFFIX="${LAI_SUFFIX:-lai}"
+BENCH_SUFFIX="${BENCH_SUFFIX:-bench}"
+BENCH_OUT="${BENCH_OUT:-${REPO_DIR}/results}"
+SUPERPOPS_T="${SUPERPOPS_T:-EUR EAS AFR AMR SAS MEN OCE}"
+
+ids_union () {   # $1 = reference|simulation, $2 = suffix
+    local kind="$1" sfx="$2" sp f
+    for sp in $SUPERPOPS_T; do
+        f="${REFS}/${sp}_${kind}_${sfx}.txt"
+        if [[ -s "$f" ]]; then awk 'NF && $1 !~ /^#/ {print $1}' "$f"; fi
+    done | sort -u
+}
+
+verify_panel_distinction () {
+    local t="${PROJECT_ROOT}/.verify_panels" rc=0 n ov
+    rm -rf "$t"; mkdir -p "$t"
+    ids_union reference  "$LAI_SUFFIX"   > "$t/lai_ref"
+    ids_union reference  "$BENCH_SUFFIX" > "$t/bench_ref"
+    ids_union simulation "$BENCH_SUFFIX" > "$t/bench_don"
+
+    echo "-------------------------------------------------------------------"
+    echo " panel distinction check"
+    echo "-------------------------------------------------------------------"
+    printf '  LAI reference   (suffix %-6s) %6d ids\n' "$LAI_SUFFIX"   "$(wc -l < "$t/lai_ref")"
+    printf '  bench reference (suffix %-6s) %6d ids\n' "$BENCH_SUFFIX" "$(wc -l < "$t/bench_ref")"
+    printf '  bench donors    (suffix %-6s) %6d ids\n' "$BENCH_SUFFIX" "$(wc -l < "$t/bench_don")"
+
+    if [[ ! -s "$t/lai_ref" ]]; then
+        echo "  ERROR: no LAI reference lists found. Run:"
+        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
+        echo "        --panel ${SAMPLES_TSV_K} --mode lai --suffix ${LAI_SUFFIX}"
+        rc=1
+    fi
+    if [[ ! -s "$t/bench_ref" ]]; then
+        echo "  ERROR: no benchmark reference lists found. Run:"
+        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
+        echo "        --panel ${SAMPLES_TSV_K} --mode benchmark --suffix ${BENCH_SUFFIX}"
+        rc=1
+    fi
+    if [[ -s "$t/lai_ref" && -s "$t/bench_ref" ]] && cmp -s "$t/lai_ref" "$t/bench_ref"; then
+        echo "  ERROR: the LAI and benchmark reference panels are IDENTICAL."
+        echo "         Either both modes ran with the same suffix and one"
+        echo "         overwrote the other, or --mode never took effect."
+        echo "         Refusing to ship: one of the two would be wrong and"
+        echo "         there is no way to tell which from the files alone."
+        rc=1
+    fi
+    if [[ -s "$t/bench_ref" && -s "$t/bench_don" ]]; then
+        ov=$(comm -12 "$t/bench_ref" "$t/bench_don" | wc -l)
+        if [[ "$ov" -gt 0 ]]; then
+            echo "  ERROR: ${ov} benchmark sample(s) are BOTH donor and reference."
+            comm -12 "$t/bench_ref" "$t/bench_don" | head -5 | sed 's/^/           /'
+            rc=1
+        fi
+    fi
+    # No 1000 Genomes sample may be a benchmark donor: the imputation servers'
+    # own panels contain 1KG, so a 1KG donor would be imputed against its own
+    # haplotypes.
+    if [[ -s "$SAMPLES_TSV_K" && -s "$t/bench_don" ]]; then
+        n=$(awk -F'\t' 'NR==FNR{d[$1]=1; next}
+              FNR==1{for(i=1;i<=NF;i++){if($i=="sample")si=i; if($i=="cohort")ci=i} next}
+              (si && ci && ($si in d) && $ci=="1KG"){n++} END{print n+0}' \
+              "$t/bench_don" "$SAMPLES_TSV_K")
+        printf '  1KG samples among benchmark donors: %d (must be 0)\n' "$n"
+        [[ "$n" -gt 0 ]] && rc=1
+    fi
+    rm -rf "$t"
+    if [[ "$rc" -ne 0 ]]; then
+        echo "-------------------------------------------------------------------"
+        echo " REFUSING TO TRANSFER. Fix the above and re-run."
+        echo "-------------------------------------------------------------------"
+        return 1
+    fi
+    echo "  ok -- the two panels are distinct and the benchmark split is clean"
+    echo "-------------------------------------------------------------------"
+    return 0
+}
+
+write_provenance () {   # $1 = stage dir, $2 = title, $3 = donor policy, $4 = suffix
+    local stage="$1"
+    {
+        echo "$2"
+        printf '%s\n' "$(printf '=%.0s' $(seq 1 ${#2}))"
+        echo
+        echo "generated   $(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo "host        $(hostname)"
+        echo "source      ${PROJECT_ROOT}"
+        echo "K           ${K}"
+        echo "split mode  $4"
+        echo "repo commit $(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        echo "repo branch $(cd "$REPO_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+        echo
+        echo "DONOR POLICY"
+        echo "$3"
+        echo
+        echo "The HOMOG panel is HGDP + 1KG + MXB joint-called and filtered by"
+        echo "supervised ADMIXTURE. It INCLUDES MXB samples -- it is not"
+        echo "MXB-free."
+    } > "${stage}/PROVENANCE.txt"
+}
+
+run_lai_refpanel () {
+    local STAGE="${PROJECT_ROOT}/.stage_lai_reference_panel"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    local sp f n=0
+    for sp in $SUPERPOPS_T; do
+        for f in "${REFS}/${sp}_reference_${LAI_SUFFIX}.txt" \
+                 "${REFS}/${sp}_simulation_${LAI_SUFFIX}.txt"; do
+            [[ -s "$f" ]] && { ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1)); }
+        done
+    done
+    if [[ "$n" -eq 0 ]]; then
+        echo "WARNING: no LAI split lists with suffix '${LAI_SUFFIX}'; skipping"
+        return 0
+    fi
+    for f in "$SAMPLES_TSV_K" "${HOMOG_DIR}/homog_${K}pop_samples.txt" \
+             "${HOMOG_DIR}/homog_composition.k${K}.tsv"; do
+        [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+    done
+    write_provenance "$STAGE" \
+        "LAI / GWAS reference panel (donors INCLUDED)" \
+"  Donors are NOT withheld. Every homogeneous sample is in the reference.
+  Use this panel for FLARE and for the GWAS, where no genome is simulated
+  from these haplotypes, so there is no circularity to avoid and excluding
+  donors would only shrink the panel.
+
+  Do NOT use it to score the benchmarking cohort: those test genomes were
+  simulated from donor haplotypes that are present here, which would make
+  the method's own input its answer key." \
+        "lai (suffix ${LAI_SUFFIX})"
+    do_rsync "$STAGE" "lai_reference_panel"
+}
+
+run_benchmark_cohort () {
+    local STAGE="${PROJECT_ROOT}/.stage_benchmark_cohort"
+    rm -rf "$STAGE"; mkdir -p "$STAGE"
+    local sp f n=0
+    for sp in $SUPERPOPS_T; do
+        for f in "${REFS}/${sp}_reference_${BENCH_SUFFIX}.txt" \
+                 "${REFS}/${sp}_simulation_${BENCH_SUFFIX}.txt"; do
+            [[ -s "$f" ]] && { ln -sf "$f" "$STAGE/$(basename "$f")"; n=$((n+1)); }
+        done
+    done
+    if [[ "$n" -eq 0 ]]; then
+        echo "WARNING: no benchmark split lists with suffix '${BENCH_SUFFIX}'; skipping"
+        return 0
+    fi
+    for f in "${BENCH_OUT}/benchmark_cohort_manifest.tsv" \
+             "${BENCH_OUT}/benchmark_cohort_simset_roster.tsv" \
+             "${BENCH_OUT}/benchmark_cohort_counts.txt" \
+             "${BENCH_OUT}/cohort_composition.txt" \
+             "${REFS}/known_duplicate_pairs.tsv" \
+             "${REFS}/sgdp_server_panel_ids.txt" \
+             "$SAMPLES_TSV_K"; do
+        [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
+    done
+    write_provenance "$STAGE" \
+        "Benchmarking cohort reference panel (donors EXCLUDED)" \
+"  Donors are withheld from the reference, and no 1000 Genomes sample is a
+  donor. Both exclusions exist to stop a method being scored against
+  haplotypes it was given: the simulated test genomes are built from the
+  donor half, and the imputation servers' own panels contain 1KG.
+
+  benchmark_cohort_manifest.tsv carries the real test genomes with their
+  sample_type (real_homogeneous / real_admixed) and chip x build cell.
+  Real genomes have no recorded tracts, so they are scored for imputation
+  accuracy, calibration and retention only -- never for local ancestry." \
+        "benchmark (suffix ${BENCH_SUFFIX})"
+    do_rsync "$STAGE" "benchmark_cohort"
+}
+
 case "$SCOPE" in
     all)
+        # The distinction check runs BEFORE any bytes move. Both panels ship
+        # in this scope, so if they cannot be told apart the transfer must not
+        # start -- a half-finished wrong transfer on mab is worse than none.
+        verify_panel_distinction
         ssh ${MAB_SSH_OPTS} "${MAB_USER}@${MAB_HOST}" \
-            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/reference_lists"
+            "mkdir -p '${MAB_BASE}'/{hg38,hg19}/{'${ALL_SAMPLES_SUBDIR}',homog_5pop,'${HOMOG_K_SUBDIR}'} '${MAB_BASE}'/{reference_lists,lai_reference_panel,benchmark_cohort}"
         run_hg38_all
         run_hg38_homog
         run_hg38_homog_k
@@ -256,6 +461,8 @@ case "$SCOPE" in
         run_hg19_homog
         run_hg19_homog_k
         run_reference_lists
+        run_lai_refpanel
+        run_benchmark_cohort
         ;;
     hg38)               run_hg38_all; run_hg38_homog; run_hg38_homog_k ;;
     hg19)               run_hg19_all; run_hg19_homog; run_hg19_homog_k ;;
@@ -266,9 +473,18 @@ case "$SCOPE" in
     hg19/homog_5pop)    run_hg19_homog ;;
     hg19/homog_k)       run_hg19_homog_k ;;
     reference_lists)    run_reference_lists ;;
+    panels)             verify_panel_distinction; run_lai_refpanel; run_benchmark_cohort ;;
+    lai_reference_panel) verify_panel_distinction; run_lai_refpanel ;;
+    benchmark_cohort)   verify_panel_distinction; run_benchmark_cohort ;;
+    verify)             verify_panel_distinction; exit $? ;;
     *)
         echo "Unknown scope: $SCOPE"
-        echo "Usage: $0 [all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg38/homog_k | hg19/all_samples | hg19/homog_5pop | hg19/homog_k | reference_lists]"
+        echo "Usage: $0 [all | hg38 | hg19 | hg38/all_samples | hg38/homog_5pop | hg38/homog_k | hg19/all_samples | hg19/homog_5pop | hg19/homog_k | reference_lists | panels | lai_reference_panel | benchmark_cohort | verify]"
+        echo ""
+        echo "  verify               check the two panels are distinct, move nothing"
+        echo "  panels               both reference panels (LAI donor-inclusive + benchmark donor-excluded)"
+        echo "  lai_reference_panel  donors INCLUDED -- for FLARE and the GWAS"
+        echo "  benchmark_cohort     donors EXCLUDED -- for scoring the benchmarking cohort"
         exit 1
         ;;
 esac
