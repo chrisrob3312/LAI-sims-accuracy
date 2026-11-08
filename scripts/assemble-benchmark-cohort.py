@@ -363,39 +363,43 @@ def main():
             excl["named panel exclusion"].append(s); continue
         if s in dup_drop:
             excl["KING duplicate drop"].append(s); continue
-        # FIFTH EXCLUSION: SUPERVISED ANCHORS.
-        #
-        # The `assigned` column is read from ADMIXTURE's .pop file -- the
-        # SUPERVISED PRIOR. For an anchor, max_Q_sup is an INPUT, not an
-        # estimate: its Q is ~1.0 because it was asserted, not because the
-        # model measured it.
-        #
-        # Two consequences, and both bar it from the test set:
-        #
-        #  1. CIRCULARITY. The benchmark scores ADMIXTURE and LAI on these
-        #     test genomes. A sample that TRAINED the supervised model has
-        #     already been handed its own answer, so its ancestry call is not
-        #     an independent measurement of anything.
-        #
-        #  2. The homogeneity reading would be meaningless anyway. Calling an
-        #     anchor real_homogeneous reports the prior back, not a property
-        #     of the genome.
-        #
-        # Anchors in the REFERENCE panel are correct and expected -- that is
-        # what an ancestry exemplar is for. Anchors as DONORS are defensible,
-        # since they are the most clearly homogeneous samples, but that is
-        # reported below rather than assumed.
+        # ANCHORS ARE NOT EXCLUDED. An earlier revision barred them from the
+        # test set on circularity grounds, which was wrong: the supervised
+        # ADMIXTURE run is not a method under evaluation here. It is the
+        # upstream classifier that identifies the pools -- who clears the
+        # homogeneity bar, who is admixed -- and its Q is never an OUTCOME of
+        # the benchmark. What the benchmark scores is imputation against WGS
+        # truth, and local ancestry on the SIMULATED individuals against their
+        # .hanc tracts; real genomes are never scored for local ancestry at
+        # all. So an anchor is not a sample the benchmark was trained on, and
+        # it stays eligible for any role the other rules allow.
         anc = r[idx["assigned"]].strip()
-        if anc and anc not in ("-", "NA", "", "."):
-            excl[f"supervised anchor ({anc})"].append(s); continue
+        is_anchor = bool(anc) and anc not in ("-", "NA", "", ".")
         sp = r[idx["super_pop"]]
         if sp in ("", "NA"):
             excl["super_pop unresolved"].append(s); continue
+        # WHICH Q IS A MEASUREMENT FOR THIS SAMPLE.
+        #
+        # For an ordinary sample the supervised Q is the estimate. For an
+        # ANCHOR it is ~1.0 by construction, because that sample IS the
+        # prior -- so reading homogeneity off it would report the assumption
+        # back rather than a property of the genome.
+        #
+        # The unsupervised Q is the honest reading there, and it is also the
+        # one that selected the anchor in the first place: 4a's stage A takes
+        # the top-N by UNSUPERVISED Q within each super-pop. So an anchor's
+        # homogeneity is an empirical finding from stage A, not an assertion
+        # -- it just has to be read from the column that measured it.
+        q_source = "supervised"
+        q_col, ap_col = "max_Q_sup", "argmax_pop_sup"
+        if is_anchor and "max_Q_unsup" in idx and "argmax_pop_unsup" in idx:
+            q_col, ap_col = "max_Q_unsup", "argmax_pop_unsup"
+            q_source = "unsupervised (anchor)"
         try:
-            q = float(r[idx["max_Q_sup"]])
+            q = float(r[idx[q_col]])
         except ValueError:
-            excl["unparseable max_Q_sup"].append(s); continue
-        ap = r[idx["argmax_pop_sup"]].strip()
+            excl[f"unparseable {q_col}"].append(s); continue
+        ap = r[idx[ap_col]].strip()
         # THE THRESHOLD IS KEYED ON THE ARGMAX, NOT THE METADATA LABEL.
         # The question "is this genome homogeneous?" is about the ancestry
         # ADMIXTURE actually found, so a sample at Q=0.97 on EUR is measured
@@ -448,6 +452,8 @@ def main():
             # super-pop. A high discordant count is a HARMONISATION signal,
             # not a biological one.
             "label_concordant": 1 if ap == sp else 0,
+            "is_anchor": 1 if is_anchor else 0,
+            "q_source": q_source,
             "panel_included": r[idx["included"]].strip(),
         })
 
@@ -468,7 +474,8 @@ def main():
     with open(man, "w") as g:
         cols = ["sample", "cohort", "pop", "super_pop", "argmax_pop_sup",
                 "max_Q_sup", "threshold", "sample_type", "reference_support",
-                "label_concordant", "panel_included", "chips", "builds"]
+                "label_concordant", "is_anchor", "q_source",
+                "panel_included", "chips", "builds"]
         g.write("\t".join(cols) + "\n")
         for t in sorted(test, key=lambda x: x["sample"]):
             g.write("\t".join(str(t[c]) for c in cols) + "\n")
@@ -557,11 +564,20 @@ def main():
     w("")
     w(" SUPERVISED ANCHORS")
     w("-" * 72)
-    w(" Anchors trained the supervised ADMIXTURE model, so their Q is an")
-    w(" input rather than an estimate. They are barred from the test set")
-    w(" (scoring a method on a sample it was trained on measures nothing),")
-    w(" belong in the reference panel by definition, and may be donors --")
-    w(" which is reported here rather than assumed.")
+    w(" Anchors are ONLY the mechanism that identifies the pools. The")
+    w(" supervised ADMIXTURE run is not a method under evaluation: its Q is")
+    w(" never an outcome of the benchmark, which scores imputation against")
+    w(" WGS truth and local ancestry on the SIMULATED individuals against")
+    w(" their .hanc tracts. So anchors are NOT excluded from anything -- they")
+    w(" are eligible for donor, reference or real test sample, subject to the")
+    w(" same rules as everyone else (no 1KG donor, no 1KG real test genome).")
+    w("")
+    w(" Their homogeneity is read from the UNSUPERVISED Q, because the")
+    w(" supervised value is ~1.0 by construction for an anchor -- that sample")
+    w(" IS the prior. The unsupervised Q is both the honest reading and the")
+    w(" one that selected them: 4a's stage A takes the top-N by unsupervised")
+    w(" Q per super-pop, so anchor homogeneity is an empirical finding, just")
+    w(" one recorded in a different column. See q_source in the manifest.")
     w("")
     anchors_by_sp = defaultdict(int)
     anchor_ids = set()
@@ -586,22 +602,27 @@ def main():
           f"{len(anchor_ids & refs):>16}")
         n_od = len(anchor_ids & donors)
         n_or = len(anchor_ids & refs)
+        n_test = sum(1 for t in test if t["is_anchor"])
         n_un = len(anchor_ids - donors - refs)
         w("")
-        if n_od:
-            w(f" {n_od} anchor(s) are simulation donors. Defensible -- they are")
-            w(" the purest samples -- but the donor's purity is then ASSERTED")
-            w(" by the prior, not measured. Pin them to the reference side")
-            w(" with --anchors-to-reference on the splitter if that is not")
-            w(" wanted; the cost is a smaller donor pool, worst where it is")
-            w(" already thin.")
-        if n_un:
-            w(f" {n_un} anchor(s) are in NEITHER role. They trained the model")
-            w(" but are not in the reference panel the benchmark scores")
-            w(" against, which wastes an exemplar. Consider")
-            w(" --anchors-to-reference.")
-        if not n_od and not n_un:
-            w(" Every anchor is in the reference panel and none is a donor.")
+        w(f" {n_od} donor, {n_or} reference, {n_test} real test sample, "
+          f"{n_un} unallocated.")
+        w(" All four are fine. Anchors being the purest samples makes them")
+        w(" good donors and good reference members, and an anchor that is a")
+        w(" real test genome is a genuinely homogeneous genome by the")
+        w(" unsupervised reading.")
+        n_kg_anchor_donor = 0
+        if "cohort" in idx:
+            kgset = {r[idx["sample"]] for r in rows
+                     if r[idx["cohort"]].strip() == a.kg_cohort}
+            n_kg_anchor_donor = len(anchor_ids & donors & kgset)
+        if n_kg_anchor_donor:
+            w("")
+            w(f" *** {n_kg_anchor_donor} anchor(s) are 1000 Genomes AND donors.")
+            w(" Anchor status does not exempt a sample from the no-1KG-donor")
+            w(" rule: the external servers contain 1KG, so such a donor would")
+            w(" be imputed against its own haplotypes. Re-run the split with")
+            w(" --mode benchmark.")
     w("")
     w(" LABEL vs ARGMAX CONCORDANCE")
     w("-" * 72)

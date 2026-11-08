@@ -182,15 +182,16 @@ def main():
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
     ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
     ap.add_argument("--anchors-to-reference", action="store_true",
-                    help="pin supervised ADMIXTURE anchors (the `assigned` "
-                         "column, read from the .pop prior) to the REFERENCE "
-                         "side. An anchor defines its super-pop's ancestry in "
-                         "the supervised run, so the reference panel the "
-                         "benchmark scores against should contain it; and an "
-                         "anchor used as a donor has purity ASSERTED by the "
-                         "prior rather than measured. Costs donor pool, worst "
-                         "where it is already thin, so it is opt-in and the "
-                         "cost is printed.")
+                    help="OPTIONAL. Pin supervised ADMIXTURE anchors (the "
+                         "`assigned` column) to the REFERENCE side. Anchors "
+                         "are NOT barred from any role -- the supervised run "
+                         "only identifies the pools and its Q is never a "
+                         "benchmark outcome -- so this is a preference, not a "
+                         "correctness fix: it concentrates the purest samples "
+                         "in the reference panel at the cost of a smaller "
+                         "donor pool, worst where it is already thin. Leave "
+                         "it off to let anchors fall wherever the stratified "
+                         "split puts them.")
     ap.add_argument("--no-donor-superpops", default="",
                     help="comma-separated super-pops that get a reference but "
                          "NO donors, because no simulation model draws on "
@@ -239,9 +240,11 @@ def main():
             rows.append(r)
 
     # Supervised anchors, from the `assigned` column (ADMIXTURE's .pop prior).
-    # An anchor's Q is an input rather than an estimate, which is why its ROLE
-    # matters: it defines its super-pop's ancestry in the supervised run, so
-    # the reference panel the benchmark scores against should contain it.
+    # Anchors are ordinary samples for role purposes: the supervised run only
+    # identifies the pools, and its Q is never a benchmark outcome, so an
+    # anchor is eligible for donor, reference or real test sample under the
+    # same rules as everyone else. Tracked only so --anchors-to-reference can
+    # express a preference and so the roles can be reported.
     anchor_of = {}
     if "assigned" in (rd.fieldnames or []):
         for r in rows:
