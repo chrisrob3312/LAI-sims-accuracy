@@ -246,7 +246,7 @@ def main():
     a = ap.parse_args()
 
     idx, rows = read_tsv(a.panel)
-    need = ["sample", "cohort", "pop", "super_pop",
+    need = ["sample", "cohort", "pop", "super_pop", "assigned",
             "max_Q_sup", "argmax_pop_sup", "included"]
     missing = [c for c in need if c not in idx]
     if missing:
@@ -363,6 +363,31 @@ def main():
             excl["named panel exclusion"].append(s); continue
         if s in dup_drop:
             excl["KING duplicate drop"].append(s); continue
+        # FIFTH EXCLUSION: SUPERVISED ANCHORS.
+        #
+        # The `assigned` column is read from ADMIXTURE's .pop file -- the
+        # SUPERVISED PRIOR. For an anchor, max_Q_sup is an INPUT, not an
+        # estimate: its Q is ~1.0 because it was asserted, not because the
+        # model measured it.
+        #
+        # Two consequences, and both bar it from the test set:
+        #
+        #  1. CIRCULARITY. The benchmark scores ADMIXTURE and LAI on these
+        #     test genomes. A sample that TRAINED the supervised model has
+        #     already been handed its own answer, so its ancestry call is not
+        #     an independent measurement of anything.
+        #
+        #  2. The homogeneity reading would be meaningless anyway. Calling an
+        #     anchor real_homogeneous reports the prior back, not a property
+        #     of the genome.
+        #
+        # Anchors in the REFERENCE panel are correct and expected -- that is
+        # what an ancestry exemplar is for. Anchors as DONORS are defensible,
+        # since they are the most clearly homogeneous samples, but that is
+        # reported below rather than assumed.
+        anc = r[idx["assigned"]].strip()
+        if anc and anc not in ("-", "NA", "", "."):
+            excl[f"supervised anchor ({anc})"].append(s); continue
         sp = r[idx["super_pop"]]
         if sp in ("", "NA"):
             excl["super_pop unresolved"].append(s); continue
@@ -529,6 +554,54 @@ def main():
     w(" a thin reference' be asked apart from 'imputation on someone no")
     w(" reference fits'. OCE and OTH are the groups that cannot be pooled into")
     w(" a stratified analysis, and they are in the cohort for that reason.")
+    w("")
+    w(" SUPERVISED ANCHORS")
+    w("-" * 72)
+    w(" Anchors trained the supervised ADMIXTURE model, so their Q is an")
+    w(" input rather than an estimate. They are barred from the test set")
+    w(" (scoring a method on a sample it was trained on measures nothing),")
+    w(" belong in the reference panel by definition, and may be donors --")
+    w(" which is reported here rather than assumed.")
+    w("")
+    anchors_by_sp = defaultdict(int)
+    anchor_ids = set()
+    for r in rows:
+        v = r[idx["assigned"]].strip()
+        if v and v not in ("-", "NA", "", "."):
+            anchors_by_sp[v] += 1
+            anchor_ids.add(r[idx["sample"]])
+    if not anchor_ids:
+        w(" none found -- the `assigned` column is empty. Either 4a ran")
+        w(" unsupervised, or the .pop prior was not written. Check 4a's")
+        w(" stage-A anchor discovery before trusting any Q in this table.")
+    else:
+        w(f" {'super-pop':<12}{'anchors':>9}{'also donor':>12}"
+          f"{'also reference':>16}")
+        for sp in sorted(anchors_by_sp):
+            ids = {r[idx["sample"]] for r in rows
+                   if r[idx["assigned"]].strip() == sp}
+            w(f" {sp:<12}{anchors_by_sp[sp]:>9}{len(ids & donors):>12}"
+              f"{len(ids & refs):>16}")
+        w(f" {'TOTAL':<12}{len(anchor_ids):>9}{len(anchor_ids & donors):>12}"
+          f"{len(anchor_ids & refs):>16}")
+        n_od = len(anchor_ids & donors)
+        n_or = len(anchor_ids & refs)
+        n_un = len(anchor_ids - donors - refs)
+        w("")
+        if n_od:
+            w(f" {n_od} anchor(s) are simulation donors. Defensible -- they are")
+            w(" the purest samples -- but the donor's purity is then ASSERTED")
+            w(" by the prior, not measured. Pin them to the reference side")
+            w(" with --anchors-to-reference on the splitter if that is not")
+            w(" wanted; the cost is a smaller donor pool, worst where it is")
+            w(" already thin.")
+        if n_un:
+            w(f" {n_un} anchor(s) are in NEITHER role. They trained the model")
+            w(" but are not in the reference panel the benchmark scores")
+            w(" against, which wastes an exemplar. Consider")
+            w(" --anchors-to-reference.")
+        if not n_od and not n_un:
+            w(" Every anchor is in the reference panel and none is a donor.")
     w("")
     w(" LABEL vs ARGMAX CONCORDANCE")
     w("-" * 72)

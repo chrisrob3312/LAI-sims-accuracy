@@ -135,7 +135,7 @@ either case; looking only for uppercase finds nothing, and "nothing" reads as
 `scripts/assemble-benchmark-cohort.py` — needs only the Q file and the split,
 so it runs within minutes of 4a landing.
 
-### The four exclusions (test eligibility)
+### The five exclusions (test eligibility)
 Each closes a different way a method could already have seen the haplotypes:
 
 1. **donor** — its haplotypes built the simulated test genomes
@@ -144,8 +144,35 @@ Each closes a different way a method could already have seen the haplotypes:
 4. **`sgdp_server_panel_ids.txt`** — SGDP re-sequenced 41 1KG individuals under
    other IDs; a cohort column reading "SGDP" does *not* establish absence from
    a server panel
+5. **supervised anchor** — see below
 
 Plus named exclusions and KING duplicate drops.
+
+### Supervised anchors and role assignment
+
+The `assigned` column is read from ADMIXTURE's **`.pop` prior**, so it records
+which samples were supervised anchors and for which super-pop. **An anchor's
+`max_Q_sup` is an INPUT, not an estimate** — its Q is ~1.0 because it was
+asserted.
+
+| role | verdict |
+|---|---|
+| **test genome** | **barred.** The benchmark scores ADMIXTURE and LAI on test genomes; a sample that *trained* the model has been handed its own answer, so its ancestry call measures nothing. Its homogeneity reading would just report the prior back |
+| **reference panel** | correct and expected — that is what an ancestry exemplar is for |
+| **donor** | defensible (they are the purest samples) but the donor's purity is then *asserted* by the prior rather than measured. Reported, not assumed |
+
+`--anchors-to-reference` on the splitter pins anchors to the reference side. It
+is a **move, not an addition** — adding them would push the reference past its
+target — and each anchor moved out of the donor half is swapped for a
+donor-side sample **from the same population**, so the proportional
+sub-population matching survives. Where no same-population swap exists the
+anchor still moves and a one-sample imbalance is accepted rather than breaking
+the population match.
+
+The counts report prints anchors per super-pop with their donor and reference
+overlap, and warns on two cases: anchors used as donors, and anchors in
+**neither** role (they trained the model but are absent from the reference
+panel the benchmark scores against — a wasted exemplar).
 
 > **Eligibility is NOT `included == 1`.** That flag requires `max_Q ≥
 > threshold`, so gating on it admits only homogeneous samples — making
@@ -385,6 +412,7 @@ Scopes: `help`, `verify` (no credentials needed), `panels`, `benchmark`, `all`.
 | **real↔simulated kinship** | `6e` | a donor or close relative in the test set | — |
 | **N_eff** | `cohort-power-summary.py` | donor reuse inflating nominal N | — |
 | **manifest ⊆ panel** | 6c | manifest built against a different panel | — |
+| **supervised anchors** | assembler | an anchor reaching the test set (its Q is the prior, not a measurement); anchors used as donors; anchors in neither role | an empty `assigned` column, which it reports rather than assumes |
 
 Two checks deliberately use **different statistics over the same truth**
 (switches per Morgan vs fractions per individual) so a bug in one doesn't
@@ -403,7 +431,7 @@ grep -c CHMI $P/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv   # must be 0
 # split (BOTH modes, DISTINCT suffixes)
 python3 -I scripts/split-homog-donors-reference.py --panel $T --mode lai       --suffix lai
 python3 -I scripts/split-homog-donors-reference.py --panel $T --mode benchmark --suffix bench \
-        --no-donor-superpops OCE
+        --no-donor-superpops OCE --anchors-to-reference
 
 # assemble + report
 python3 -I scripts/assemble-benchmark-cohort.py --panel $T --refs reference_ids \

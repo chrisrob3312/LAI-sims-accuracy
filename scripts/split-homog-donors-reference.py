@@ -181,6 +181,16 @@ def main():
     ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
     ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
+    ap.add_argument("--anchors-to-reference", action="store_true",
+                    help="pin supervised ADMIXTURE anchors (the `assigned` "
+                         "column, read from the .pop prior) to the REFERENCE "
+                         "side. An anchor defines its super-pop's ancestry in "
+                         "the supervised run, so the reference panel the "
+                         "benchmark scores against should contain it; and an "
+                         "anchor used as a donor has purity ASSERTED by the "
+                         "prior rather than measured. Costs donor pool, worst "
+                         "where it is already thin, so it is opt-in and the "
+                         "cost is printed.")
     ap.add_argument("--no-donor-superpops", default="",
                     help="comma-separated super-pops that get a reference but "
                          "NO donors, because no simulation model draws on "
@@ -227,6 +237,26 @@ def main():
             if has_incl and str(r.get("included", "")).strip() not in ("1", "true", "True"):
                 continue
             rows.append(r)
+
+    # Supervised anchors, from the `assigned` column (ADMIXTURE's .pop prior).
+    # An anchor's Q is an input rather than an estimate, which is why its ROLE
+    # matters: it defines its super-pop's ancestry in the supervised run, so
+    # the reference panel the benchmark scores against should contain it.
+    anchor_of = {}
+    if "assigned" in (rd.fieldnames or []):
+        for r in rows:
+            v = (r.get("assigned") or "").strip()
+            if v and v not in ("-", "NA", "", "."):
+                anchor_of[r["sample"]] = v
+        print(f"[split] supervised anchors in the panel: {len(anchor_of)}"
+              + (f" (pinning to reference)" if args.anchors_to_reference
+                 else " (not pinned; pass --anchors-to-reference to pin)"))
+    elif args.anchors_to_reference:
+        sys.exit(f"ERROR: --anchors-to-reference given but {args.panel} has no\n"
+                 f"       `assigned` column, so anchors cannot be identified.\n"
+                 f"       That column is written by 4a from ADMIXTURE's .pop\n"
+                 f"       prior; without it, pinning would silently do nothing.")
+
     if not rows:
         sys.exit(f"ERROR: no included samples in {args.panel}. If the file has "
                  f"an 'included' column, every row was 0 -- check stage C.")
@@ -351,6 +381,37 @@ def main():
 
         ref_nonkg, don = allocate_stratified(by_pop_nonkg, ref_from_nonkg) \
             if ref_from_nonkg > 0 else ([], sorted(r["sample"] for r in nonkg))
+
+        # ANCHORS PINNED TO THE REFERENCE SIDE.
+        #
+        # Done AFTER the stratified allocation and as a MOVE, not an addition:
+        # adding them would grow the reference past its target, and dropping
+        # them from the donor side without compensating would shrink the
+        # cohort. Each anchor moved out of the donor half is replaced by a
+        # donor-side sample from the same POPULATION where one exists, so the
+        # proportional sub-population matching the stratification exists to
+        # produce is preserved.
+        n_moved = 0
+        if args.anchors_to_reference and anchor_of:
+            r_set, d_set = set(ref_nonkg), set(don)
+            pop_of_s = {r["sample"]: (r["pop"].strip() or "NA") for r in nonkg}
+            for aid in sorted(d_set & set(anchor_of)):
+                swap_pop = pop_of_s.get(aid, "NA")
+                cand = sorted(x for x in r_set
+                              if pop_of_s.get(x, "NA") == swap_pop
+                              and x not in anchor_of)
+                if not cand:
+                    # No same-population swap available: move the anchor and
+                    # accept a one-sample imbalance rather than break the
+                    # population match by swapping across populations.
+                    d_set.discard(aid); r_set.add(aid)
+                else:
+                    victim = cand[0]
+                    r_set.discard(victim); d_set.add(victim)
+                    d_set.discard(aid); r_set.add(aid)
+                n_moved += 1
+            ref_nonkg, don = sorted(r_set), sorted(d_set)
+
         top_up = max(0, n_ref - len(ref_nonkg))
         ref = sorted(ref_nonkg + kg[:top_up])
 
@@ -362,6 +423,8 @@ def main():
         else:
             note = (f"{len(by_pop_nonkg)} non-1000G populations stratified; "
                     f"ref = {len(ref_nonkg)} non-1000G + {len(ref)-len(ref_nonkg)} 1000G")
+            if n_moved:
+                note += f"; {n_moved} anchor(s) pinned to reference"
         pct = 100.0 * len(don) / (len(ref) + len(don)) if (ref or don) else 0
         print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
               f"{pct:>5.0f}%  {note}")
