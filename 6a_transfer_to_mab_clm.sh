@@ -716,13 +716,19 @@ run_benchmark_cohort () {
               output, not truth.
 
               Used for (a) imputation accuracy, calibration and retention,
-              and (b) POWER AND GWAS SIMULATIONS -- phenotypes simulated on
-              real genotypes. (b) is why the real half cannot be replaced by
-              more simulated individuals: power depends on the LD structure,
-              allele-frequency spectrum and relatedness the genotypes
-              actually carry, and simulated genomes drawn from a finite
-              donor pool have compressed haplotype diversity plus
-              donor-reuse cryptic relatedness.
+              and (b) POWER AND GWAS SIMULATIONS, run on the real AND the
+              simulated individuals together -- a few hundred real genomes
+              alone is too few for a power calculation.
+
+              Donor reuse makes simulated individuals cryptic relatives, so
+              use the EFFECTIVE sample size from cohort_power_summary.txt,
+              not the roster count. GENESIS with a GRM models that
+              relatedness rather than pruning it, so it is handled -- what
+              it costs is the information N_eff measures.
+
+              The real half still contributes what simulation cannot: real
+              LD structure, real allele-frequency spectrum, real rare
+              variation.
 
               For (b) the ancestry covariate is the per-sample ADMIXTURE Q:
               max_Q_sup / argmax_pop_sup are in the manifest and the full Q

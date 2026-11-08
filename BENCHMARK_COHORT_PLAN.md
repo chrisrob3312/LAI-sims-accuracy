@@ -236,17 +236,37 @@ local-ancestry accuracy.**
 What they ARE used for:
 
 1. **Imputation accuracy, calibration and retention.**
-2. **Power and GWAS simulations** — phenotypes simulated on real genotypes.
+2. **Power and GWAS simulations** — phenotypes simulated on real genotypes,
+   **alongside the simulated individuals.**
 
-The second is not a side use, and it is a reason the real half cannot be
-replaced by more simulated individuals. Power depends on the LD structure, the
-allele-frequency spectrum and the relatedness structure that the genotypes
-actually carry. Simulated genomes drawn from a finite donor pool have
-compressed haplotype diversity and carry donor-reuse-induced cryptic
-relatedness — see §5, where SAS reuse is the binding constraint — so power
-estimated on them would be optimistic in a way that is hard to quantify and
-impossible to correct after the fact. Real genomes are where a power estimate
-can be believed.
+**Both halves are used for power, because the real half alone is too small.**
+A few hundred genomes cannot carry a power calculation; ~500 real plus 2,160
+simulated is about 2,660, which can.
+
+The cost is that simulated individuals drawn from a finite donor pool are
+cryptic relatives *by construction* — two individuals built from the same
+donor haplotypes share long stretches, and the thinner the pool the worse it
+is (SAS, ~24 donors for 200 SASEUR individuals, is the binding case). That
+does **not** have to bias anything: the GWAS uses GENESIS with a GRM, which
+models relatedness rather than pruning it, and power simulations run through
+the same machinery inherit that. What relatedness costs is **effective**
+sample size, and that is a number rather than a caveat:
+
+$$N_{\text{eff}} = \frac{N^2}{\sum_{ij} R_{ij}}$$
+
+with $R$ the GRM. `6e_cohort_kinship_clm.sh` computes genome-wide kinship over
+the combined cohort and `cohort-power-summary.py` turns it into $N_{\text{eff}}$
+per group. **Power calculations must use $N_{\text{eff}}$, not the roster
+count** — on a synthetic thin-donor fixture, 60 SASEUR individuals came out
+behaving like 5.
+
+That also makes §5's SAS options decidable: accepting the reuse is defensible
+*provided* the reuse is reported and the power calculation uses
+$N_{\text{eff}}$. It is now reportable.
+
+The real half still contributes what simulation cannot — real LD structure,
+real allele-frequency spectrum, real rare variation — so it is not
+interchangeable with more simulated individuals even though both are used.
 
 That has a practical consequence for the transfer: the real half has to ship
 as **genotypes plus the per-sample ADMIXTURE Q**, since Q is the ancestry
@@ -316,6 +336,7 @@ Steps 1–4 are what this repository produces. Steps 5–13 run in
 | 8 | deal everyone into the six chip × build cells | `assemble-benchmark-cohort.py` | **built** |
 | 9 | chip site lists in both builds | `build-chip-manifest-sites.py` | **GSA done** (596,591 sites); Affy 6.0 and 500K pending |
 | 10 | write the chip files per chip × build × chr | `6d_write_chip_cells_clm.sh` + `lift-cell-to-hg19.py` | **built**; orientation logic unit-tested, bcftools pipeline untried |
+| 10b | genome-wide kinship over the combined cohort | `6e_cohort_kinship_clm.sh` + `cohort-power-summary.py` | **built** |
 | 11 | tables, checksums, provenance | — | **not built** |
 | 12 | `ingest_simset.sh` intake check | — | — |
 | 13 | hand over | — | — |
