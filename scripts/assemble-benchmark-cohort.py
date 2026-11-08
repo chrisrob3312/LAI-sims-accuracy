@@ -256,6 +256,24 @@ def main():
                         f"\t{','.join(f'{p:g}' for p in prop)}"
                         f"\t{gen}\t{pri}\t{chip}\t{build}\t{k}\n")
 
+    # Per-individual rows, not just counts. Step 6 simulates a genome per
+    # model and step 10 masks it to a chip x build cell, so the two steps must
+    # agree about which simulated individual is in which cell. Counts alone
+    # cannot express that, and letting each step deal independently would put
+    # the same id in different cells in the two steps.
+    ind = f"{a.out}_simset_individuals.tsv"
+    with open(ind, "w") as g:
+        g.write("sim_id\tmodel\tcomponents\tproportions\tgenerations"
+                "\tpriority\tchip\tbuild\n")
+        for mi, (name, comp, prop, gen, n, pri) in enumerate(MODELS):
+            k = 0
+            for (chip, build), c in zip(CELLS, deal_counts(n, mi)):
+                for _ in range(c):
+                    k += 1
+                    g.write(f"{name}_{k:04d}\t{name}\t{','.join(comp)}"
+                            f"\t{','.join(f'{p:g}' for p in prop)}"
+                            f"\t{gen}\t{pri}\t{chip}\t{build}\n")
+
     # ---- the counts, and the two decisions section 5 defers ------------
     rep = f"{a.out}_counts.txt"
     L = []
@@ -353,7 +371,7 @@ def main():
     with open(rep, "w") as g:
         g.write("\n".join(L) + "\n")
     print("\n".join(L))
-    print(f"\nwrote {man}\n      {ros}\n      {rep}")
+    print(f"\nwrote {man}\n      {ros}\n      {ind}\n      {rep}")
 
 
 if __name__ == "__main__":
