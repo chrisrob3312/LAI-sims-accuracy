@@ -48,6 +48,45 @@ AFAM2, 16 for the Latino models, 30 for MENA3. Tract length falls as
 generations rise, so this spans the range over which local-ancestry callers
 degrade — a method that looks fine at gen 2 can fail at gen 30.
 
+## 1b. Which reference goes with which reading
+
+The two reference panels this repository ships are for **supervised ADMIXTURE
+and local-ancestry inference only.** Imputation in the `genotyping_pipeline`
+flow runs against the **external servers — TOPMed, All of Us and Michigan
+(1000 Genomes)** — never against a panel built here.
+
+| reading | reference used |
+|---|---|
+| global ancestry Q (ADMIXTURE) | `benchmark_reference_panel/` |
+| local ancestry (FLARE / RFMix) | `benchmark_reference_panel/` |
+| imputation accuracy, calibration, retention | TOPMed / All of Us / Michigan |
+| power and GWAS simulations | real genotypes + the ADMIXTURE Q as covariate |
+
+This is what makes the 1000 Genomes rules look inconsistent until you see
+which role each is about:
+
+- **1KG is in `benchmark_reference_panel/`, and that is correct.** The panel
+  never imputes, so 1KG in it cannot leak a test genome's haplotypes into an
+  imputation answer. For ADMIXTURE and LAI it is simply more reference data.
+- **1KG is never a donor and never a real test genome.** The external servers
+  all contain 1KG, so such a genome would be imputed against its own
+  haplotypes. Same reason `sgdp_server_panel_ids.txt` is barred from both
+  roles: SGDP re-sequenced 1KG individuals under other identifiers, and the
+  servers hold those people whatever our cohort column says.
+- **Donors are excluded from `benchmark_reference_panel/`** for a third,
+  separate reason: the simulated test genomes are built *from* donor
+  haplotypes, so a donor left in the LAI reference hands FLARE and RFMix the
+  haplotypes they are supposed to infer.
+
+Three exclusions, three distinct failures. And note that the imputation
+readings rest **entirely** on the test samples being absent from the external
+servers — nothing about the panels in this repository can establish that, only
+the exclusions can.
+
+`lai_reference_panel/` is the same kind of panel with the opposite donor
+policy: donors included, for the GWAS and FLARE work where nothing is
+simulated from these haplotypes.
+
 ## 2. Where each component's haplotypes come from
 
 Donors are the `--mode benchmark` donor half from

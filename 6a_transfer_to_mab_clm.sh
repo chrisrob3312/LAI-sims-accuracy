@@ -268,20 +268,55 @@ run_hg19_homog () {
 # method is given, the other is what it is tested on -- so they get separate
 # trees and names that say which is which:
 #
-#   lai_reference_panel/        REFERENCE. Every homogeneous sample, donors
-#                               INCLUDED. What the GWAS and FLARE run against.
-#                               Nothing is simulated from these haplotypes, so
-#                               there is no circularity to avoid and
-#                               withholding donors would only shrink it.
+#   lai_reference_panel/        ADMIXTURE + LAI REFERENCE. Every homogeneous
+#                               sample, donors INCLUDED. What the GWAS and
+#                               FLARE run against. Nothing is simulated from
+#                               these haplotypes, so there is no circularity
+#                               to avoid and withholding donors would only
+#                               shrink it.
 #
-#   benchmark_reference_panel/  REFERENCE. 1000 Genomes plus a
+#   benchmark_reference_panel/  ADMIXTURE + LAI REFERENCE. 1000 Genomes plus a
 #                               population-stratified share of the non-1KG
-#                               samples, donors EXCLUDED. What the genotype
-#                               harmonization pipeline imputes and infers
-#                               against. 1KG belongs HERE and nowhere near the
-#                               donor side: the servers' own panels contain it,
-#                               which is fine for a reference and circular for
-#                               a donor.
+#                               samples, donors EXCLUDED.
+#
+#   benchmark_cohort/           THE COHORT. The test genomes themselves --
+#                               real/ (real individuals drawn from HGDP, SGDP,
+#                               MXB, Almarri) and simulated/ (the 2,160 with
+#                               their truth tracts) -- plus the manifests that
+#                               say who is in which chip x build cell.
+#
+# NEITHER PANEL IS AN IMPUTATION REFERENCE, and mistaking one for an
+# imputation panel is the error this note exists to prevent. In the
+# genotyping_pipeline flow, imputation runs against the EXTERNAL servers --
+# TOPMed, All of Us and Michigan (1000 Genomes). The two trees here are used
+# only for supervised ADMIXTURE (the global-ancestry Q) and for local-ancestry
+# inference (FLARE / RFMix). They differ from each other only in donor policy.
+#
+# That split is what makes the 1KG rules look inconsistent until you see which
+# role each is about:
+#
+#   * 1000 Genomes IS in benchmark_reference_panel/, and that is fine. This
+#     panel is never used to impute, so 1KG here cannot leak a test genome's
+#     haplotypes into an imputation answer; for ADMIXTURE and LAI it is simply
+#     more reference data.
+#
+#   * 1000 Genomes is NEVER a donor, and never a real test sample. Those
+#     genomes are what the external servers impute, and TOPMed, All of Us and
+#     Michigan all contain 1KG -- so a 1KG test genome would be imputed
+#     against its own haplotypes. Same reason sgdp_server_panel_ids.txt is
+#     excluded from both roles: SGDP re-sequenced 1KG individuals under other
+#     identifiers, and the servers hold those people whatever our cohort
+#     column says.
+#
+#   * Donors are excluded from benchmark_reference_panel/ for a different
+#     reason again: the simulated test genomes are built FROM donor
+#     haplotypes, so a donor left in the LAI reference hands FLARE and RFMix
+#     the exact haplotypes they are supposed to infer.
+#
+# Three exclusions, three distinct failures. The benchmark's imputation
+# readings depend entirely on the test samples being absent from the external
+# servers, which is what those exclusions guarantee -- nothing about these
+# trees can establish it.
 #
 #   benchmark_cohort/           THE COHORT. The test genomes themselves --
 #                               real/ (real individuals drawn from HGDP, SGDP,
@@ -497,18 +532,30 @@ run_benchmark_refpanel () {
     fi
     write_provenance "$STAGE" \
         "Benchmark REFERENCE PANEL (donors EXCLUDED, 1KG included)" \
-"  This is the panel the genotype harmonization pipeline imputes and infers
-  AGAINST. It is not the cohort -- the test genomes are in benchmark_cohort/.
+"  NOT AN IMPUTATION PANEL. This is the reference for supervised ADMIXTURE
+  (the global-ancestry Q) and for local-ancestry inference (FLARE / RFMix),
+  and for nothing else. In the genotyping_pipeline flow imputation runs
+  against the EXTERNAL servers -- TOPMed, All of Us and Michigan (1000
+  Genomes) -- never against this.
+
+  It is also not the cohort: the test genomes are in benchmark_cohort/.
 
   Composition: 1000 Genomes, plus a population-stratified share of the
   non-1KG samples so both sides carry a proportional slice of every
   population. See reference_panel_composition_${BENCH_SUFFIX}.tsv.
 
-  Donors are withheld from this reference, and no 1000 Genomes sample is
-  ever a donor. The two exclusions close different holes: the simulated test
-  genomes are built from the donor half, and the imputation servers' own
-  panels already contain 1KG, so a 1KG donor would be imputed against its
-  own haplotypes." \
+  WHY 1KG IS HERE BUT IS NEVER A DONOR OR A TEST GENOME. Because this panel
+  never imputes, 1KG in it cannot leak a test genome's haplotypes into an
+  imputation answer -- for ADMIXTURE and LAI it is simply more reference
+  data. The external servers DO contain 1KG, so a 1KG donor or a 1KG test
+  genome would be imputed against its own haplotypes. That is also why
+  sgdp_server_panel_ids.txt is excluded from both roles: SGDP re-sequenced
+  1KG individuals under other identifiers, and the servers hold those people
+  whatever our cohort column says.
+
+  Donors are excluded from this reference for a different reason again: the
+  simulated test genomes are built FROM donor haplotypes, so a donor left
+  here hands FLARE and RFMix the haplotypes they are meant to infer." \
         "benchmark (suffix ${BENCH_SUFFIX})"
     do_rsync "$STAGE" "benchmark_reference_panel"
 }
@@ -599,9 +646,19 @@ run_benchmark_cohort () {
   benchmark_cohort_simset_individuals.tsv (simulated) and
   benchmark_cohort_manifest.tsv (real). Truth stays GRCh38 for everyone.
 
-  Score this cohort against benchmark_reference_panel/, NOT
-  lai_reference_panel/ -- the latter contains the donors these genomes were
-  simulated from." \
+  WHICH REFERENCE GOES WITH WHICH READING:
+
+    ADMIXTURE and LAI (FLARE / RFMix)
+        -> benchmark_reference_panel/, NOT lai_reference_panel/. The latter
+           contains the donors these genomes were simulated from, which
+           would hand the method the haplotypes it is meant to infer.
+
+    imputation
+        -> the EXTERNAL servers: TOPMed, All of Us, Michigan (1000
+           Genomes). Neither tree here is an imputation panel. The
+           imputation readings are only valid because every genome in this
+           cohort is absent from those servers -- no 1KG, and nothing in
+           sgdp_server_panel_ids.txt, on either the donor or the test side." \
         "benchmark (suffix ${BENCH_SUFFIX})"
     do_rsync "$STAGE" "benchmark_cohort"
 }
