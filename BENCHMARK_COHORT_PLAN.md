@@ -282,9 +282,34 @@ is limited by donor count.
 
 Three chips (`snp6`, `affy500k`, `gsa`) × two builds (hg19, hg38) = six cells.
 
-- Every individual is on **exactly one chip and one build**. No one is on two.
+**Which design, and why builds are paired by default.** The two readings are
+not symmetric:
+
+- The **build effect** is "did the pipeline's liftover change *this person's*
+  answer?" That is a within-individual question. Comparing hg19 in one group
+  of people against hg38 in a different group makes the liftover effect
+  compete with between-person variance, which is much larger. So every
+  individual goes on **both** builds.
+- The **chip effect** is marker density — a property of the array, not an
+  interaction with the person — so an ancestry-balanced between-individual
+  comparison is adequate, and splitting individuals across chips is what keeps
+  the cost at 2× rather than 6×.
+
+Imputation runs on TOPMed / All of Us / Michigan are the binding constraint,
+not disk, which is what makes that asymmetry worth exploiting.
+
+| `--design` | imputation runs | build effect | chip effect | sim per cell |
+|---|---|---|---|---|
+| `one-cell` | 1× ≈ 2,660 | between-individual | between-individual | 360 |
+| **`paired-builds`** (default) | 2× ≈ 5,320 | **within-individual** | between-individual | **720** |
+| `full` | 6× ≈ 15,960 | within-individual | **within-individual** | 2,160 |
+
+- Under the default every individual is on **one chip and both builds**. The
+  manifests carry `chips` and `builds` as comma-separated lists, and 6d tests
+  membership rather than equality — an equality test against `"hg19,hg38"`
+  matches nothing and would yield empty cells rather than an error.
 - Every model, and every real `sample_type` × top-component group, is split
-  **equally across all six cells**, within 1.
+  **equally across the chips** (or cells, under `one-cell`), within 1.
 - hg19 cells use the chip's **native hg19 manifest**, never a down-lift of the
   hg38 sites — that is what exercises the pipeline's own liftover. A down-lift
   would contain only the sites that map back cleanly, by construction, and
