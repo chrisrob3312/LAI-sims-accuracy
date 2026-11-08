@@ -47,7 +47,7 @@ Usage:
 import argparse
 import os
 import sys
-from collections import defaultdict, OrderedDict
+from collections import Counter, defaultdict, OrderedDict
 
 # Document 19, Table 1 (contract v2). Kept identical to the roster in
 # cohort-composition-report.py: the two scripts must not disagree about what
@@ -202,6 +202,47 @@ def main():
         sys.exit(f"FATAL: {a.panel} lacks column(s) {missing}. Columns "
                  f"present: {sorted(idx)}")
 
+    # LABEL-VOCABULARY CHECK. Three different lookups below are keyed on a
+    # super-pop name -- the tiered threshold, the reference-panel size, and
+    # the argmax/label comparison -- and every one of them FAILS SILENTLY on an
+    # unrecognised label: the threshold quietly falls back to the relaxed
+    # 0.93, the reference size reads 0 so support becomes "none", and the
+    # comparison is never equal so the sample is called admixed. A cohort
+    # whose metadata super-pop is not harmonised to this vocabulary (a
+    # geographic region instead of AMR, say) would therefore be misclassified
+    # wholesale with nothing in the output to show it.
+    #
+    # 4a harmonises on the way in -- MXB -> AMR, SGDP via its own map,
+    # CSA -> SAS, MID -> MEN -- and aborts if its two vocabularies do not
+    # overlap. This re-checks rather than trusting that, because the failure
+    # is silent here and a new cohort is exactly the thing that would add an
+    # unmapped label.
+    CANON = {"AFR", "AMR", "EUR", "EAS", "SAS", "MEN", "OCE", "OTH"}
+    seen_sp = Counter(r[idx["super_pop"]].strip() for r in rows)
+    seen_ap = Counter(r[idx["argmax_pop_sup"]].strip() for r in rows)
+    bad_sp = {k: v for k, v in seen_sp.items()
+              if k and k not in CANON and k != "NA"}
+    bad_ap = {k: v for k, v in seen_ap.items() if k and k not in CANON}
+    print("[labels] super_pop census    : "
+          + ", ".join(f"{k}={v}" for k, v in sorted(seen_sp.items())))
+    print("[labels] argmax census       : "
+          + ", ".join(f"{k}={v}" for k, v in sorted(seen_ap.items())))
+    if bad_sp or bad_ap:
+        sys.exit(
+            f"FATAL: super-pop labels outside the canonical vocabulary.\n"
+            f"  canonical      : {sorted(CANON)}\n"
+            f"  bad super_pop  : {bad_sp}\n"
+            f"  bad argmax     : {bad_ap}\n"
+            f"These would silently take the relaxed threshold, read a\n"
+            f"reference size of 0, and never match the argmax -- every\n"
+            f"affected sample would be called real_admixed with no\n"
+            f"indication why. Harmonise them in 4a's super_pop_of() (where\n"
+            f"MXB -> AMR, CSA -> SAS and MID -> MEN already live) and re-run\n"
+            f"4a; do not work around it here.")
+    if not (set(seen_ap) & CANON):
+        sys.exit("FATAL: no argmax label is canonical -- the cluster-to-name "
+                 "assignment in 4a did not produce usable names.")
+
     # ---- the four exclusions -------------------------------------------
     donors, refs = set(), set()
     sps = set(r[idx["super_pop"]] for r in rows) | set(COMPONENT_POOL.values())
@@ -278,8 +319,15 @@ def main():
             q = float(r[idx["max_Q_sup"]])
         except ValueError:
             excl["unparseable max_Q_sup"].append(s); continue
-        ap = r[idx["argmax_pop_sup"]]
-        thr = threshold_for(sp, a.flat_threshold)
+        ap = r[idx["argmax_pop_sup"]].strip()
+        # THE THRESHOLD IS KEYED ON THE ARGMAX, NOT THE METADATA LABEL.
+        # The question "is this genome homogeneous?" is about the ancestry
+        # ADMIXTURE actually found, so a sample at Q=0.97 on EUR is measured
+        # against EUR's 0.95 whatever its label says. Keying on the label
+        # would apply the wrong tier to every label/ancestry mismatch, and
+        # would apply the relaxed tier to all of them if a cohort's labels
+        # were ever unharmonised.
+        thr = threshold_for(ap if ap in CANON else sp, a.flat_threshold)
         # OTH is the empirical leftover cluster at K=8. It is not a reference
         # ancestry, so an OTH sample is neither homogeneous (there is no
         # ancestry for it to be homogeneous FOR) nor admixed between named
@@ -292,12 +340,19 @@ def main():
             # support off it would report a reference panel that does not
             # cover this person.
             support = "none"
-        elif q >= thr and ap == sp:
+        elif q >= thr:
+            # HOMOGENEITY IS DECIDED ON Q ALONE. A sample at Q=0.97 is
+            # homogeneous whether or not its metadata label agrees about WHICH
+            # ancestry; disagreement is recorded in label_concordant instead.
+            # Folding the label comparison into the type would call a
+            # perfectly homogeneous genome "admixed" purely because a cohort's
+            # labels use another vocabulary -- turning a metadata problem into
+            # a false biological claim.
             stype = "real_homogeneous"
-            support = support_for(sp)
+            support = support_for(ap if ap in CANON else sp)
         else:
             stype = "real_admixed"
-            support = support_for(sp)
+            support = support_for(ap if ap in CANON else sp)
         test.append({
             "sample": s,
             "cohort": r[idx["cohort"]],
@@ -313,6 +368,10 @@ def main():
             # thin?" separately from "how does it do on people no reference
             # fits?". So support is its own column.
             "reference_support": support,
+            # 1 when the supervised argmax agrees with the metadata
+            # super-pop. A high discordant count is a HARMONISATION signal,
+            # not a biological one.
+            "label_concordant": 1 if ap == sp else 0,
             "panel_included": r[idx["included"]].strip(),
         })
 
@@ -330,7 +389,7 @@ def main():
     with open(man, "w") as g:
         cols = ["sample", "cohort", "pop", "super_pop", "argmax_pop_sup",
                 "max_Q_sup", "threshold", "sample_type", "reference_support",
-                "panel_included", "chip", "build"]
+                "label_concordant", "panel_included", "chip", "build"]
         g.write("\t".join(cols) + "\n")
         for t in sorted(test, key=lambda x: x["sample"]):
             g.write("\t".join(str(t[c]) for c in cols) + "\n")
@@ -414,6 +473,43 @@ def main():
     w(" a thin reference' be asked apart from 'imputation on someone no")
     w(" reference fits'. OCE and OTH are the groups that cannot be pooled into")
     w(" a stratified analysis, and they are in the cohort for that reason.")
+    w("")
+    w(" LABEL vs ARGMAX CONCORDANCE")
+    w("-" * 72)
+    w(" The supervised argmax and the metadata super-pop are two independently")
+    w(" built vocabularies. Homogeneity is decided on Q alone, so a mismatch")
+    w(" does NOT change sample_type -- but a super-pop that is mostly")
+    w(" discordant is a HARMONISATION problem, not a biological finding: it")
+    w(" means that cohort's labels are not mapped to this vocabulary (4a's")
+    w(" super_pop_of() is where MXB -> AMR, CSA -> SAS and MID -> MEN live).")
+    w("")
+    conc = defaultdict(lambda: [0, 0])
+    for t in test:
+        conc[t["super_pop"]][0 if t["label_concordant"] else 1] += 1
+    w(f" {'label':<10}{'concordant':>12}{'discordant':>12}{'pct disc':>10}")
+    harm = []
+    for k in sorted(conc):
+        c, d = conc[k]
+        pct = 100.0 * d / (c + d) if (c + d) else 0.0
+        flag = ""
+        # A label that disagrees with the argmax for most of its samples is
+        # the signature of an unmapped vocabulary. Half is already far more
+        # than genuine ancestry/label mismatch explains.
+        if (c + d) >= 10 and pct >= 50.0:
+            flag = "  <<< check harmonisation"
+            harm.append((k, c + d, pct))
+        w(f" {k:<10}{c:>12}{d:>12}{pct:>9.0f}%{flag}")
+    tot_d = sum(v[1] for v in conc.values())
+    w(f" {'TOTAL':<10}{len(test) - tot_d:>12}{tot_d:>12}"
+      f"{100.0 * tot_d / len(test) if test else 0:>9.0f}%")
+    if harm:
+        w("")
+        w(" *** these labels disagree with the argmax for most of their")
+        w(" samples, which points at an unharmonised cohort rather than at")
+        w(" real ancestry/label mismatch:")
+        for k, n, pct in harm:
+            w(f"      {k}: {pct:.0f}% of {n} samples discordant")
+        w(" Fix the mapping in 4a's super_pop_of() and re-run 4a.")
     w("")
     w(" Real genomes have no recorded tracts, so they are NEVER scored for")
     w(" local-ancestry accuracy. They are used for:")
@@ -503,8 +599,8 @@ def main():
     w(" NEXT: step 6  6b_simulate_benchmark_cohort_clm.sh  (the 2,160)")
     w("       step 7  6c_extract_real_test_genomes_clm.sh (the real half)")
     w("       transfer 6a_transfer_to_mab_clm.sh benchmark")
-    w(" NOT BUILT: step 10 (chip files per chip x build x chr),")
-    w("            step 11 (tables, checksums, provenance).")
+    w("       step 10 6d_write_chip_cells_clm.sh           (chip x build cells)")
+    w(" NOT BUILT: step 11 (tables, checksums, provenance).")
     w("=" * 72)
 
     with open(rep, "w") as g:

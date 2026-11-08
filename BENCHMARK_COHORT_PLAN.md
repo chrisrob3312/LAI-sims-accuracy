@@ -142,14 +142,39 @@ seen them.
 
 | sample_type | who | what it adds |
 |---|---|---|
-| `real_homogeneous` | top Q ≥ threshold **and** argmax == assigned super-pop | real rare variation and real haplotype structure that simulation cannot produce |
-| `real_admixed` | below the threshold, or argmax disagrees with the label | real admixture, with the correlation structure between ancestry and genotype that a simulation idealises away |
+| `real_homogeneous` | top Q ≥ threshold for the **argmax** super-pop | real rare variation and real haplotype structure that simulation cannot produce |
+| `real_admixed` | top Q below that threshold | real admixture, with the correlation structure between ancestry and genotype that a simulation idealises away |
 | `real_unassigned` | argmax is **OTH**, the empirical leftover cluster at K=8 | the multiracial-like individuals a real diverse cohort carries. No reference ancestry fits them, so they are neither homogeneous nor admixed between named components |
 
 Thresholds are **tiered**, matching what 4a applies to the panel: 0.95 for
 EUR/EAS/AFR, 0.93 for AMR/OCE/MEN/SAS. Classifying test genomes on a flat
 0.93 while the panel uses a tiered bar would admit samples to
 `real_homogeneous` that the panel itself rejects.
+
+**The threshold is keyed on the ADMIXTURE argmax, not on the metadata label,
+and homogeneity does not depend on the two agreeing.** "Is this genome
+homogeneous?" is a question about the ancestry the supervised Q actually
+found, so a sample at Q = 0.97 on EUR is measured against EUR's 0.95 whatever
+its label says. Agreement is recorded separately in `label_concordant`.
+
+This matters because the argmax and the metadata super-pop are two
+independently built vocabularies, and three different lookups are keyed on a
+super-pop name — the tiered threshold, the reference-panel size, and the
+comparison itself. Every one of them **fails silently** on a label this
+vocabulary does not know: the threshold falls back to the relaxed 0.93, the
+reference size reads 0 so support becomes `none`, and the comparison is never
+equal so the sample is called admixed. A cohort whose metadata gives a
+geographic region rather than a super-pop would be misclassified wholesale
+with nothing in the output to show it.
+
+4a does harmonise on the way in — `super_pop_of()` maps MXB → AMR, SGDP via
+its own table, CSA → SAS and MID → MEN, and aborts if its two vocabularies do
+not overlap — so MXB samples carry `AMR`, not a Mexican geographic label. The
+assembler **re-checks rather than trusting it**, prints both censuses, and
+refuses to run on any non-canonical label, because a newly added cohort is
+exactly what would introduce one. It also reports per-label concordance and
+flags any label that disagrees with the argmax for most of its samples, since
+that is a harmonisation signal rather than a biological finding.
 
 **Eligibility is NOT `included == 1`.** 4a sets that only when
 `max_Q >= threshold` AND the argmax matches the assigned super-pop, so gating
