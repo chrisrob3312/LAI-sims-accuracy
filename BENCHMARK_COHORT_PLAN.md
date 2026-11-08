@@ -256,14 +256,29 @@ Steps 1–4 are what this repository produces. Steps 5–13 run in
 | 7 | add real test genomes to the truth | `assemble-benchmark-cohort.py` | **built** |
 | 8 | deal everyone into the six chip × build cells | `assemble-benchmark-cohort.py` | **built** |
 | 9 | chip site lists in both builds | `build-chip-manifest-sites.py` | **GSA done** (596,591 sites); Affy 6.0 and 500K pending |
-| 10 | write the chip files per chip × build × chr | — | **not built** |
+| 10 | write the chip files per chip × build × chr | `6d_write_chip_cells_clm.sh` + `lift-cell-to-hg19.py` | **built**; orientation logic unit-tested, bcftools pipeline untried |
 | 11 | tables, checksums, provenance | — | **not built** |
 | 12 | `ingest_simset.sh` intake check | — | — |
 | 13 | hand over | — | — |
 
 Steps 2, 5, 7 and 8 need only the Q file, so all four run within minutes of
-stage 3 landing. Steps 6, 10 and 11 are the remaining gap, and 6 and 10 belong
-in `genotyping_pipeline/benchmarking/simulate/` rather than here.
+stage 3 landing. Step 11 is the remaining gap. Steps 6 and 10 run on taco
+(mhgcp) alongside the rest, not in `genotyping_pipeline`.
+
+**Step 10's hg19 path is where a silent wrong answer would come from.** GT is
+an index into REF/ALT, so a genotype means nothing apart from the allele pair
+written beside it. Between GRCh37 and GRCh38 a site can keep its alleles, have
+them complemented (a strand flip — indices unchanged), or have REF and ALT
+*exchanged* (the reference allele changed between builds — indices must be
+flipped). Missing that last case writes a perfectly valid VCF with inverted
+alternate-allele dosage at exactly the sites where the builds disagree, and an
+imputation benchmark run on it would report inflated error that reads as a
+pipeline problem. `lift-cell-to-hg19.py` classifies all four cases plus the
+unresolvable one and is unit-tested on each.
+
+Palindromic sites (A/T, C/G) are irreducibly ambiguous: complement equals swap
+there, so orientation comes from the vendor strand column alone and is counted
+separately in the per-chromosome report. GSA has 6,422 of them, 1.08%.
 
 **Step 2 is built.** SGDP re-sequenced individuals who are also in HGDP, and
 the same person can appear under two IDs across HGDP, 1KG, MXB and Almarri. If
