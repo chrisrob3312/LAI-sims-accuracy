@@ -111,9 +111,29 @@ fits".
 
 **They have no tracts.** A real genome has a WGS truth, but nobody recorded
 which ancestry each of its segments came from. Inferred tracts would be
-another method's output, not truth. So real genomes are scored for
-**imputation accuracy, calibration and retention only — never for
+another method's output, not truth. So real genomes are **never scored for
 local-ancestry accuracy.**
+
+What they ARE used for:
+
+1. **Imputation accuracy, calibration and retention.**
+2. **Power and GWAS simulations** — phenotypes simulated on real genotypes.
+
+The second is not a side use, and it is a reason the real half cannot be
+replaced by more simulated individuals. Power depends on the LD structure, the
+allele-frequency spectrum and the relatedness structure that the genotypes
+actually carry. Simulated genomes drawn from a finite donor pool have
+compressed haplotype diversity and carry donor-reuse-induced cryptic
+relatedness — see §5, where SAS reuse is the binding constraint — so power
+estimated on them would be optimistic in a way that is hard to quantify and
+impossible to correct after the fact. Real genomes are where a power estimate
+can be believed.
+
+That has a practical consequence for the transfer: the real half has to ship
+as **genotypes plus the per-sample ADMIXTURE Q**, since Q is the ancestry
+covariate a GWAS simulation conditions on. `benchmark_cohort_manifest.tsv`
+carries `max_Q_sup`, `argmax_pop_sup` and `sample_type`, and the full Q table
+travels as `lai_ref_panel_samples.k8.tsv`.
 
 This is what absorbs the thin-donor problem: SAS and OCE can lean on real
 genomes for the imputation readings, and only their *local-ancestry* precision

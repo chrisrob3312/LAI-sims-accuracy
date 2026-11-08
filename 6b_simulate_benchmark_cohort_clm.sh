@@ -331,3 +331,20 @@ rm -f .models.tsv
 
 echo "[$(date +%T)] [${CHR}] DONE -> ${WORKDIR}"
 echo "[$(date +%T)] [${CHR}] breakpoints + seeds archived in ${PROV_DIR}"
+
+# The .dat generation lines are the one assumption here that cannot fail
+# loudly: `mixer` simulates whatever history it parses and reports nothing if
+# that is not the history that was meant. Tract length is the observable that
+# betrays it, so the check runs as part of the job rather than waiting to be
+# remembered. It does not fail the task -- the output is still a valid
+# realisation of SOME demography, and one chromosome's deviation is noisy --
+# but the verdict lands in the log next to the run that produced it.
+VALIDATE="${VALIDATE:-${REPO_DIR}/scripts/validate-simset-tracts.py}"
+if [[ -s "$VALIDATE" ]] && command -v python3 >/dev/null; then
+    echo "[$(date +%T)] [${CHR}] validating tract lengths against intended generations"
+    python3 -I "$VALIDATE" --simset "$OUTDIR" --individuals "$INDIV_TSV" \
+        --chr "$CHR" || {
+        echo "[$(date +%T)] [${CHR}] *** TRACT VALIDATION FAILED -- read the table above"
+        echo "[$(date +%T)] [${CHR}] *** do not score this cohort until it passes"
+    }
+fi

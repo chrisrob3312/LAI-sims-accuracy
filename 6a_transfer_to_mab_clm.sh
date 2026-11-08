@@ -544,7 +544,8 @@ run_benchmark_cohort () {
              "${BENCH_OUT}/benchmark_cohort_simset_individuals.tsv" \
              "${BENCH_OUT}/benchmark_cohort_simset_roster.tsv" \
              "${BENCH_OUT}/benchmark_cohort_counts.txt" \
-             "${BENCH_OUT}/cohort_composition.txt"; do
+             "${BENCH_OUT}/cohort_composition.txt" \
+             "$SAMPLES_TSV_K"; do
         [[ -s "$f" ]] && ln -sf "$f" "$STAGE/$(basename "$f")"
     done
 
@@ -566,11 +567,23 @@ run_benchmark_cohort () {
               outside both reference panels. Labelled real_homogeneous or
               real_admixed in benchmark_cohort_manifest.tsv.
 
-              SCORED FOR IMPUTATION ACCURACY, CALIBRATION AND RETENTION
-              ONLY. A real genome has a WGS truth but nobody recorded which
-              ancestry each segment came from, so it is never scored for
-              local-ancestry accuracy -- inferred tracts would be another
-              method's output, not truth.
+              NEVER SCORED FOR LOCAL-ANCESTRY ACCURACY. A real genome has
+              a WGS truth but nobody recorded which ancestry each segment
+              came from, and inferred tracts would be another method's
+              output, not truth.
+
+              Used for (a) imputation accuracy, calibration and retention,
+              and (b) POWER AND GWAS SIMULATIONS -- phenotypes simulated on
+              real genotypes. (b) is why the real half cannot be replaced by
+              more simulated individuals: power depends on the LD structure,
+              allele-frequency spectrum and relatedness the genotypes
+              actually carry, and simulated genomes drawn from a finite
+              donor pool have compressed haplotype diversity plus
+              donor-reuse cryptic relatedness.
+
+              For (b) the ancestry covariate is the per-sample ADMIXTURE Q:
+              max_Q_sup / argmax_pop_sup are in the manifest and the full Q
+              table travels as lai_ref_panel_samples.k8.tsv.
 
   simulated/  the 2,160 (1,800 admixed + 360 single-ancestry controls),
               per chromosome, with .hanc truth tracts and the .bp
