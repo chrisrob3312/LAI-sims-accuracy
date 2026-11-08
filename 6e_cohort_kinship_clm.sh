@@ -33,6 +33,11 @@
 # It also catches a leak the other checks cannot: a REAL test genome related
 # to a SIMULATED one means a donor, or a donor's close relative, is in the
 # test set.
+#
+# Chip and build do not enter here. Kinship is a property of the PEOPLE, so
+# it is computed once over the distinct individuals whatever design put them
+# in which cells -- and under the default paired-builds design an individual
+# appears in two cells, so filtering by cell would count some twice.
 # ============================================================================
 set -euo pipefail
 

@@ -123,12 +123,12 @@ prepare_model () {
 }
 
 C_REAL_ID=$(col "$REAL_MANIFEST" sample)
-C_REAL_CHIP=$(col "$REAL_MANIFEST" chip)
-C_REAL_BUILD=$(col "$REAL_MANIFEST" build)
+C_REAL_CHIP=$(col "$REAL_MANIFEST" chips)
+C_REAL_BUILD=$(col "$REAL_MANIFEST" builds)
 C_SIM_ID=$(col "$SIM_MANIFEST" sim_id)
 C_SIM_MODEL=$(col "$SIM_MANIFEST" model)
-C_SIM_CHIP=$(col "$SIM_MANIFEST" chip)
-C_SIM_BUILD=$(col "$SIM_MANIFEST" build)
+C_SIM_CHIP=$(col "$SIM_MANIFEST" chips)
+C_SIM_BUILD=$(col "$SIM_MANIFEST" builds)
 for v in C_REAL_ID C_REAL_CHIP C_REAL_BUILD C_SIM_ID C_SIM_MODEL C_SIM_CHIP C_SIM_BUILD; do
     [[ -n "${!v}" ]] || { echo "ERROR: could not resolve column for $v" >&2; exit 1; }
 done
@@ -174,8 +174,10 @@ for CHIP in $CHIPS; do
 
     # --- real individuals in this cell ---
     awk -F'\t' -v i="$C_REAL_ID" -v c="$C_REAL_CHIP" -v b="$C_REAL_BUILD" \
-        -v chip="$CHIP" -v build="$BUILD" \
-        'NR>1 && $c==chip && $b==build {print $i}' "$REAL_MANIFEST" > "${CELL}.real.ids"
+        -v chip="$CHIP" -v build="$BUILD" '
+        function has(list, v) { n = split(list, a, ","); for (i = 1; i <= n; i++) if (a[i] == v) return 1; return 0 }
+        NR>1 && has($c, chip) && has($b, build) {print $i}' \
+        "$REAL_MANIFEST" > "${CELL}.real.ids"
     N_REAL=$(wc -l < "${CELL}.real.ids")
     REAL_BCF="${REAL_DIR}/benchmark_real.${CHR}.bcf"
     if [[ "$N_REAL" -gt 0 && -s "$REAL_BCF" ]]; then
@@ -189,15 +191,18 @@ for CHIP in $CHIPS; do
 
     # --- simulated individuals in this cell, per model ---
     awk -F'\t' -v m="$C_SIM_MODEL" -v c="$C_SIM_CHIP" -v b="$C_SIM_BUILD" \
-        -v chip="$CHIP" -v build="$BUILD" \
-        'NR>1 && $c==chip && $b==build {print $m}' "$SIM_MANIFEST" | sort -u > "${CELL}.models"
+        -v chip="$CHIP" -v build="$BUILD" '
+        function has(list, v) { n = split(list, a, ","); for (i = 1; i <= n; i++) if (a[i] == v) return 1; return 0 }
+        NR>1 && has($c, chip) && has($b, build) {print $m}' \
+        "$SIM_MANIFEST" | sort -u > "${CELL}.models"
     while read -r model; do
         [[ -n "$model" ]] || continue
         prepare_model "$model"
         [[ "${MODEL_VCF[$model]}" == "MISSING" ]] && continue
         awk -F'\t' -v i="$C_SIM_ID" -v mm="$C_SIM_MODEL" -v c="$C_SIM_CHIP" \
-            -v b="$C_SIM_BUILD" -v chip="$CHIP" -v build="$BUILD" -v m="$model" \
-            'NR>1 && $mm==m && $c==chip && $b==build {print $i}' \
+            -v b="$C_SIM_BUILD" -v chip="$CHIP" -v build="$BUILD" -v m="$model" '
+            function has(list, v) { n = split(list, a, ","); for (i = 1; i <= n; i++) if (a[i] == v) return 1; return 0 }
+            NR>1 && $mm==m && has($c, chip) && has($b, build) {print $i}' \
             "$SIM_MANIFEST" > "${CELL}.${model}.ids"
         [[ -s "${CELL}.${model}.ids" ]] || continue
         bcftools view -S "${CELL}.${model}.ids" -T "${CELL}.pos38.chr.txt" \

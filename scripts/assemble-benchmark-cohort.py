@@ -76,6 +76,30 @@ CHIPS = ("snp6", "affy500k", "gsa")
 BUILDS = ("hg19", "hg38")
 CELLS = [(c, b) for c in CHIPS for b in BUILDS]   # six, fixed order
 
+# THREE DESIGNS, AND WHY THE DEFAULT PAIRS BUILDS.
+#
+# The two readings a harmonization benchmark wants are not symmetric.
+#
+#   The BUILD effect is "did the pipeline's liftover change THIS person's
+#   answer?". That is a within-individual question: comparing hg19 in one
+#   group of people against hg38 in a different group makes the liftover
+#   effect compete with between-person variance, which is far larger. So
+#   every individual should be on BOTH builds.
+#
+#   The CHIP effect is marker density, a property of the array rather than an
+#   interaction with the person, so an ancestry-balanced between-individual
+#   comparison is adequate. Splitting individuals across chips is what keeps
+#   the imputation cost at 2x rather than 6x -- and imputation runs on TOPMed,
+#   All of Us and Michigan are the binding constraint, not disk.
+#
+# "one-cell"      each individual on exactly one chip and one build.
+#                 1x imputation; both effects between-individual.
+# "paired-builds" each individual on one chip, BOTH builds. 2x imputation;
+#                 build effect paired. THE DEFAULT.
+# "full"          each individual on every chip and both builds. 6x
+#                 imputation; both effects paired.
+DESIGNS = ("paired-builds", "one-cell", "full")
+
 THRESH_STRICT = 0.95
 STRICT_SUPERPOPS = ("EUR", "EAS", "AFR")
 THRESH_RELAXED = 0.93
@@ -138,30 +162,49 @@ def threshold_for(sp, flat):
     return THRESH_STRICT if sp in STRICT_SUPERPOPS else THRESH_RELAXED
 
 
-def deal(groups):
-    """Deal each group round-robin across the six cells, rotating the starting
-    cell per group.
+def axis_for(design):
+    """The units individuals are dealt ACROSS, and what each unit implies.
+
+    -> (list of units, chips_for_unit, builds_for_unit)
+    """
+    if design == "one-cell":
+        return (list(CELLS),
+                lambda u: [u[0]],
+                lambda u: [u[1]])
+    if design == "paired-builds":
+        return (list(CHIPS),
+                lambda u: [u],
+                lambda u: list(BUILDS))
+    if design == "full":
+        return (["all"],
+                lambda u: list(CHIPS),
+                lambda u: list(BUILDS))
+    raise ValueError(design)
+
+
+def deal(groups, units):
+    """Deal each group round-robin across `units`, rotating the start per group.
 
     Rotating matters. A fixed start would send every group's remainder to the
-    same cell, so with 13 models and many real groups cell 0 would end up
+    same unit, so with 13 models and many real groups unit 0 would end up
     systematically larger -- and a cell-size imbalance is indistinguishable
     from a chip effect in the results. Rotating spreads the remainders, which
-    keeps each group balanced within 1 AND the six totals balanced within 1.
+    keeps each group balanced within 1 AND the unit totals balanced within 1.
     """
     out = {}
     for gi, (gname, members) in enumerate(sorted(groups.items())):
-        off = gi % len(CELLS)
+        off = gi % len(units)
         for i, m in enumerate(sorted(members)):
-            out[m] = CELLS[(i + off) % len(CELLS)]
+            out[m] = units[(i + off) % len(units)]
     return out
 
 
-def deal_counts(n, offset):
-    """Split a simulated model's n across the six cells, balanced within 1."""
-    base, rem = divmod(n, len(CELLS))
-    counts = [base] * len(CELLS)
+def deal_counts(n, offset, n_units):
+    """Split a simulated model's n across n_units, balanced within 1."""
+    base, rem = divmod(n, n_units)
+    counts = [base] * n_units
     for r in range(rem):
-        counts[(r + offset) % len(CELLS)] += 1
+        counts[(r + offset) % n_units] += 1
     return counts
 
 
@@ -190,6 +233,14 @@ def main():
                     help="use one homogeneity threshold for every super-pop "
                          "(the plan document's literal 0.93) instead of the "
                          "tiered thresholds 4a applies")
+    ap.add_argument("--design", choices=DESIGNS, default="paired-builds",
+                    help="paired-builds (default): one chip per individual, "
+                         "BOTH builds -- the liftover comparison is then "
+                         "within-individual, at 2x imputation cost. "
+                         "one-cell: exactly one chip and one build per "
+                         "individual, 1x cost, both effects "
+                         "between-individual. full: every chip and both "
+                         "builds for everyone, 6x cost, both effects paired.")
     ap.add_argument("--out", default="results/benchmark_cohort",
                     help="output prefix; three files are written")
     a = ap.parse_args()
@@ -376,12 +427,15 @@ def main():
         })
 
     # ---- step 8: deal into the six chip x build cells ------------------
+    units, chips_of, builds_of = axis_for(a.design)
     groups = defaultdict(list)
     for t in test:
         groups[f"{t['sample_type']}|{t['argmax_pop_sup']}"].append(t["sample"])
-    assign = deal(groups)
+    assign = deal(groups, units)
     for t in test:
-        t["chip"], t["build"] = assign[t["sample"]]
+        u = assign[t["sample"]]
+        t["chips"] = ",".join(chips_of(u))
+        t["builds"] = ",".join(builds_of(u))
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
 
@@ -389,7 +443,7 @@ def main():
     with open(man, "w") as g:
         cols = ["sample", "cohort", "pop", "super_pop", "argmax_pop_sup",
                 "max_Q_sup", "threshold", "sample_type", "reference_support",
-                "label_concordant", "panel_included", "chip", "build"]
+                "label_concordant", "panel_included", "chips", "builds"]
         g.write("\t".join(cols) + "\n")
         for t in sorted(test, key=lambda x: x["sample"]):
             g.write("\t".join(str(t[c]) for c in cols) + "\n")
@@ -397,13 +451,14 @@ def main():
     ros = f"{a.out}_simset_roster.tsv"
     with open(ros, "w") as g:
         g.write("model\tcomponents\tproportions\tgenerations\tpriority"
-                "\tchip\tbuild\tn\n")
+                "\tchips\tbuilds\tn\n")
         for mi, (name, comp, prop, gen, n, pri) in enumerate(MODELS):
-            counts = deal_counts(n, mi)
-            for (chip, build), k in zip(CELLS, counts):
+            counts = deal_counts(n, mi, len(units))
+            for u, k in zip(units, counts):
                 g.write(f"{name}\t{','.join(comp)}"
                         f"\t{','.join(f'{p:g}' for p in prop)}"
-                        f"\t{gen}\t{pri}\t{chip}\t{build}\t{k}\n")
+                        f"\t{gen}\t{pri}\t{','.join(chips_of(u))}"
+                        f"\t{','.join(builds_of(u))}\t{k}\n")
 
     # Per-individual rows, not just counts. Step 6 simulates a genome per
     # model and step 10 masks it to a chip x build cell, so the two steps must
@@ -413,15 +468,16 @@ def main():
     ind = f"{a.out}_simset_individuals.tsv"
     with open(ind, "w") as g:
         g.write("sim_id\tmodel\tcomponents\tproportions\tgenerations"
-                "\tpriority\tchip\tbuild\n")
+                "\tpriority\tchips\tbuilds\n")
         for mi, (name, comp, prop, gen, n, pri) in enumerate(MODELS):
             k = 0
-            for (chip, build), c in zip(CELLS, deal_counts(n, mi)):
+            for u, c in zip(units, deal_counts(n, mi, len(units))):
                 for _ in range(c):
                     k += 1
                     g.write(f"{name}_{k:04d}\t{name}\t{','.join(comp)}"
                             f"\t{','.join(f'{p:g}' for p in prop)}"
-                            f"\t{gen}\t{pri}\t{chip}\t{build}\n")
+                            f"\t{gen}\t{pri}\t{','.join(chips_of(u))}"
+                            f"\t{','.join(builds_of(u))}\n")
 
     # ---- the counts, and the two decisions section 5 defers ------------
     rep = f"{a.out}_counts.txt"
@@ -532,13 +588,28 @@ def main():
     w("")
     w(" CHIP x BUILD CELLS")
     w("-" * 72)
+    w(f" design: {a.design}")
+    if a.design == "paired-builds":
+        w(" Every individual is on ONE chip and BOTH builds, so the liftover")
+        w(" comparison is within-individual. Each person is imputed twice.")
+    elif a.design == "one-cell":
+        w(" Every individual is on exactly one chip and one build. Cheapest,")
+        w(" but the liftover effect competes with between-person variance.")
+    else:
+        w(" Every individual is on every chip and both builds. Both effects")
+        w(" are paired; each person is imputed six times.")
+    w("")
     cc = defaultdict(int)
     for t in test:
-        cc[(t["chip"], t["build"])] += 1
+        for ch in t["chips"].split(","):
+            for bu in t["builds"].split(","):
+                cc[(ch, bu)] += 1
     sim_cc = defaultdict(int)
     for mi, (name, _c, _p, _g, n, _pr) in enumerate(MODELS):
-        for cell, k in zip(CELLS, deal_counts(n, mi)):
-            sim_cc[cell] += k
+        for u, k in zip(units, deal_counts(n, mi, len(units))):
+            for ch in chips_of(u):
+                for bu in builds_of(u):
+                    sim_cc[(ch, bu)] += k
     w(f" {'cell':<18}{'simulated':>11}{'real':>7}{'total':>8}")
     for cell in CELLS:
         w(f" {cell[0] + '/' + cell[1]:<18}{sim_cc[cell]:>11}"
