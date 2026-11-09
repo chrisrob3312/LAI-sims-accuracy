@@ -1,0 +1,97 @@
+# population_aliases.tsv -- labels that name the SAME or near-equivalent ancestry
+#
+# WHY THIS FILE EXISTS. Sub-population gap detection compares the population
+# labels on the reference side against those on the donor side. Those labels
+# come from different sources with different naming conventions, so the same
+# people appear under two names: 1000 Genomes YRI and HGDP Yoruba are the same
+# population sampled twice. Comparing raw strings reports Yoruba as uncovered
+# while YRI sits in the reference, and --ref-min-per-pop then pulls HGDP Yoruba
+# samples out of the donor pool to fill a gap that does not exist -- spending
+# the only donor-eligible material there is on nothing.
+#
+# COLUMNS
+#   label       the population string as it appears in the panel's `pop` column
+#   group       the ancestry group it belongs to; labels sharing a group are
+#               treated as covering each other
+#   confidence  same      the same population sampled by two projects
+#               close     distinct sampling, same regional ancestry, expected
+#                         to be interchangeable for a reference panel
+#   source      which dataset uses this label
+#
+# ONLY `same` IS APPLIED BY DEFAULT. `close` rows are read but not used unless
+# --alias-confidence close is passed, because "near enough for a reference
+# panel" is a judgement about the analysis, not a fact about the data, and it
+# should be made deliberately. Edit this file rather than the code.
+#
+# DELIBERATELY NOT ALIASED. Some labels look similar and are not:
+#   Basque, Sardinian, Kalash, San, Mbuti, Biaka  -- genetic isolates or
+#       deeply divergent lineages with no 1000 Genomes counterpart. Treating
+#       any of them as covered by a neighbour defeats the purpose of the gap
+#       check.
+#   CEU   -- Utah residents of northern/western European ancestry. Broad and
+#       not equivalent to any single HGDP population.
+#   PEL, MXL, CLM, PUR -- 1000 Genomes American populations are ADMIXED, not
+#       Indigenous American. They are not a substitute for MXB or HGDP
+#       Indigenous populations and mostly will not clear the homogeneity bar.
+#
+label	group	confidence	source
+# ---- AFR -------------------------------------------------------------
+YRI	yoruba	same	1KG
+Yoruba	yoruba	same	HGDP
+LWK	luhya	same	1KG
+Luhya	luhya	same	HGDP
+ESN	esan	same	1KG
+MSL	mende	same	1KG
+Mende	mende	same	HGDP
+GWD	mandinka	close	1KG
+Mandenka	mandinka	close	HGDP
+BantuKenya	bantu_e	close	HGDP
+BantuSouthAfrica	bantu_s	same	HGDP
+# ---- EUR -------------------------------------------------------------
+TSI	tuscan	same	1KG
+Tuscan	tuscan	same	HGDP
+GBR	british	same	1KG
+FIN	finnish	same	1KG
+IBS	iberian	close	1KG
+Spanish	iberian	close	HGDP
+French	french	same	HGDP
+Orcadian	orcadian	same	HGDP
+Russian	russian	same	HGDP
+Adygei	adygei	same	HGDP
+# ---- EAS -------------------------------------------------------------
+CHB	han	same	1KG
+CHS	han	same	1KG
+Han	han	same	HGDP
+Han_NChina	han	same	HGDP
+JPT	japanese	same	1KG
+Japanese	japanese	same	HGDP
+CDX	dai	same	1KG
+Dai	dai	same	HGDP
+KHV	kinh	same	1KG
+# ---- SAS -------------------------------------------------------------
+GIH	gujarati	same	1KG
+PJL	punjabi	close	1KG
+Sindhi	punjabi	close	HGDP
+BEB	bengali	same	1KG
+STU	tamil	same	1KG
+ITU	telugu	same	1KG
+Balochi	balochi	same	HGDP
+Brahui	balochi	close	HGDP
+Makrani	makrani	same	HGDP
+Pathan	pathan	same	HGDP
+Burusho	burusho	same	HGDP
+Hazara	hazara	same	HGDP
+# ---- AMR / NAT -------------------------------------------------------
+# MXB population labels and their HGDP counterparts where they exist.
+Maya	maya	same	HGDP
+Maya_MXB	maya	same	MXB
+Pima	pima	same	HGDP
+Colombian	colombian	same	HGDP
+Karitiana	karitiana	same	HGDP
+Surui	surui	same	HGDP
+# ---- MEN -------------------------------------------------------------
+# No 1000 Genomes counterpart exists for any of these.
+Bedouin	bedouin	same	HGDP
+Druze	druze	same	HGDP
+Palestinian	palestinian	same	HGDP
+Mozabite	mozabite	same	HGDP

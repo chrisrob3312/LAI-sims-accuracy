@@ -235,6 +235,23 @@ def main():
                          "flag the old even split applies. A term may be "
                          "keyed on the super-pop (MEN=0.33) or on a cohort "
                          "within it (NAT@MXB=0.5 -> AMR's MXB samples).")
+    ap.add_argument("--pop-aliases",
+                    default="reference_ids/population_aliases.tsv",
+                    help="labels that name the same ancestry under different "
+                         "conventions. Gap detection compares population "
+                         "labels, and the sources name the same people "
+                         "differently -- 1000 Genomes YRI and HGDP Yoruba are "
+                         "one population sampled twice. Without this, Yoruba "
+                         "reads as uncovered while YRI sits in the reference, "
+                         "and --ref-min-per-pop pulls donor-eligible samples "
+                         "to fill a gap that does not exist.")
+    ap.add_argument("--alias-confidence", choices=("same", "close"),
+                    default="same",
+                    help="'same' (default) applies only labels that are the "
+                         "same population sampled twice. 'close' also treats "
+                         "regionally equivalent populations as covering each "
+                         "other -- a judgement about the analysis, so it is "
+                         "opt-in.")
     ap.add_argument("--ref-min-per-pop", type=int, default=0,
                     help="guarantee at least this many REFERENCE samples from "
                          "every population that has donors. Exists because "
@@ -401,6 +418,32 @@ def main():
                     union(f[i1], f[i2]); n_rel_pairs += 1
         print(f"[split] relatedness: {n_rel_pairs} pair(s) >= "
               f"{args.role_kinship} will be kept within one role")
+
+    # label -> ancestry group. Labels with no row are their own group, so an
+    # unlisted population is never silently merged with anything.
+    alias_group = {}
+    if args.pop_aliases and os.path.exists(args.pop_aliases):
+        n_alias = 0
+        with open(args.pop_aliases) as fh:
+            for line in fh:
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                f = line.split("\t")
+                if len(f) < 3 or f[0] == "label":
+                    continue
+                if f[2].strip() == "same" or args.alias_confidence == "close":
+                    alias_group[f[0].strip()] = f[1].strip()
+                    n_alias += 1
+        print(f"[split] population aliases: {n_alias} label(s) grouped "
+              f"(confidence '{args.alias_confidence}')")
+    elif args.ref_min_per_pop > 0:
+        print(f"[split] WARNING: no alias file at {args.pop_aliases}. Gap "
+              f"detection will compare raw labels, so the same population "
+              f"under two names (YRI / Yoruba) reads as a gap and pulls "
+              f"donors to fill it.", file=sys.stderr)
+    def anc_group(pop):
+        return alias_group.get(pop, pop)
 
     COMPONENT_SP = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR", "MEN": "MEN",
                     "EAS": "EAS", "SAS": "SAS", "OCE": "OCE"}
@@ -649,12 +692,23 @@ def main():
         if args.ref_min_per_pop > 0:
             r_set, d_set = set(ref_nonkg), set(don)
             pop_of_nk = {r["sample"]: (r["pop"].strip() or "NA") for r in nonkg}
+            # COVERAGE IS COUNTED ON THE 1000 GENOMES SIDE TOO.
+            #
+            # The reference is filled from 1KG first, so by the time this runs
+            # most of it is 1KG -- and those samples cover ancestry groups the
+            # donor-side labels also belong to. Counting only the non-1KG part
+            # of the reference would report every HGDP population as uncovered
+            # and pull donors to fill gaps 1KG already fills.
+            pop_of_kg = {r["sample"]: (r["pop"].strip() or "NA")
+                         for r in members if r["sample"] in set(kg)}
             have = defaultdict(int)
             for x in r_set:
-                have[pop_of_nk.get(x, "NA")] += 1
+                have[anc_group(pop_of_nk.get(x, "NA"))] += 1
+            for x in kg[:max(0, n_ref - len(ref_nonkg))]:
+                have[anc_group(pop_of_kg.get(x, "NA"))] += 1
             by_pop_donor = defaultdict(list)
             for x in d_set:
-                by_pop_donor[pop_of_nk.get(x, "NA")].append(x)
+                by_pop_donor[anc_group(pop_of_nk.get(x, "NA"))].append(x)
             for pop in sorted(by_pop_donor):
                 need = args.ref_min_per_pop - have[pop]
                 if need <= 0:
@@ -669,6 +723,22 @@ def main():
             if n_pulled:
                 ref_nonkg, don = sorted(r_set), sorted(d_set)
 
+        # FILL ORDER: 1000 GENOMES FIRST, NON-1KG ONLY FOR WHAT IT CANNOT
+        # COVER.
+        #
+        # 1KG can ONLY ever be reference -- it is barred from the donor side
+        # because the imputation servers contain it. A non-1KG sample can be
+        # either. So the single-use resource is spent first and the dual-use
+        # one only on the remainder, which is what --ref-share default=0
+        # expresses: for AFR, EUR, EAS and SAS the 1KG slice fills the
+        # reference and every homogeneous non-1KG sample stays a donor.
+        #
+        # The rule degenerates correctly where 1KG cannot cover the super-pop,
+        # and that is exactly where the contract gives a non-zero share:
+        #   MEN  1000 Genomes has no Middle Eastern population  -> MEN=0.33
+        #   NAT  its American populations are ADMIXED, not Indigenous, and
+        #        mostly will not clear the homogeneity bar       -> NAT@MXB=0.5
+        #   OCE  no Oceanian population at all          -> all reference is non-1KG
         top_up = max(0, n_ref - len(ref_nonkg))
         ref = sorted(ref_nonkg + kg[:top_up])
 
@@ -702,8 +772,9 @@ def main():
         # simulated haplotype drawn from a population no reference sample
         # covers is scored against the nearest thing in the panel, which
         # measures the panel's gap rather than the caller.
-        _ref_pops = {pop_of.get(x, "NA") for x in ref}
-        _uncovered = sorted({pop_of.get(x, "NA") for x in don} - _ref_pops)
+        _ref_pops = {anc_group(pop_of.get(x, "NA")) for x in ref}
+        _uncovered = sorted({anc_group(pop_of.get(x, "NA")) for x in don}
+                            - _ref_pops)
         if _uncovered:
             problems.append((sp, f"{len(_uncovered)} population(s) have donors "
                                  f"but no reference sample: "

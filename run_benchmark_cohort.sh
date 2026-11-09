@@ -72,9 +72,11 @@ REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.33}"
 # sources do (no Biaka/Mbuti/San/Mandenka in AFR, no Basque/Sardinian/Orcadian
 # in EUR, none of the HGDP minority populations in EAS). A donor haplotype
 # whose ancestry no reference covers measures the panel's gap, not the method.
-# 2 per population anchors each lineage and still leaves SAS donors well above
-# the even split. 0 is the strict contract reading.
-REF_MIN_PER_POP="${REF_MIN_PER_POP:-2}"
+# 3 per population anchors each lineage and still leaves SAS donors well above
+# the even split. 0 is the strict contract reading. Coverage is counted on
+# ANCESTRY GROUPS (reference_ids/population_aliases.tsv), not raw labels, so
+# HGDP Yoruba is not reported as a gap when 1000 Genomes YRI is in the panel.
+REF_MIN_PER_POP="${REF_MIN_PER_POP:-3}"
 
 DRY=0; FROM=""; ONLY=""; FORCE=""
 while [[ $# -gt 0 ]]; do
@@ -167,6 +169,7 @@ if want split; then
             --mode benchmark --suffix "$BENCH_SUFFIX" \
             --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
             --ref-share "$REF_SHARE" --ref-min-per-pop "$REF_MIN_PER_POP" \
+            --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
             "${REL[@]}" || FAILED=1
     fi
     # The two suffixes MUST differ: both modes write the same filenames, so a
