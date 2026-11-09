@@ -146,7 +146,45 @@ vocabularies don't overlap.
 - `--mode lai`: no source rule; every sample eligible for either role.
 - `--no-donor-superpops OCE`: reference only, **no donors**, remainder left
   *unallocated* so the assembler takes it as test genomes. Table 1 has no OCE
-  model, so an OCE donor is withheld for nothing.
+  model, so an OCE donor is withheld for nothing. OCE ends up **~15 reference
+  + ~5 real test, 0 donors** — never simulated.
+
+### Fill order: 1000 Genomes first
+
+**1KG can only ever be reference** — barred from the donor side because the
+imputation servers contain it. A non-1KG sample can be either. So the
+single-use resource is spent first and the dual-use one only on what 1KG
+cannot cover. That is what `--ref-share default=0` expresses, and it explains
+the contract's share values rather than leaving them arbitrary:
+
+| super-pop | 1KG coverage | share |
+|---|---|---|
+| AFR, EUR, EAS, SAS | good | `0` — 1KG fills the reference |
+| **MEN** | none — 1KG has no Middle Eastern population | `0.33` |
+| **NAT** | only *admixed* American (PEL/MXL/CLM/PUR), mostly below 0.93 | `NAT@MXB=0.5` |
+| **OCE** | none | all reference is non-1KG |
+
+### Sub-population coverage, on ancestry GROUPS not labels
+
+`--ref-min-per-pop 3` guarantees three reference samples per uncovered
+population, because 1KG carries none of the deeply divergent lineages: no
+Biaka, Mbuti, San or Mandenka in AFR, no Basque, Sardinian or Orcadian in EUR,
+none of the HGDP minority populations in EAS.
+
+> **Coverage is counted on ancestry groups, not raw labels.** The sources name
+> the same people differently — 1000 Genomes `YRI` and HGDP `Yoruba` are one
+> population sampled twice. Comparing raw strings reports Yoruba as uncovered
+> while YRI sits in the reference, and the floor then pulls donor-eligible
+> samples to fill a gap that does not exist. On a test panel that wasted 3 of
+> 9 pulls. `reference_ids/population_aliases.tsv` holds the groupings with a
+> `confidence` column: only `same` applies by default, `close` is opt-in via
+> `--alias-confidence close`, because "near enough for a reference panel" is a
+> judgement about the analysis rather than a fact about the data.
+>
+> Basque, Sardinian, Kalash, San, Mbuti and Biaka are **deliberately not
+> aliased** — treating an isolate as covered by a neighbour defeats the check.
+> The 1000 Genomes American populations are listed as **not** equivalent to
+> Indigenous American ones.
 
 ### The suffix trap
 Both modes write `<sp>_reference_<suffix>.txt`. **Run them with the same
