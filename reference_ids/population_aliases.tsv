@@ -23,58 +23,191 @@
 # panel" is a judgement about the analysis, not a fact about the data, and it
 # should be made deliberately. Edit this file rather than the code.
 #
+# WHICH ROWS ACTUALLY DO ANYTHING. Only 1KG samples are reference-first and
+# only non-1KG samples are donor-eligible, so a row changes behaviour only if
+# it puts a non-1KG label in the same group as a 1KG label. A group whose
+# members are all 1KG, or all non-1KG, is documentation rather than logic, and
+# so is a singleton row: it records "checked, nothing covers this".
+#
+# LABEL SPELLING IS LOAD-BEARING. The panel carries the gnomAD/Koenig HGDP
+# spellings -- BiakaPygmy, MbutiPygmy, Italian, Mongola, Melanesian, Papuan,
+# and a single merged Han -- NOT the Bergstrom 2020 / Sanger WGS spellings
+# (Biaka, Mbuti, BergamoItalian, Mongolian, Bougainville, PapuanHighlands +
+# PapuanSepik, Han + NorthernHan). Rows for both spellings are below so that a
+# relabel cannot silently re-open every gap. Re-check after any relabel with:
+#   awk -F'\t' '!/^#/ && NR>1 {print $1}' reference_ids/population_aliases.tsv \
+#     | sort -u > /tmp/a
+#   awk -F'\t' 'NR>1 {print $3}' reference_ids/lai_ref_panel_samples.tsv \
+#     | sort -u > /tmp/p
+#   comm -23 /tmp/a /tmp/p    # labels in this file that no sample carries
+#
+# LABELS BELOW THAT NO SAMPLE CARRIES YET. These are inert until the source is
+# merged; they are here so the merge does not need a second audit. SGDP:
+# Luhya, Esan, Mende, Gambian, BantuHerero, BantuTswana, Ju_hoan_North,
+# Spanish, Finnish, English, Bergamo, Kinh, Punjabi, Bengali, Mayan, Piapoco,
+# Zapotec, BedouinB, Saharawi. Bergstrom/Sanger HGDP relabel: Biaka, Mbuti,
+# BergamoItalian, NorthernHan, Mongolian, Bougainville, PapuanHighlands and
+# PapuanSepik. Almarri: none written, see the MEN block.
+#
+# SGDP IS NOT AN INDEPENDENT SOURCE FOR MOST POPULATIONS. 132 of the 277 rows
+# in reference_ids/sgdp_manifest.tsv carry an HGDP individual ID in `alias`,
+# and about 20 more carry a 1KG individual ID: SGDP Luhya is NA19023/NA19044
+# (1KG LWK), SGDP Mende is HG03078/HG03085 (1KG MSL), SGDP Spanish is
+# HG01503/HG01504 (1KG IBS), SGDP English is HG00126/HG00128 (1KG GBR), SGDP
+# Ju_hoan_North is four HGDP San individuals, SGDP Papuan is fifteen HGDP
+# Papuan individuals. For those the right action is duplicate removal
+# (known_duplicate_pairs.tsv, 1e_king_dedup), not an alias row. The rows below
+# only stop the gap check reporting them as uncovered ancestries meanwhile.
+#
 # DELIBERATELY NOT ALIASED. Some labels look similar and are not:
-#   Basque, Sardinian, Kalash, San, Mbuti, Biaka  -- genetic isolates or
-#       deeply divergent lineages with no 1000 Genomes counterpart. Treating
+#   Basque, Sardinian, Kalash, San, MbutiPygmy, BiakaPygmy  -- genetic isolates
+#       or deeply divergent lineages with no 1000 Genomes counterpart. Treating
 #       any of them as covered by a neighbour defeats the purpose of the gap
-#       check.
+#       check. Note the panel spellings: MbutiPygmy, BiakaPygmy.
+#   SGDP Khomani_San -- a different San group from HGDP San (Ju|'hoansi,
+#       Namibia), and admixed. Not grouped with San.
+#   Italian (HGDP, Bergamo, Lombardy, 46N 10E) vs TSI/Tuscan (43N 11E) -- both
+#       Italian, opposite ends of the peninsula's north-centre gradient.
+#   Russian, Adygei, BantuSouthAfrica, Melanesian, Papuan and every MEN label
+#       -- real, unfilled reference gaps. No 1KG population covers them at any
+#       confidence, so samples spent there are genuinely spent.
+#   MXB Nahua, Totonac, Tzotzil, Huichol, Tarahumara, Zapotec/Mazatec, and
+#       SGDP Mixe, Quechua, Chane, Masai, Luo, Dinka -- no 1KG counterpart.
 #   CEU   -- Utah residents of northern/western European ancestry. Broad and
-#       not equivalent to any single HGDP population.
+#       not equivalent to any single HGDP population. Usable only as a `close`
+#       cover for NW European labels; see the nwest_europe group.
+#   ACB, ASW -- 1000 Genomes African-ancestry populations in the Americas are
+#       ADMIXED. Not a substitute for any continental African population.
 #   PEL, MXL, CLM, PUR -- 1000 Genomes American populations are ADMIXED, not
-#       Indigenous American. They are not a substitute for MXB or HGDP
-#       Indigenous populations and mostly will not clear the homogeneity bar.
+#       Indigenous American, and are not a substitute for MXB or HGDP
+#       Indigenous populations. In the supervised run in
+#       lai_ref_panel_samples.tsv (K=5) mean Q_AMR is PEL 0.723, MXL 0.438,
+#       CLM 0.227, PUR 0.111. At HOMOG_THRESHOLD=0.93, CLM, PUR and MXL
+#       contribute nothing, but PEL contributes 9 of 85 (5 of 85 at 0.95) and
+#       those 9 already carry included=1. So "mostly will not clear the bar" is
+#       right, and the 9 that do clear it are not noise: that is more AMR
+#       reference samples than any single HGDP Indigenous population gives
+#       (Karitiana 7, Maya 7, Pima 6, Colombian 5, Surui 4), and being 1KG they
+#       cost no donor material. Keep them. Do NOT alias PEL to an Indigenous
+#       label to justify them -- that would declare Quechua, Nahua and Maya
+#       "covered", which is false.
+#   Hazara, Uygur (EAS + West Eurasian), Makrani, Mozabite (Sub-Saharan
+#       component) -- admixed by construction and will fail a Q>=0.93
+#       single-component bar whatever the aliasing says.
 #
 label	group	confidence	source
 # ---- AFR -------------------------------------------------------------
 YRI	yoruba	same	1KG
 Yoruba	yoruba	same	HGDP
-LWK	luhya	same	1KG
-Luhya	luhya	same	HGDP
+# HGDP has NO Luhya. The Kenyan HGDP label is BantuKenya, sampled at 3S 37E in
+# central/eastern Kenya, while LWK is Luhya from Webuye at ~0.6N 34.8E in
+# western Kenya: both Bantu-speaking Kenyans, different ethnic groups -> close.
+# SGDP's Luhya pair are 1KG LWK individuals.
+LWK	kenya_bantu	same	1KG
+Luhya	kenya_bantu	same	SGDP
+BantuKenya	kenya_bantu	close	HGDP
 ESN	esan	same	1KG
+Esan	esan	same	SGDP
+# HGDP has NO Mende. MSL's only non-1KG namesake is SGDP's, and those two
+# samples are 1KG MSL individuals (HG03078, HG03085).
 MSL	mende	same	1KG
-Mende	mende	same	HGDP
-GWD	mandinka	close	1KG
-Mandenka	mandinka	close	HGDP
-BantuKenya	bantu_e	close	HGDP
+Mende	mende	same	SGDP
+# GWD is Mandinka: the 1KG population is recorded as "Gambian in Western
+# Division - Mandinka" (NCBI BioSample). HGDP Mandenka are Mandinka at 12N 12W
+# in eastern Senegal, ~400 km from the Gambian collection. Same population
+# sampled by two projects -> same, not close.
+GWD	mandinka	same	1KG
+Mandenka	mandinka	same	HGDP
+Gambian	mandinka	same	SGDP
+# Southern-African Bantu: a real gap, no 1KG cover at any confidence. These
+# rows only bridge label systems -- SGDP BantuHerero and BantuTswana are HGDP
+# BantuSouthAfrica individuals (HGDP01028/01035 and HGDP01030/01034).
 BantuSouthAfrica	bantu_s	same	HGDP
+BantuHerero	bantu_s	same	SGDP
+BantuTswana	bantu_s	same	SGDP
+# Cross-spelling rows for the African isolates. Not aliases to anything in
+# 1KG; they only stop one isolate being counted twice under two spellings.
+BiakaPygmy	biaka	same	HGDP
+Biaka	biaka	same	HGDP
+MbutiPygmy	mbuti	same	HGDP
+Mbuti	mbuti	same	HGDP
+San	san	same	HGDP
+Ju_hoan_North	san	same	SGDP
 # ---- EUR -------------------------------------------------------------
 TSI	tuscan	same	1KG
 Tuscan	tuscan	same	HGDP
-GBR	british	same	1KG
+# HGDP has NO Spanish. The Spanish label is SGDP's, and those two samples are
+# 1KG IBS individuals (HG01503, HG01504) -- stronger than "close": same people.
+IBS	iberian	same	1KG
+Spanish	iberian	same	SGDP
 FIN	finnish	same	1KG
-IBS	iberian	close	1KG
-Spanish	iberian	close	HGDP
-French	french	same	HGDP
-Orcadian	orcadian	same	HGDP
+Finnish	finnish	same	SGDP
+# NW Europe. GBR, CEU and SGDP English (= 1KG GBR individuals) are 1KG and are
+# never spent; French and Orcadian are HGDP and are. Whether CEU/GBR cover
+# them is a judgement -> close, off by default. Delete the French and Orcadian
+# rows if you would rather keep them as declared gaps.
+GBR	nwest_europe	same	1KG
+English	nwest_europe	same	SGDP
+CEU	nwest_europe	close	1KG
+French	nwest_europe	close	HGDP
+Orcadian	nwest_europe	close	HGDP
+# HGDP Italian is the Bergamo (Lombardy) sample. Deliberately NOT grouped with
+# TSI/Tuscan. SGDP Bergamo are HGDP Italian individuals (HGDP01153, HGDP01172).
+Italian	italian	same	HGDP
+BergamoItalian	italian	same	HGDP
+Bergamo	italian	same	SGDP
 Russian	russian	same	HGDP
 Adygei	adygei	same	HGDP
 # ---- EAS -------------------------------------------------------------
+# One `han` group deliberately ignores the Han north-south cline, which is the
+# dominant axis of Han structure: CHB is Beijing (39.9N), CHS is Hunan/Fujian
+# (~26N), and the panel's single HGDP `Han` label merges Bergstrom's Han
+# (32.3N 114E, central China, n=33) with NorthernHan (34.7N 107.8E, n=10).
+# CHB and CHS are NOT the same population as each other. This group asserts
+# only that 1KG Han cover HGDP Han well enough for a reference panel. If
+# sub-Han resolution ever matters, replace the four rows with:
+#   CHB  han_north  same  1KG   /  NorthernHan  han_north  same  HGDP
+#   CHS  han_south  same  1KG   /  Han          han_south  same  HGDP
 CHB	han	same	1KG
 CHS	han	same	1KG
 Han	han	same	HGDP
-Han_NChina	han	same	HGDP
+NorthernHan	han	same	HGDP
 JPT	japanese	same	1KG
 Japanese	japanese	same	HGDP
+# CDX is "Chinese Dai in Xishuangbanna"; HGDP Dai are at 21N 100E, which is
+# Xishuangbanna. Same population.
 CDX	dai	same	1KG
 Dai	dai	same	HGDP
+# KHV (Kinh, Ho Chi Minh City) is the only mainland-SEA 1KG population. SGDP
+# Kinh are 1KG KHV individuals. HGDP Cambodian (Khmer, 12N 105E) is ~700 km
+# away and a different ethnic group -> close.
 KHV	kinh	same	1KG
+Kinh	kinh	same	SGDP
+Cambodian	kinh	close	HGDP
+# Cross-spelling rows only; none of these has a 1KG counterpart.
+Mongola	mongola	same	HGDP
+Mongolian	mongola	same	HGDP
+Miao	miao	same	HGDP
+Yi	yi	same	HGDP
 # ---- SAS -------------------------------------------------------------
 GIH	gujarati	same	1KG
-PJL	punjabi	close	1KG
+# PJL is Punjabi from Lahore (31.5N 74.3E). HGDP has no Punjabi; SGDP does, and
+# its four samples are 1KG PJL individuals. HGDP Sindhi (25.5N 69E) is a
+# different Indo-Aryan group ~850 km south -> close, not same.
+PJL	punjabi	same	1KG
+Punjabi	punjabi	same	SGDP
 Sindhi	punjabi	close	HGDP
 BEB	bengali	same	1KG
+Bengali	bengali	same	SGDP
+# STU is Sri Lankan Tamil sampled in the UK and ITU Indian Telugu sampled in
+# the UK -- diaspora collections. Do not alias either to SGDP's South Indian
+# caste-structured groups (Irula, Mala, Madiga, Relli, Kapu, Yadava, Brahmin).
 STU	tamil	same	1KG
 ITU	telugu	same	1KG
+# HGDP gives Balochi and Brahui the SAME coordinates (30.5N 66.5E). Brahui are
+# Dravidian-speaking and Balochi Indo-Iranian, and the published reading is
+# that geography predicts their genetic relationship better than language does
+# (Pagani et al., Man in India 2016, on the HGDP-CEPH Brahui and Balochi).
 Balochi	balochi	same	HGDP
 Brahui	balochi	close	HGDP
 Makrani	makrani	same	HGDP
@@ -82,16 +215,56 @@ Pathan	pathan	same	HGDP
 Burusho	burusho	same	HGDP
 Hazara	hazara	same	HGDP
 # ---- AMR / NAT -------------------------------------------------------
-# MXB population labels and their HGDP counterparts where they exist.
-Maya	maya	same	HGDP
-Maya_MXB	maya	same	MXB
+# WARNING: HGDP and MXB BOTH use the bare string `Maya` in the panel's `pop`
+# column, so they are already pooled by string identity and no alias row can
+# separate them. They are the same population in ancestry terms -- HGDP Maya at
+# 19N 91W (Campeche) and MXB Maya from Yucatan, Quintana Roo, Campeche and
+# Tabasco -- but not in admixture: Q_AMR is mean 0.868 / min 0.626 across the
+# 21 HGDP Maya (7 pass 0.93) against 1.000 for all 7 MXB Maya. That gap is the
+# homogeneity filter's job, not an alias row's. If you disambiguate the panel's
+# `pop` strings, replace the Maya row with:
+#   Maya_HGDP  maya  same  HGDP   /   Maya_MXB  maya  same  MXB
+Maya	maya	same	HGDP+MXB
+Mayan	maya	same	SGDP
+# HGDP Pima are Pima Bajo in Mexico (29N 108W, Chihuahua/Sonora), NOT the
+# Akimel O'odham of Arizona.
 Pima	pima	same	HGDP
+# HGDP `Colombian` is the Piapoco/Curripaco sample at 3N 68W in eastern
+# Colombia -- confirmed by SGDP Piapoco being HGDP00702/HGDP00706. It has
+# nothing to do with 1KG CLM (Colombians from Medellin, admixed and urban).
 Colombian	colombian	same	HGDP
+Piapoco	colombian	same	SGDP
 Karitiana	karitiana	same	HGDP
 Surui	surui	same	HGDP
+# MXB `Zapotec/Mazatec` is a MERGED two-population cluster, and the slash is a
+# parsing hazard worth renaming. SGDP Zapotec (Oaxaca) covers only the Zapotec
+# half, so this is close, not same.
+Zapotec/Mazatec	zapotec	same	MXB
+Zapotec	zapotec	close	SGDP
 # ---- MEN -------------------------------------------------------------
-# No 1000 Genomes counterpart exists for any of these.
+# No 1000 Genomes counterpart exists for any of these, so every sample spent
+# here is genuinely spent. The SGDP rows are HGDP individuals re-sequenced.
 Bedouin	bedouin	same	HGDP
+BedouinB	bedouin	same	SGDP
 Druze	druze	same	HGDP
 Palestinian	palestinian	same	HGDP
 Mozabite	mozabite	same	HGDP
+Saharawi	mozabite	close	SGDP
+# ALMARRI 2021 -- 137 genomes from eight Middle Eastern populations; the prep
+# script names seven regions (Syria, Jordan, Iraq, Saudi Arabia, UAE, Yemen,
+# Oman) and the panel .fam uses pop_ID strings of the form IRAQ1, JORDAN1,
+# OMAN1, SAUDI1. ngs.sanger.ac.uk was unreachable from the audit session, so
+# NO Almarri rows are written here. Enumerate the real strings first:
+#   awk 'NR>1 && NF {print $3, $4}' ~/almarri_vcfs/meta/appg.meta | sort -u
+# then add one row per pop_ID: `same` within a country if the numbering is
+# sub-sampling of one population, `close` if it is not. Separately, check SGDP
+# Jordanian (Jordan214, Jordan445, Jordan603) against Almarri's Jordanian
+# samples with KING before treating them as independent individuals.
+# ---- OCE -------------------------------------------------------------
+# No 1000 Genomes Oceanian population exists. These rows only bridge label
+# systems; they never save a donor.
+Melanesian	bougainville	same	HGDP
+Bougainville	bougainville	same	HGDP
+Papuan	papuan	same	HGDP
+PapuanHighlands	papuan	same	HGDP
+PapuanSepik	papuan	same	HGDP
