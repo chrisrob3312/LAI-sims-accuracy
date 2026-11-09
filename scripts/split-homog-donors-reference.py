@@ -222,6 +222,31 @@ def main():
     ap.add_argument("--ref-floor", type=int, default=REF_FLOOR_DEFAULT)
     ap.add_argument("--ref-target", type=int, default=REF_TARGET_DEFAULT)
     ap.add_argument("--donor-floor", type=int, default=DONOR_FLOOR_DEFAULT)
+    ap.add_argument("--ref-share", default="",
+                    help="how much of each super-pop's NON-1000G pool goes to "
+                         "the reference, as comma-separated terms: "
+                         "'default=0,NAT@MXB=0.5,MEN=0.33' (the contract's "
+                         "value). default=0 means the reference is 1000 "
+                         "Genomes ONLY and every homogeneous non-1KG sample "
+                         "is a donor -- which is the point, since 1KG can "
+                         "never BE a donor, so spending non-1KG samples on a "
+                         "role 1KG already fills wastes the only "
+                         "donor-eligible material there is. Without this "
+                         "flag the old even split applies. A term may be "
+                         "keyed on the super-pop (MEN=0.33) or on a cohort "
+                         "within it (NAT@MXB=0.5 -> AMR's MXB samples).")
+    ap.add_argument("--ref-min-per-pop", type=int, default=0,
+                    help="guarantee at least this many REFERENCE samples from "
+                         "every population that has donors. Exists because "
+                         "--ref-share default=0 leaves sub-populations "
+                         "present only in the non-1KG sources with no "
+                         "reference representation at all: 1000 Genomes AFR "
+                         "has no Biaka, Mbuti, San or Mandenka, EUR no "
+                         "Basque, Sardinian or Orcadian, EAS none of the HGDP "
+                         "minority populations. Simulating a donor haplotype "
+                         "whose ancestry no reference covers measures the gap, "
+                         "not the method. 2 or 3 is usually enough to anchor "
+                         "a lineage; 0 keeps the strict contract behaviour.")
     ap.add_argument("--relatedness", default="",
                     help="KING table (1e's king.kin0). Relatives at or above "
                          "--role-kinship are kept TOGETHER in one role. Since "
@@ -377,6 +402,40 @@ def main():
         print(f"[split] relatedness: {n_rel_pairs} pair(s) >= "
               f"{args.role_kinship} will be kept within one role")
 
+    COMPONENT_SP = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR", "MEN": "MEN",
+                    "EAS": "EAS", "SAS": "SAS", "OCE": "OCE"}
+    ref_share, ref_share_cohort = {}, {}
+    if args.ref_share:
+        for term in args.ref_share.split(","):
+            term = term.strip()
+            if not term:
+                continue
+            if "=" not in term:
+                sys.exit(f"ERROR: --ref-share term '{term}' has no '='")
+            key, val = term.split("=", 1)
+            try:
+                frac = float(val)
+            except ValueError:
+                sys.exit(f"ERROR: --ref-share '{term}' value is not a number")
+            if not 0.0 <= frac <= 1.0:
+                sys.exit(f"ERROR: --ref-share '{term}' must be in [0,1]")
+            key = key.strip()
+            if key == "default":
+                ref_share["__default__"] = frac
+            elif "@" in key:
+                sp_key, coh = key.split("@", 1)
+                sp_key = COMPONENT_SP.get(sp_key.upper(), sp_key.upper())
+                ref_share_cohort[(sp_key, coh.strip())] = frac
+            else:
+                sp_key = COMPONENT_SP.get(key.upper(), key.upper())
+                ref_share[sp_key] = frac
+        print(f"[split] ref-share: default="
+              f"{ref_share.get('__default__', 'even split')}"
+              + ("".join(f", {k}={v}" for k, v in sorted(ref_share.items())
+                         if k != "__default__"))
+              + ("".join(f", {k[0]}@{k[1]}={v}"
+                         for k, v in sorted(ref_share_cohort.items()))))
+
     written, problems, comp_lines = [], [], []
     no_donor_sps = {s.strip().upper() for s in args.no_donor_superpops.split(",")
                     if s.strip()}
@@ -479,14 +538,70 @@ def main():
             by_pop_nonkg[r["pop"].strip() or "NA"].append(r["sample"])
 
         n_nonkg = len(nonkg)
+        # --- how much of the NON-1KG pool the reference takes -------------
+        # Without --ref-share this stays None and the even split below runs.
+        share = None
+        if args.ref_share:
+            share = ref_share.get(sp, ref_share.get("__default__"))
+        nonkg_by_cohort = defaultdict(list)
+        for r in nonkg:
+            nonkg_by_cohort[r["cohort"].strip()].append(r)
         # How many non-1000G go to the reference: half of them, but never more
         # than the reference target, and never so many that donors starve.
-        ref_from_nonkg = min(n_nonkg // 2, n_ref)
-        if n_nonkg - ref_from_nonkg < args.donor_floor:
-            ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
+        if share is None:
+            ref_from_nonkg = min(n_nonkg // 2, n_ref)
+            if n_nonkg - ref_from_nonkg < args.donor_floor:
+                ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
+        else:
+            # A cohort-keyed term (NAT@MXB=0.5) applies to THAT cohort only;
+            # everything else in the super-pop takes the super-pop or default
+            # share. Summed, not averaged: "half the MXB" is a count of MXB
+            # samples, and averaging it over a pool that also holds HGDP and
+            # SGDP would silently take half of those too.
+            want = 0.0
+            for coh, members_c in nonkg_by_cohort.items():
+                f = ref_share_cohort.get((sp, coh), share)
+                want += f * len(members_c)
+            ref_from_nonkg = int(round(want))
+            # The cap still applies: the reference never exceeds its target.
+            ref_from_nonkg = min(ref_from_nonkg, n_ref, n_nonkg)
+            # And the donor floor still applies, but in the other direction --
+            # with share=0 donors are maximal, so this can only bite when a
+            # share is high.
+            if n_nonkg - ref_from_nonkg < args.donor_floor:
+                ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
 
+        # ALLOCATE PER COHORT WHEN A COHORT-KEYED SHARE APPLIES.
+        #
+        # NAT@MXB=0.5 means "half the MXB", not "a number equal to half the
+        # MXB, taken from the whole non-1KG pool". Pooling first and
+        # allocating proportionally hits the right TOTAL with the wrong
+        # COMPOSITION -- on a 30 MXB / 10 HGDP pool it took 11 MXB and 4
+        # HGDP, when the contract wants 15 MXB and no HGDP, and those 4 HGDP
+        # samples are donor-eligible material spent on a role 1KG already
+        # fills. So each cohort is allocated against its own share and the
+        # results are concatenated.
+        cohort_keyed = any(k[0] == sp for k in ref_share_cohort)
         if ref_from_nonkg <= 0:
             ref_nonkg, don = [], sorted(r["sample"] for r in nonkg)
+        elif share is not None and cohort_keyed:
+            ref_nonkg, don = [], []
+            for coh in sorted(nonkg_by_cohort):
+                members_c = nonkg_by_cohort[coh]
+                f = ref_share_cohort.get((sp, coh), share)
+                k_c = int(round(f * len(members_c)))
+                by_pop_c = defaultdict(list)
+                for r in members_c:
+                    by_pop_c[r["pop"].strip() or "NA"].append(r["sample"])
+                if k_c <= 0:
+                    don.extend(sorted(r["sample"] for r in members_c))
+                    continue
+                if args.relatedness:
+                    rc, dc = allocate_clustered(by_pop_c, k_c, find)
+                else:
+                    rc, dc = allocate_stratified(by_pop_c, k_c)
+                ref_nonkg.extend(rc); don.extend(dc)
+            ref_nonkg, don = sorted(ref_nonkg), sorted(don)
         elif args.relatedness:
             ref_nonkg, don = allocate_clustered(by_pop_nonkg, ref_from_nonkg, find)
         else:
@@ -522,6 +637,38 @@ def main():
                 n_moved += 1
             ref_nonkg, don = sorted(r_set), sorted(d_set)
 
+        # --- sub-population coverage -------------------------------------
+        # With --ref-share default=0 the reference is 1000 Genomes only, and
+        # 1KG does not carry the deeply divergent lineages the non-1KG sources
+        # do: no Biaka, Mbuti, San or Mandenka in AFR, no Basque, Sardinian or
+        # Orcadian in EUR, none of the HGDP minority populations in EAS.
+        # Simulating a donor haplotype whose ancestry NO reference covers
+        # measures that gap rather than the method, so --ref-min-per-pop pulls
+        # a few back per uncovered population.
+        n_pulled = 0
+        if args.ref_min_per_pop > 0:
+            r_set, d_set = set(ref_nonkg), set(don)
+            pop_of_nk = {r["sample"]: (r["pop"].strip() or "NA") for r in nonkg}
+            have = defaultdict(int)
+            for x in r_set:
+                have[pop_of_nk.get(x, "NA")] += 1
+            by_pop_donor = defaultdict(list)
+            for x in d_set:
+                by_pop_donor[pop_of_nk.get(x, "NA")].append(x)
+            for pop in sorted(by_pop_donor):
+                need = args.ref_min_per_pop - have[pop]
+                if need <= 0:
+                    continue
+                # Never take a population's LAST donors: a population that
+                # exists only as a handful of samples is more use as donors
+                # for its own component than as an under-powered reference.
+                avail = sorted(by_pop_donor[pop])
+                take = min(need, max(0, len(avail) - args.ref_min_per_pop))
+                for x in avail[:take]:
+                    d_set.discard(x); r_set.add(x); n_pulled += 1
+            if n_pulled:
+                ref_nonkg, don = sorted(r_set), sorted(d_set)
+
         top_up = max(0, n_ref - len(ref_nonkg))
         ref = sorted(ref_nonkg + kg[:top_up])
 
@@ -535,6 +682,10 @@ def main():
                     f"ref = {len(ref_nonkg)} non-1000G + {len(ref)-len(ref_nonkg)} 1000G")
             if n_moved:
                 note += f"; {n_moved} anchor(s) pinned to reference"
+            if share is not None:
+                note += f"; ref-share {share:g}"
+            if n_pulled:
+                note += f"; {n_pulled} pulled for sub-pop coverage"
         pct = 100.0 * len(don) / (len(ref) + len(don)) if (ref or don) else 0
         print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
               f"{pct:>5.0f}%  {note}")
@@ -546,6 +697,19 @@ def main():
         # rule) or a stratum too small to divide, and both are facts the
         # methods have to state.
         pop_of = {r["sample"]: (r["pop"].strip() or "NA") for r in members}
+        # POPULATIONS WITH DONORS BUT NO REFERENCE. check_roles_vs_king.R
+        # flags exactly this, so flag it here where it can still be fixed: a
+        # simulated haplotype drawn from a population no reference sample
+        # covers is scored against the nearest thing in the panel, which
+        # measures the panel's gap rather than the caller.
+        _ref_pops = {pop_of.get(x, "NA") for x in ref}
+        _uncovered = sorted({pop_of.get(x, "NA") for x in don} - _ref_pops)
+        if _uncovered:
+            problems.append((sp, f"{len(_uncovered)} population(s) have donors "
+                                 f"but no reference sample: "
+                                 f"{', '.join(_uncovered[:8])}"
+                                 + (" ..." if len(_uncovered) > 8 else "")
+                                 + "  (--ref-min-per-pop pulls a few back)"))
         cr, cd = defaultdict(int), defaultdict(int)
         for s in ref:
             cr[pop_of[s]] += 1

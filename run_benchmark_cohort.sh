@@ -62,6 +62,19 @@ DESIGN="${DESIGN:-one-cell}"
 # 0.95/0.93 the panel build uses would disagree for EUR/EAS/AFR between them.
 FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.93}"
 NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE}"
+# The contract's reference share: AFR/EUR/EAS/SAS take their reference from
+# 1000 Genomes ONLY, NAT adds half the MXB, MEN a third of its pool. 1KG can
+# never BE a donor, so spending non-1KG samples on a role 1KG already fills
+# wastes the only donor-eligible material there is -- it roughly doubles the
+# SAS donor pool, which is the binding constraint on N_eff.
+REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.33}"
+# ...but 1000 Genomes carries none of the deeply divergent lineages the other
+# sources do (no Biaka/Mbuti/San/Mandenka in AFR, no Basque/Sardinian/Orcadian
+# in EUR, none of the HGDP minority populations in EAS). A donor haplotype
+# whose ancestry no reference covers measures the panel's gap, not the method.
+# 2 per population anchors each lineage and still leaves SAS donors well above
+# the even split. 0 is the strict contract reading.
+REF_MIN_PER_POP="${REF_MIN_PER_POP:-2}"
 
 DRY=0; FROM=""; ONLY=""; FORCE=""
 while [[ $# -gt 0 ]]; do
@@ -152,7 +165,9 @@ if want split; then
             --mode lai --suffix "$LAI_SUFFIX" "${REL[@]}" || FAILED=1
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
             --mode benchmark --suffix "$BENCH_SUFFIX" \
-            --no-donor-superpops "$NO_DONOR_SUPERPOPS" "${REL[@]}" || FAILED=1
+            --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
+            --ref-share "$REF_SHARE" --ref-min-per-pop "$REF_MIN_PER_POP" \
+            "${REL[@]}" || FAILED=1
     fi
     # The two suffixes MUST differ: both modes write the same filenames, so a
     # shared suffix means the second silently overwrote the first.
