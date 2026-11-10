@@ -250,16 +250,38 @@ Druze	druze	same	HGDP
 Palestinian	palestinian	same	HGDP
 Mozabite	mozabite	same	HGDP
 Saharawi	mozabite	close	SGDP
-# ALMARRI 2021 -- 137 genomes from eight Middle Eastern populations; the prep
-# script names seven regions (Syria, Jordan, Iraq, Saudi Arabia, UAE, Yemen,
-# Oman) and the panel .fam uses pop_ID strings of the form IRAQ1, JORDAN1,
-# OMAN1, SAUDI1. ngs.sanger.ac.uk was unreachable from the audit session, so
-# NO Almarri rows are written here. Enumerate the real strings first:
-#   awk 'NR>1 && NF {print $3, $4}' ~/almarri_vcfs/meta/appg.meta | sort -u
-# then add one row per pop_ID: `same` within a country if the numbering is
-# sub-sampling of one population, `close` if it is not. Separately, check SGDP
-# Jordanian (Jordan214, Jordan445, Jordan603) against Almarri's Jordanian
-# samples with KING before treating them as independent individuals.
+# ALMARRI 2021 -- enumerated from ~/almarri_vcfs/meta/appg.meta. Sample IDs
+# are <COUNTRY><number>; the population label is the country. Counts in the
+# source: UAE 57, SAUDI 29, YEMEN 21, IRAQ 13, SYRIA 12, JORDAN 3, OMAN 3.
+#
+# NONE has a 1000 Genomes counterpart, so every one is a declared gap and
+# every sample spent on MEN reference is genuinely spent. These rows are
+# singletons on purpose: they record "checked, nothing covers this".
+#
+# 4a cannot resolve these samples from metadata -- make_sample_groups.sh reads
+# only the gnomAD HGDP+1KG file and the MXB pop file, and the SGDP manifest
+# does not list them -- so without reference_ids/almarri_manifest.tsv (or 4a's
+# ID-pattern fallback) all 137 resolve to super_pop=NA and are hard-excluded.
+# Build the manifest with scripts/build-almarri-manifest.sh.
+IRAQ	iraq	same	Almarri
+JORDAN	jordan	same	Almarri
+OMAN	oman	same	Almarri
+SAUDI	saudi	same	Almarri
+SYRIA	syria	same	Almarri
+UAE	uae	same	Almarri
+YEMEN	yemen	same	Almarri
+# OPTIONAL Arabian-Peninsula grouping, OFF by default. SAUDI, UAE, OMAN and
+# YEMEN are geographically and genetically adjacent, and treating them as one
+# group would make --ref-min-per-pop pull 3 for the set rather than 3 each.
+# Left off because Almarri 2021 reports real structure among them and MEN
+# donors are not the scarce ones (SAS is). To enable, change these four to a
+# shared group and run with --alias-confidence close:
+#   SAUDI  arabia  close  Almarri   /   UAE    arabia  close  Almarri
+#   OMAN   arabia  close  Almarri   /   YEMEN  arabia  close  Almarri
+#
+# SGDP Jordanian (Jordan214, Jordan445, Jordan603) is NOT aliased to Almarri
+# JORDAN: whether they overlap at the individual level is a KING question, not
+# a naming one, and 1e will answer it.
 # ---- OCE -------------------------------------------------------------
 # No 1000 Genomes Oceanian population exists. These rows only bridge label
 # systems; they never save a donor.

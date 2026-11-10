@@ -743,6 +743,20 @@ fi
 # downstream as well as handing one copy to a method that was given the other.
 # Absent file = 1e has not run; that is allowed, and said so, rather than
 # silently treated as "no duplicates exist".
+# ALMARRI 2021 METADATA. Without this every Almarri sample resolves to
+# super_pop=NA and is hard-excluded by `elif sp == "NA": included = 0` -- all
+# 137 of them, which is the single largest MEN contribution, prepped by 1d and
+# merged by 1c only to be dropped here in silence. make_sample_groups.sh reads
+# the gnomAD HGDP+1KG metadata and the MXB pop file and knows nothing about
+# Almarri; neither does the SGDP manifest. So it needs its own route.
+#
+# Two columns, sample and pop. Build it on the cluster from the ENA metadata:
+#   scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv
+# If the file is absent the ID PATTERN is used instead -- the sample IDs are
+# <COUNTRY><number> over seven countries -- and that is reported, not silent.
+ALMARRI_META="${ALMARRI_META:-${REFS}/almarri_manifest.tsv}"
+ALMARRI_COUNTRIES="${ALMARRI_COUNTRIES:-IRAQ JORDAN OMAN SAUDI SYRIA UAE YEMEN}"
+
 DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 # The named exclusion list, read here as well as in 1c.
 #
@@ -805,11 +819,13 @@ python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.${K}.Q" \
     "${UNSUP_DIR}/lai_ref.${K}.Q" "${ADM_DIR}/lai_ref.pop" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" "$SGDP_MANIFEST" \
     "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SIM_DONORS" "$SAMPLES_TSV" \
-    "$HOMOG_THRESHOLD_STRICT" "$HOMOG_STRICT_SUPERPOPS" <<'PYEOF'
+    "$HOMOG_THRESHOLD_STRICT" "$HOMOG_STRICT_SUPERPOPS" \
+    "$ALMARRI_META" "$ALMARRI_COUNTRIES" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
 (fam, qs_f, qu_f, pop_f, groups_f, gnomad_f, mxb_pop_f, sgdp_manifest_f,
- sas_f, thresh, K, donors_f, out, thresh_strict, strict_sps) = sys.argv[1:16]
+ sas_f, thresh, K, donors_f, out, thresh_strict, strict_sps,
+ almarri_meta_f, almarri_countries) = sys.argv[1:18]
 thresh = float(thresh); K = int(K); thresh_strict = float(thresh_strict)
 
 # Tiered homogeneity cut: the strict value for the richly-sampled super-pops,
@@ -919,6 +935,34 @@ def cohort_of(s):
     if s.startswith(("HG", "NA")): return "1KG"
     return "OTHER"
 
+# ALMARRI 2021. Read the manifest when it exists; otherwise fall back to the
+# ID pattern, because the alternative is silently losing all 137 samples.
+import os as _os, re as _re
+almarri_pop = {}
+_countries = [c for c in almarri_countries.replace(",", " ").split() if c]
+_almarri_re = _re.compile(r"^(" + "|".join(_countries) + r")(\d+)$", _re.I)
+if almarri_meta_f and _os.path.exists(almarri_meta_f):
+    with open(almarri_meta_f) as f:
+        for line in f:
+            ff = line.rstrip("\n").split("\t")
+            if len(ff) >= 2 and ff[0] and ff[0] != "sample":
+                almarri_pop[ff[0].strip()] = ff[1].strip()
+    print(f"[labels] Almarri manifest: {len(almarri_pop)} samples",
+          file=sys.stderr)
+else:
+    print(f"[labels] NOTE: no Almarri manifest at {almarri_meta_f}; resolving "
+          f"Almarri samples from the ID pattern <COUNTRY><n> over "
+          f"{_countries}. Build the manifest to get exact population labels: "
+          f"scripts/build-almarri-manifest.sh > {almarri_meta_f}",
+          file=sys.stderr)
+
+def almarri_of(s):
+    """-> population label, or None when the sample is not Almarri."""
+    if s in almarri_pop:
+        return almarri_pop[s]
+    m = _almarri_re.match(s.strip())
+    return m.group(1).upper() if m else None
+
 def super_pop_of(s):
     # BUGFIX: the K=5 allowlist was ("AFR","AMR","EUR","EAS") -- only 4 values --
     # while make_sample_groups.sh emits 8 (AFR AMR EUR EAS SAS CSA OCE MID->MEN).
@@ -929,6 +973,7 @@ def super_pop_of(s):
     # The allowlist must cover the full K-way vocabulary.
     if s in mxb_pop: return "AMR"
     if s in sgdp_sp: return sgdp_sp[s]          # OCE/MEN/AFR/EUR/EAS/SAS/AMR
+    if almarri_of(s): return "MEN"              # Almarri 2021, 8 Arab populations
     raw = (sg.get(s, "NA") or "NA").strip().upper()
     # gnomAD folds 1KG-SAS into CSA. Map CSA -> SAS for ALL CSA samples, not
     # just those in sas_rfmix.txt: gating membership on the ANCHOR file
@@ -942,6 +987,8 @@ def super_pop_of(s):
 def pop_of(s):
     if s in mxb_pop: return mxb_pop[s]
     if s in sgdp_pop: return sgdp_pop[s]
+    _a = almarri_of(s)
+    if _a: return _a
     return gnomad_pop.get(s, "NA")
 
 # --------------------------------------------------------------------------
