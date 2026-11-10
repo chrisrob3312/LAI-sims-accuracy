@@ -239,6 +239,51 @@ fi
 N_SITES=$(wc -l < "$SNP")
 echo "[$(date +%T)] [${CHR}] ${N_SITES} sites"
 
+# ---------------------------------------------------------------------------
+# DONOR-CONCURRENCY FEASIBILITY. The hard limit nobody documents.
+#
+# simu-mix.pl draws a donor haplotype uniformly at random but REJECTS any that
+# is already being copied from by another simulated haplotype at that marker
+# (scripts/simu-mix-seeded.pl ~line 310: the do/while skips
+# $copying_sample[$pop][$id] when set). Every simulated haplotype holds its
+# donor until its next breakpoint, so the draws are WITHOUT REPLACEMENT across
+# the whole simulated set. When a population runs out it does not degrade --
+# it dies:
+#
+#   die "Error: used all $num_haplotypes haplotypes in pop $pop_name ..."
+#
+# So a model needs, at every marker, at least as many donor haplotypes in
+# component P as it has simulated haplotypes currently drawing from P --
+# roughly 2 * n * proportion(P), and that is a random quantity, so headroom is
+# needed, not equality.
+#
+# This is why 2b has never hit it and 6b would: 2b's model is small against
+# its ~30-donor pools, while Table 1's sizes (LAT3 600, the rest 200) were set
+# from the experimental design without reference to donor-pool size.
+#
+# Checked HERE, before any extraction, because the alternative is discovering
+# it hours in, on the primary model, after the haplotypes are built.
+FEAS_MARGIN="${FEAS_MARGIN:-0.80}"
+feasible_batch () {   # <components csv> <proportions csv> -> max n per batch
+    local comps="$1" props="$2" c p i=0 best=0 n_hap
+    local -a ca pa
+    IFS=',' read -r -a ca <<< "$comps"
+    IFS=',' read -r -a pa <<< "$props"
+    for i in "${!ca[@]}"; do
+        c="${ca[$i]}"; p="${pa[$i]}"
+        [[ "$(awk -v x="$p" 'BEGIN{print (x>0)?1:0}')" == "1" ]] || continue
+        local pool="${COMPONENT_POOL[$c]:-$c}"
+        local keep="${REFS}/${pool}_simulation_${BENCH_SUFFIX}.txt"
+        local n_don; n_don=$(awk 'NF && $1 !~ /^#/' "$keep" 2>/dev/null | wc -l)
+        n_hap=$(( n_don * 2 ))
+        # n such that 2*n*p <= margin * n_hap
+        local cap; cap=$(awk -v h="$n_hap" -v p="$p" -v m="$FEAS_MARGIN" \
+                         'BEGIN{v=int(m*h/(2*p)); print (v<1)?1:v}')
+        if [[ "$best" -eq 0 || "$cap" -lt "$best" ]]; then best="$cap"; fi
+    done
+    echo "$best"
+}
+
 # --- simulate each model ---------------------------------------------------
 # One pass over the distinct models in the roster. Generations and proportions
 # come from the roster, not from this script, so Table 1 lives in exactly one
@@ -288,9 +333,6 @@ while IFS=$'\t' read -r model comps props gen; do
         continue
     fi
 
-    DAT="${prefix}.dat"
-    write_dat "$model" "$comps" "$props" "$gen" "$n" "$DAT"
-
     # -POP args in the .dat header's order.
     popargs=()
     IFS=',' read -r -a carr <<< "$comps"
@@ -299,33 +341,86 @@ while IFS=$'\t' read -r model comps props gen; do
         popargs+=("-${comp}" "${comp}.phgeno")
     done
 
-    # A distinct seed per (model, chr) so the units are independent but each
-    # one is individually regenerable.
-    SEED="${SEED_BASE}$(printf '%02d%02d' "$CHR_N" "$(cksum <<< "$model" | cut -c1-2)")"
-
-    archived="${FROM_BP}/${prefix}.bp"
-    if [[ -n "$FROM_BP" ]]; then
-        if [[ ! -s "$archived" ]]; then
-            echo "ERROR: FROM_BP set but ${archived} is missing. Refusing to draw
-       fresh breakpoints under a name that implies replay -- that would be a
-       different realisation presented as the same one." >&2
-            exit 4
-        fi
-        echo "[$(date +%T)] [${CHR}] [${model}] REPLAY from ${archived}"
-        cp "$archived" "${prefix}.bp"
-        SIMU_SEED="$SEED" perl "$SIMU_MIX" -bp "${prefix}.bp" "$prefix" "${popargs[@]}"
+    # --- BATCH SIZE, from the donor-concurrency limit --------------------
+    CAP=$(feasible_batch "$comps" "$props")
+    if [[ "$CAP" -ge "$n" ]]; then
+        NBATCH=1; BSIZE="$n"
     else
-        echo "[$(date +%T)] [${CHR}] [${model}] simu-mix n=${n} gen=${gen} seed=${SEED}"
-        SIMU_SEED="$SEED" perl "$SIMU_MIX" "$DAT" "$SNP" "$prefix" "${popargs[@]}"
+        NBATCH=$(( (n + CAP - 1) / CAP )); BSIZE="$CAP"
+        echo "[$(date +%T)] [${CHR}] [${model}] n=${n} exceeds the donor-concurrency"
+        echo "            cap of ${CAP}; simulating in ${NBATCH} batches of <= ${BSIZE}."
+        echo "            simu-mix holds one donor haplotype per simulated"
+        echo "            haplotype and dies when a component runs out, so this"
+        echo "            is a hard limit, not a quality knob. Individuals in"
+        echo "            DIFFERENT batches may share donors -- that relatedness"
+        echo "            is real and is what 6e measures."
     fi
 
-    [[ -s "${prefix}.bp" ]] || { echo "ERROR: ${prefix}.bp was not written" >&2; exit 1; }
-    perl "$BP2ANC" "${prefix}.bp" > "${prefix}.hanc"
-    [[ -s "${prefix}.hanc" ]] || { echo "ERROR: ${prefix}.hanc is empty" >&2; exit 1; }
+    SEED_M="${SEED_BASE}$(printf '%02d%02d' "$CHR_N" "$(cksum <<< "$model" | cut -c1-2)")"
+    rm -f "${prefix}.batchlist"
+    left="$n"; b=0
+    while [[ "$left" -gt 0 ]]; do
+        b=$(( b + 1 ))
+        take=$(( left < BSIZE ? left : BSIZE ))
+        bp_prefix="${prefix}.b${b}"
+        BDAT="${bp_prefix}.dat"
+        write_dat "$model" "$comps" "$props" "$gen" "$take" "$BDAT"
+        # A distinct seed per (model, chr, batch): independent realisations,
+        # each individually regenerable.
+        SEED="${SEED_M}${b}"
+        archived="${FROM_BP}/${bp_prefix}.bp"
+        if [[ -n "$FROM_BP" ]]; then
+            if [[ ! -s "$archived" ]]; then
+                echo "ERROR: FROM_BP set but ${archived} is missing. Refusing to draw
+       fresh breakpoints under a name that implies replay -- that would be a
+       different realisation presented as the same one." >&2
+                exit 4
+            fi
+            echo "[$(date +%T)] [${CHR}] [${model}] batch ${b}/${NBATCH} REPLAY from ${archived}"
+            cp "$archived" "${bp_prefix}.bp"
+            SIMU_SEED="$SEED" perl "$SIMU_MIX" -bp "${bp_prefix}.bp" "$bp_prefix" "${popargs[@]}"
+        else
+            echo "[$(date +%T)] [${CHR}] [${model}] batch ${b}/${NBATCH} n=${take} gen=${gen} seed=${SEED}"
+            SIMU_SEED="$SEED" perl "$SIMU_MIX" "$BDAT" "$SNP" "$bp_prefix" "${popargs[@]}"
+        fi
+        [[ -s "${bp_prefix}.bp" ]] || { echo "ERROR: ${bp_prefix}.bp was not written" >&2; exit 1; }
+        perl "$BP2ANC" "${bp_prefix}.bp" > "${bp_prefix}.hanc"
+        [[ -s "${bp_prefix}.hanc" ]] || { echo "ERROR: ${bp_prefix}.hanc is empty" >&2; exit 1; }
+        cp "${bp_prefix}.bp"  "${PROV_DIR}/${bp_prefix}.bp"
+        cp "$BDAT"            "${PROV_DIR}/${bp_prefix}.dat"
+        echo "SIMU_SEED=${SEED}" > "${PROV_DIR}/${bp_prefix}.seed"
+        echo "$bp_prefix" >> "${prefix}.batchlist"
+        left=$(( left - take ))
+    done
 
-    cp "${prefix}.bp" "${PROV_DIR}/${prefix}.bp"
-    cp "$DAT" "${PROV_DIR}/${prefix}.dat"
-    echo "SIMU_SEED=${SEED}" > "${PROV_DIR}/${prefix}.seed"
+    # --- stitch the batches ----------------------------------------------
+    # COLUMN-wise: .hanc and .phgeno carry one character per HAPLOTYPE per
+    # site, so batches are joined side by side, not end to end. `paste -d ''`
+    # on one line per site does exactly that. Row counts must match or the
+    # sites are not the same sites.
+    if [[ "$NBATCH" -eq 1 ]]; then
+        mv "${prefix}.b1.hanc" "${prefix}.hanc"
+        [[ -s "${prefix}.b1.haps" ]] && mv "${prefix}.b1.haps" "${prefix}.haps"
+        [[ -s "${prefix}.b1.phgeno" ]] && mv "${prefix}.b1.phgeno" "${prefix}.phgeno"
+        mv "${prefix}.b1.dat" "$DAT" 2>/dev/null || true
+        cp "${PROV_DIR}/${prefix}.b1.dat" "${PROV_DIR}/${prefix}.dat" 2>/dev/null || true
+    else
+        rows=$(wc -l < "${prefix}.b1.hanc")
+        while read -r bpx; do
+            r=$(wc -l < "${bpx}.hanc")
+            [[ "$r" -eq "$rows" ]] || { echo "ERROR: ${bpx}.hanc has ${r} sites, ${prefix}.b1.hanc has ${rows}. Batches must share a marker set." >&2; exit 6; }
+        done < "${prefix}.batchlist"
+        paste -d '' $(awk '{printf "%s.hanc ", $0}' "${prefix}.batchlist") > "${prefix}.hanc"
+        if ls "${prefix}".b*.phgeno >/dev/null 2>&1; then
+            paste -d '' $(awk '{printf "%s.phgeno ", $0}' "${prefix}.batchlist") > "${prefix}.phgeno"
+        fi
+        : > "${prefix}.haps"
+        # The model's .dat records the FULL n; the per-batch ones are archived.
+        write_dat "$model" "$comps" "$props" "$gen" "$n" "${prefix}.dat"
+        cp "${prefix}.dat" "${PROV_DIR}/${prefix}.dat"
+        echo "[$(date +%T)] [${CHR}] [${model}] stitched ${NBATCH} batches -> $(head -1 "${prefix}.hanc" | wc -c) haplotype columns"
+    fi
+    DAT="${prefix}.dat"
 done < .models.tsv
 rm -f .models.tsv
 
