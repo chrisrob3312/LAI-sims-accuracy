@@ -103,8 +103,14 @@ dataset from another caller. A site this release lacks is `./.` for all 276
 after the merge.
 
 **1d — `1d_almarri_prep_clm.sh`** (Almarri — **NEW**; already GRCh38, no liftover)
-1. per sample, per chr: `bcftools view -f PASS -i 'FMT/GQ>20'` →
-   `norm -c ws -m -snps --fasta-ref` → biallelic SNPs
+1. per sample, per chr: `bcftools view -f PASS -i 'FMT/GQ>20'` → `norm -m -snps
+   --fasta-ref` → biallelic SNPs → REF check
+   - **November panel (recipe v1):** `norm -c ws` — a mismatched REF is
+     *overwritten* from the FASTA while ALT and the genotypes are kept, and
+     stderr was discarded, so how often that happened is not in the logs.
+   - **Script now (v2), on any re-run:** `norm -c w` + `+fixref -- -f GRCh38
+     -m flip -d` — the same check MXB and SGDP get; stderr kept; per-sample
+     cache tagged `v2` so v1 files are not reused.
 2. `bcftools merge -m none` (137 samples) → **`+missing2ref`**: every absent
    genotype becomes 0/0
 3. strip to GT → `almarri_prepped.chrN.bcf` (393,138 records); asserts ~0
