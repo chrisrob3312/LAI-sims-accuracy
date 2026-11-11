@@ -537,6 +537,30 @@ def mode_pairs_gt(a):
               f"swap {statistics.mean(x[1] for x in v):6.3f}%  miss {statistics.mean(x[2] for x in v):6.2f}% "
               f"| {statistics.mean(x[3] for x in v):6.2f}%")
 
+    # WHAT DOES "ABSENT" MEAN? Where one copy has no call (its source file had
+    # no record there), the other copy of the SAME person says what the truth
+    # was. Mostly 0/0 -> the source lists only variant sites, so absent means
+    # hom-ref and filling it with 0/0 is right. Plenty of 0/1 and 1/1 -> the
+    # source dropped sites the person does carry, so absent is truly missing.
+    def absent_view(selector, label):
+        tot = Counter()
+        for (b, o, _, _), t in zip(P, T):
+            for (gb, go), v in t.items():
+                key = selector(gb, go)
+                if key is not None: tot[key] += v
+        n_all = sum(tot.values())
+        if not n_all:
+            print(f"   {label}: none"); return
+        parts = ", ".join(f"{g} {100 * tot[c] / n_all:5.1f}%" for c, g in ((0, "0/0"), (1, "0/1"), (2, "1/1")))
+        print(f"   {label}: {n_all:,} genotypes -> {parts}")
+    print("\n   WHAT 'ABSENT' MEANS (pooled over pairs):")
+    absent_view(lambda gb, go: gb if (go is None and gb is not None) else None,
+                "other copy missing -> base copy's genotype")
+    absent_view(lambda gb, go: go if (gb is None and go is not None) else None,
+                "base copy missing  -> other copy's genotype")
+    print("   mostly 0/0 = absent means hom-ref (fill with 0/0); "
+          "real 0/1 + 1/1 share = sites were filtered (keep missing)")
+
 
 # --------------------------------------------------------------------------
 def main():
