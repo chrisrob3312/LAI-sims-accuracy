@@ -36,11 +36,15 @@ here are for supervised ADMIXTURE and local-ancestry inference only.
 | 1c | `PHASE_MODE=chunked` `1c_phasing-jointcall_clm.sh` | 4-cohort merge + soft-union sites (**3,921 samples**) |
 | 1b | `1b_phase_chunks_clm.sh` → `1b_phase_ligate_clm.sh` | phased panel (594 chunks, 8 cM / 2 cM overlap) |
 
+`submit_panel_rebuild.sh` submits 1d → 1c → chunks → ligate → 1e → 4a as one
+afterok chain (SGDP prep and, optionally, the MXB liftover ahead of 1c), and
+prints the command that chains the publication stages 4–6 to its 4a job.
+
 `1b_phase_prep_clm.sh` (and `submit_chunked_phasing.sh`, which submits it) is
 the **2-cohort** July prep — HGDP+1KG + MXB only — and writes the same
 `merged_chrN.softunion.bcf` path 1c publishes. It now refuses to run unless
 `ALLOW_TWO_COHORT_PREP=1`.
-| 1e | `1e_king_dedup_clm.sh` | duplicate drops (KING > 0.354) |
+| 1e | `1e_king_dedup_clm.sh` | duplicate drops (KING > 0.354 on called sites, + known same-person pairs) |
 | 4a | `4a_build_homogeneity_panel_kN_clm.sh` | **ADMIXTURE K=8 Q table** — everything downstream reads this |
 | 5 | `scripts/split-homog-donors-reference.py` | donor / reference lists, per mode |
 | 7+8 | `scripts/assemble-benchmark-cohort.py` | cohort manifests + chip/build assignment |
@@ -147,7 +151,12 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    - 604 positions hold **two records** (records − positions). Expected cause:
      the sources disagree on the alleles and the merge kept both, so each
      cohort is called on one record and `./.` on the other. To be confirmed.
-6. publish `01_merged_phased_panel/merged_chrN.softunion.bcf` and stop
+6. **ADMIXTURE site list** (`merged_chrN.admix_sites.bed` + `.summary.tsv`):
+   the positions where every cohort × super-pop group with ≥ 5 samples is
+   ≤ 10% missing and the whole panel ≤ 7%, on these PRE-phasing genotypes.
+   Cohort comes from the file a sample was merged from. Only 4a and 1e use
+   it; the soft-union below, and so the LAI panel, keeps every site.
+7. publish `01_merged_phased_panel/merged_chrN.softunion.bcf` and stop
 
 > `REPO_DIR` must resolve correctly or `EXCLUDE_IDS` points at Slurm's spool
 > directory. That is how CHMI got into the panel: 3,921 *looked* like
@@ -174,20 +183,26 @@ samples from 4 cohorts instead of ~3,449 from 2)
   `merged_chrN.shapeit5_phased.softunion_maf005.bcf` (+ `.rechr.bcf` with bare
   contigs for RFMix) — same command and filename as July.
 
-**1e — `1e_king_dedup_clm.sh`** (**NEW**) — concat → LD-prune →
-`plink2 --make-king-table` → `king/king.kin0`, `king/duplicate_pairs.tsv`,
-`reference_ids/panel_duplicate_drop_ids.txt`. November: 48 duplicate pairs,
-126 first-degree.
+**1e — `1e_king_dedup_clm.sh`** (**NEW**) — concat → restrict to 1c's called
+sites → LD-prune → `plink2 --make-king-table` → `king/king.kin0`,
+`king/duplicate_pairs.tsv`, `reference_ids/panel_duplicate_drop_ids.txt`.
+Pairs in `known_duplicate_pairs.tsv` (an SGDP sample whose alias is in the
+panel) are duplicates whatever KING says. November, on all sites: 48 KING
+duplicates, but 26 known same-person pairs scored only 0.30–0.35 because
+SGDP's filled-in genotypes blurred identity — those people were in the
+panel twice.
 
 **4a — `4a_build_homogeneity_panel_kN_clm.sh`** (**K=8 now, K=5 in July**)
 1. concat the 22 phased chromosomes → `admixture_k8/all_chr.phased.bcf`
-2. `plink2 --maf 0.01 --indep-pairwise 500 50 0.1` over all 3,921 at once
+2. restrict to 1c's ADMIXTURE site list (`--extract bed1`), then
+   `plink2 --maf 0.01 --indep-pairwise 500 50 0.1` over all samples at once
    (same as July) → `--max-alleles 2 --snps-only just-acgt --make-bed` →
-   `admixture_k8/lai_ref` (528,876 SNPs)
+   `admixture_k8/lai_ref` (528,876 SNPs in November, without the site list)
 3. unsupervised ADMIXTURE K=8 → `admixture_k8/unsup/lai_ref.8.Q` (~10 h;
    reused on a rerun unless deleted)
-4. **NEW — discovery:** name clusters by mean Q of the label pools, then
-   anchors = top 50 of the draw pool at Q ≥ 0.93 on the named cluster
+4. **NEW — data-first discovery:** per cluster, rank every eligible sample,
+   keep the top 50 at Q ≥ 0.93, and name the cluster from those anchors'
+   metadata (see §3, 4a)
 5. supervised ADMIXTURE K=8 on those anchors → labels → tiered homogeneity →
    `lai_ref_panel_samples.k8.tsv`
 
@@ -218,20 +233,42 @@ Almarri, which `1c`'s ID-level de-duplication cannot.
 Three stages: anchor discovery across all 7 pools → supervised ADMIXTURE at
 K=8 → homogeneity filter.
 
-**Pools.** *Label pool* (names the clusters): the curated `*_rfmix.txt` list,
-+ MXB for AMR; for OCE/MEN, which have no list, the draw pool. *Draw pool*
-(who may become an anchor): curated list + `*_<sp>_candidates.txt` + MXB for
-AMR + — with `DRAW_FROM_METADATA=1`, the default — every panel sample whose
-metadata super-pop is that one (`sample_groups.tsv`; Almarri manifest for MEN).
+**Data-first anchor discovery** (stage A). For each of the K unsupervised
+clusters: rank **every** eligible panel sample by its loading on it, keep the
+top 50 at Q ≥ 0.93, and **name the cluster from who those anchors are** — the
+plurality metadata super-pop among them, holding ≥ 50% of the set. If two
+clusters claim one super-pop, the one with more supporting samples keeps it; a
+single unnamed cluster becomes OTH. Eligible = everyone except named
+exclusions and 1e's duplicate drops. No candidate pools and no a-priori
+naming: the curated `*_rfmix.txt` lists are not read (their overlap with the
+discovered anchors is reported).
 
-> **Job 3747721 ran with no curated lists at all.** `seed_for()` read `$sp`
-> in the same `local` statement that assigned it, so it expanded to nothing
-> (`line 264: sp: unbound variable` ×14 in the `.err`), and both pools fell
-> back to SGDP only (+MXB for AMR). Cluster naming used SGDP samples and no
-> 1KG/HGDP sample could become an anchor. Fixed; the draw pools also gained
-> the metadata members, without which SAS (the curated HGDP Pakistani list was
-> 0/48 at ≥ 0.93 in July), OCE (HGDP Papuan/Bougainville) and MEN (HGDP Middle
-> East, Almarri) could not supply anchors.
+Every cluster's composition goes to `discovery_clusters.k8.tsv` with the
+reason it was or was not named. Two checks print in the log:
+- **COHORT-DOMINATED** (warning): one minority cohort supplies ≥ 80% of a
+  cluster's anchors *and* they span several super-pops — the batch signature
+  (November's c7: 187 SGDP across EAS/EUR/SAS/OCE).
+- **single-cohort cluster** (note): one cohort, one super-pop — reported with
+  how strongly that super-pop's samples from *other* cohorts load on it
+  (November's Almarri cluster: HGDP Middle Easterners 0.09).
+
+> **History.** The pool design named clusters a priori by curated label lists.
+> In job 3747721 `seed_for()` read `$sp` in the same `local` statement that
+> assigned it, the lists came back empty, and the pools fell back to SGDP
+> alone — 276 of 3,921 samples were the only candidates for every super-pop.
+> Ranking everyone within the cluster is the method July settled on; in July's
+> K=5 Q it gives SAS 279 samples at ≥ 0.93 (top 50 = 1KG ITU/STU/BEB).
+
+**Markers.** The ADMIXTURE markers are restricted to 1c's site list before the
+MAF filter and pruning. In November, without it, every SGDP sample had no call
+at 38% of chr22's ADMIXTURE markers and every MXB sample at 62%; SHAPEIT5 had
+filled those in, and three of the eight clusters tracked cohorts (c0 ≈ 0.4 in
+every 1KG/HGDP sample, c4 Almarri-only, c7 SGDP-only).
+
+**Rebuilds.** Concat, LD-pruned bed, unsupervised Q and supervised Q are each
+reused only if newer than all of their inputs; the `.pop` is replaced only if
+the anchors changed, so a discovery-only rerun repeats the supervised fit only
+when it has to.
 
 Writes `lai_ref_panel_samples.k8.tsv`, the Q table everything downstream
 reads: `sample, cohort, pop, super_pop, Q_sup_*, max_Q_sup, argmax_pop_sup,

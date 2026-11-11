@@ -153,9 +153,21 @@ TMP="${OUTDIR}/tmp/almarri_chr${CHR}"
 OUT="${OUTDIR}/almarri_prepped.chr${CHR}.bcf"
 mkdir -p "$OUTDIR" "$TMP"
 
-if [[ -s "$OUT" && -s "${OUT}.csi" ]]; then
-    echo "[$(date +%T)] [chr${CHR}] $OUT exists -- nothing to do"
+# Reuse a finished chromosome only if it READS BACK and was built by the
+# current per-sample recipe (stamped in ${OUT}.recipe). "Non-empty with an
+# index" let a file through that bcftools could no longer read -- chr22 was
+# found at 0 bytes beside its Nov-5 index -- and would let a v1-recipe file
+# (norm -c ws, stderr discarded) stand in for a v2 rebuild.
+OUT_RECIPE="v2"
+if [[ -s "$OUT" && -s "${OUT}.csi" ]] \
+   && bcftools view -h "$OUT" > /dev/null \
+   && [[ "$(cat "${OUT}.recipe" 2>/dev/null)" == "$OUT_RECIPE" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] $OUT reads back and is recipe ${OUT_RECIPE} -- nothing to do"
     exit 0
+fi
+if [[ -e "$OUT" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] rebuilding $OUT: unreadable, unindexed, or not recipe ${OUT_RECIPE}" \
+         "(recipe stamp: '$(cat "${OUT}.recipe" 2>/dev/null || echo none)')"
 fi
 for f in "$REF_FA" "${REF_FA}.fai"; do
     [[ -s "$f" ]] || { echo "ERROR: missing $f"; exit 1; }
@@ -217,7 +229,7 @@ echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 # The recipe tag is part of the cached per-sample filename, so a BCF built by
 # an older recipe is never reused by a newer one.
 # --------------------------------------------------------------------------
-SUB_RECIPE="v2"
+SUB_RECIPE="$OUT_RECIPE"
 LIST="${TMP}/merge_list.txt"
 : > "$LIST"
 NS=0; NEMPTY=0
@@ -320,8 +332,10 @@ fi
 
 # Move the index first, then the BCF: $OUT only ever appears once both exist,
 # so a kill here cannot leave a BCF that the resume check accepts as finished.
+rm -f "${OUT}.recipe"
 mv "${MERGED}.csi" "${OUT}.csi"
 mv "$MERGED" "$OUT"
+echo "$OUT_RECIPE" > "${OUT}.recipe"
 
 # Drop the 137 per-sample intermediates now that the merge is on disk. Each
 # chromosome builds its own set and 8 run at once, so leaving them is tens of

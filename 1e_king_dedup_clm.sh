@@ -112,6 +112,19 @@ SOURCE_PRIORITY="${SOURCE_PRIORITY:-MXB ALMARRI SGDP HGDP 1KG}"
 DROP_LIST="${DROP_LIST:-${REFS}/panel_duplicate_drop_ids.txt}"
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 
+# KING ON CALLED SITES ONLY. The phased panel carries genotypes SHAPEIT5 filled
+# in wherever a cohort's source file had no record (every SGDP sample at ~40% of
+# sites, every MXB sample at ~62%). On those, the two copies of one person
+# disagree, so the November KING put 26 known same-person SGDP/1KG-HGDP pairs at
+# 0.30-0.35 -- under the 0.354 duplicate cut -- although their CALLED genotypes
+# agree 99.7%. Restricting KING to the sites every cohort x super-pop group
+# actually called (1c's ADMIXTURE site list) measures identity on real data.
+KING_SITE_FILTER="${KING_SITE_FILTER:-1}"
+SITES_TPL="${SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
+# Pairs the metadata says are ONE person (SGDP alias -> HGDP/1KG ID) are
+# duplicates whatever KING says; they are added to the KING pairs, marked.
+KNOWN_DUPS="${KNOWN_DUPS:-${REFS}/known_duplicate_pairs.tsv}"
+
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -139,8 +152,18 @@ echo "[$(date +%T)]   keep priority       : ${SOURCE_PRIORITY}"
 #    chromosome it would estimate kinship from a twenty-second of the genome
 #    and the duplicate tier would not separate cleanly from first degree.
 # --------------------------------------------------------------------------
+# Each step reuses its output only if it is newer than every input, so a
+# re-phased panel can never be met by the previous run's concat or KING table.
+newer_than () {
+    local out="$1"; shift
+    [[ -s "$out" ]] || return 0
+    local f
+    for f in "$@"; do [[ "$f" -nt "$out" ]] && return 0; done
+    return 1
+}
+PANEL_FILES=(); for c in $(seq 1 22); do PANEL_FILES+=("$(printf "$PANEL_TPL" "$c")"); done
 CONCAT="${OUTDIR}/all_chr.bcf"
-if [[ ! -s "${CONCAT}.csi" ]]; then
+if newer_than "${CONCAT}.csi" "${PANEL_FILES[@]}"; then
     echo "[$(date +%T)] concatenating 22 chromosomes"
     LIST="${OUTDIR}/concat_list.txt"; : > "$LIST"
     for c in $(seq 1 22); do printf "$PANEL_TPL\n" "$c" >> "$LIST"; done
@@ -156,11 +179,24 @@ echo "[$(date +%T)] panel: ${N_PANEL} samples"
 # 2. LD-prune on common sites.
 # --------------------------------------------------------------------------
 PRUNE="${OUTDIR}/pruned"
-if [[ ! -s "${PRUNE}.prune.in" ]]; then
+SITE_ARGS=(); PRUNE_INPUTS=("$CONCAT")
+if [[ "$KING_SITE_FILTER" == "1" ]]; then
+    SITE_FILES=(); for c in $(seq 1 22); do SITE_FILES+=("$(printf "$SITES_TPL" "$c")"); done
+    for f in "${SITE_FILES[@]}"; do
+        [[ -s "$f" ]] || { echo "ERROR: missing $f (1c writes it; or KING_SITE_FILTER=0)" >&2; exit 1; }
+    done
+    SITES_ALL="${OUTDIR}/called_sites.all.bed"
+    if newer_than "$SITES_ALL" "${SITE_FILES[@]}"; then
+        cat "${SITE_FILES[@]}" > "${SITES_ALL}.partial" && mv "${SITES_ALL}.partial" "$SITES_ALL"
+    fi
+    echo "[$(date +%T)] KING restricted to $(wc -l < "$SITES_ALL") sites called in every cohort x super-pop group"
+    SITE_ARGS=(--extract bed1 "$SITES_ALL"); PRUNE_INPUTS+=("$SITES_ALL")
+fi
+if newer_than "${PRUNE}.prune.in" "${PRUNE_INPUTS[@]}"; then
     echo "[$(date +%T)] plink2 import + LD prune (MAF>=${MAF}, r2<${PRUNE_R2})"
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' --rm-dup exclude-all \
-           --max-alleles 2 --snps-only just-acgt \
+           --max-alleles 2 --snps-only just-acgt ${SITE_ARGS[@]+"${SITE_ARGS[@]}"} \
            --maf "$MAF" \
            --indep-pairwise "$PRUNE_WINDOW" "$PRUNE_STEP" "$PRUNE_R2" \
            --out "$PRUNE"
@@ -181,7 +217,7 @@ echo "[$(date +%T)] pruned to ${N_PRUNE} variants"
 #    built from the same file.
 # --------------------------------------------------------------------------
 KING="${OUTDIR}/king"
-if [[ ! -s "${KING}.kin0" ]]; then
+if newer_than "${KING}.kin0" "${PRUNE}.prune.in" "$CONCAT"; then
     echo "[$(date +%T)] plink2 --make-king-table"
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' --rm-dup exclude-all \
@@ -199,15 +235,16 @@ fi
 #    taking them positionally silently reads the wrong column.
 # --------------------------------------------------------------------------
 echo "[$(date +%T)] classifying pairs and choosing copies to keep"
+bcftools query -l "$CONCAT" > "${OUTDIR}/panel_samples.txt"
 python3 -I - "${KING}.kin0" "$DUP_THRESHOLD" "$REPORT_FLOOR" \
     "${OUTDIR}/duplicate_pairs.tsv" "${OUTDIR}/related_pairs_summary.tsv" \
     "$DROP_LIST" "$SOURCE_PRIORITY" "${REFS}/MXB50genomes_popinfo.tsv" \
-    "${REFS}/sgdp_manifest.tsv" <<'PYEOF'
+    "${REFS}/sgdp_manifest.tsv" "$KNOWN_DUPS" "${OUTDIR}/panel_samples.txt" <<'PYEOF'
 import sys
 from collections import defaultdict
 
 (kin_f, dup_t, rep_t, dup_out, summ_out, drop_out, prio_s,
- mxb_f, sgdp_f) = sys.argv[1:10]
+ mxb_f, sgdp_f, known_f, panel_f) = sys.argv[1:12]
 dup_t = float(dup_t); rep_t = float(rep_t)
 PRIO = prio_s.split()
 rank = {s: i for i, s in enumerate(PRIO)}
@@ -281,8 +318,33 @@ with open(summ_out, "w") as g:
 for _t, name in TIERS:
     print(f"[king]   {name:18s} {counts[name]}", file=sys.stderr)
 
-# --- duplicates: choose a copy to drop, greedily, highest kinship first ---
-dups = sorted([p for p in pairs if p[2] > dup_t], key=lambda p: -p[2])
+# --- duplicates: KING's tier, plus pairs the metadata says are ONE person ---
+dups = [p for p in pairs if p[2] > dup_t]
+kin_of = {frozenset((a, b)): k for a, b, k in pairs}
+panel = set(open(panel_f).read().split())
+have = {frozenset((a, b)) for a, b, _ in dups}
+n_meta = 0
+try:
+    with open(known_f) as fh:
+        hdr = fh.readline().rstrip("\n").split("\t")
+        ix = {h: i for i, h in enumerate(hdr)}
+        for line in fh:
+            ff = line.rstrip("\n").split("\t")
+            a, b = ff[ix["sgdp_id"]], ff[ix["alias"]]
+            key = frozenset((a, b))
+            if a in panel and b in panel and key not in have:
+                # kinship from the table if KING reported it, else 0.5 by fiat:
+                # the sort below only orders which pair is resolved first.
+                dups.append((a, b, kin_of.get(key, 0.5)))
+                have.add(key); n_meta += 1
+                print(f"[king]   metadata duplicate KING did not call: {a} ~ {b} "
+                      f"(kinship {kin_of[key]:.4f})" if key in kin_of else
+                      f"[king]   metadata duplicate KING did not call: {a} ~ {b} "
+                      f"(below the reporting floor)", file=sys.stderr)
+except FileNotFoundError:
+    print(f"[king] NOTE: no metadata duplicate table at {known_f}", file=sys.stderr)
+print(f"[king] {n_meta} metadata-only duplicate pair(s) added to the KING tier", file=sys.stderr)
+dups = sorted(dups, key=lambda p: -p[2])
 dropped = set()
 rows = []
 for a, b, k in dups:

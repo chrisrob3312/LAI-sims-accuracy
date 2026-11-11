@@ -109,14 +109,23 @@ if [[ -s "$PHASED_CHUNK" && -s "${PHASED_CHUNK}.csi" ]]; then
     #
     # The sample count is the cheap discriminator: it comes from the index
     # header, and a chunk phased from a different panel has a different one.
-    _n_have=$(bcftools query -l "$PHASED_CHUNK" 2>/dev/null | wc -l)
-    _n_want=$(bcftools query -l "$SOFTUNION" 2>/dev/null | wc -l)
-    if [[ "$_n_have" -eq "$_n_want" && "$_n_have" -gt 0 ]]; then
-        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] already done (${_n_have} samples), skipping"
+    #
+    # The count alone is not enough: a rerun with the SAME samples but new
+    # genotypes (a re-prepped cohort, a changed site set) keeps the count and
+    # changes everything else. So a chunk is current only if it also postdates
+    # the soft-union it would be phased from.
+    _n_have=$(bcftools query -l "$PHASED_CHUNK" | wc -l)
+    _n_want=$(bcftools query -l "$SOFTUNION" | wc -l)
+    if [[ "$_n_have" -eq "$_n_want" && "$_n_have" -gt 0 && "$PHASED_CHUNK" -nt "$SOFTUNION" ]]; then
+        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] already done (${_n_have} samples, newer than the soft-union), skipping"
         exit 0
     fi
-    echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] STALE: has ${_n_have} samples,"
-    echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] soft-union has ${_n_want} -- rebuilding"
+    if [[ "$_n_have" -eq "$_n_want" ]]; then
+        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] STALE: older than the soft-union -- rebuilding"
+    else
+        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] STALE: has ${_n_have} samples,"
+        echo "[$(date +%T)] [${CHR} chunk${CHUNK_IDX}] soft-union has ${_n_want} -- rebuilding"
+    fi
     rm -f "$PHASED_CHUNK" "${PHASED_CHUNK}.csi"
 fi
 

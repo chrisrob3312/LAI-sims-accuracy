@@ -486,6 +486,51 @@ NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
 echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
 
+# 5b. ADMIXTURE site list -- per cohort x super-pop missingness, then overall.
+#     Measured HERE, on the pre-phasing genotypes, because SHAPEIT5 fills every
+#     missing genotype and the phased panel has none left to measure. In the
+#     November panel every SGDP sample had no call at 39.6% of chr22's
+#     soft-union sites and every MXB sample at 61.9%; at the SGDP-missing sites
+#     the 1KG/HGDP copy of the SAME person was non-ref 27.8% of the time, so
+#     those genotypes were neither called nor safely hom-ref. ADMIXTURE then
+#     treated the filled-in values as observed, and three of the eight K=8
+#     clusters tracked cohorts instead of ancestry.
+#
+#     Cohort comes from which FILE a sample was merged from (not its ID);
+#     super-pop from sample_groups.tsv / the SGDP manifest (Almarri = MEN,
+#     MXB = AMR). Only the ADMIXTURE marker set uses this list -- the soft-union
+#     itself, and so the phased LAI panel, is unchanged.
+ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.10}"
+ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
+ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
+SGDP_MANIFEST="${SGDP_MANIFEST:-${REPO_DIR}/reference_ids/sgdp_manifest.tsv}"
+ADMIX_SITES="${OUTDIR}/merged_chr${CHR}.admix_sites.bed"
+ADMIX_SUMMARY="${OUTDIR}/merged_chr${CHR}.admix_sites.summary.tsv"
+MISS_GROUPS="${TMPDIR}/miss_groups.chr${CHR}.tsv"
+bcftools query -l "$SOFTUNION" > "${TMPDIR}/softunion_samples.chr${CHR}.txt"
+bcftools query -l "$MXB_LIFTED" > "${TMPDIR}/cohort_mxb.chr${CHR}.txt"
+COHORT_ARGS=(--cohort "MXB=${TMPDIR}/cohort_mxb.chr${CHR}.txt")
+[[ -s "${TMPDIR}/sgdp_kept.txt"    ]] && COHORT_ARGS+=(--cohort "SGDP=${TMPDIR}/sgdp_kept.txt")
+[[ -s "${TMPDIR}/almarri_kept.txt" ]] && COHORT_ARGS+=(--cohort "ALMARRI=${TMPDIR}/almarri_kept.txt")
+echo "[$(date +%T)] [chr${CHR}] ADMIXTURE site list: groups <= ${ADMIX_GROUP_MAXMISS} missing" \
+     "(n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}"
+python3 -I "${REPO_DIR}/scripts/build-missingness-groups.py" \
+    --samples "${TMPDIR}/softunion_samples.chr${CHR}.txt" "${COHORT_ARGS[@]}" \
+    --default-cohort HGDP1KG --groups "$SAMPLE_GROUPS" --sgdp-manifest "$SGDP_MANIFEST" \
+    > "$MISS_GROUPS"
+ADMIX_FMT=$(python3 -I "${REPO_DIR}/scripts/admix-site-filter.py" --groups "$MISS_GROUPS" --print-format)
+bcftools +fill-tags "$SOFTUNION" -Ou -- -S "$MISS_GROUPS" -t AN \
+  | bcftools query -f "$ADMIX_FMT" \
+  | python3 -I "${REPO_DIR}/scripts/admix-site-filter.py" --groups "$MISS_GROUPS" \
+        --max-group-miss "$ADMIX_GROUP_MAXMISS" --max-total-miss "$ADMIX_TOTAL_MAXMISS" \
+        --min-group-n "$ADMIX_MISS_MIN_N" \
+        --out "${ADMIX_SITES}.partial" --summary "${ADMIX_SUMMARY}.partial"
+[[ -s "${ADMIX_SITES}.partial" ]] || { echo "ERROR: no site passed the ADMIXTURE missingness rule on chr${CHR}"; exit 1; }
+mv "${ADMIX_SUMMARY}.partial" "$ADMIX_SUMMARY"
+mv "${ADMIX_SITES}.partial" "$ADMIX_SITES"
+echo "[$(date +%T)] [chr${CHR}] ADMIXTURE site list: $(wc -l < "$ADMIX_SITES") positions -> ${ADMIX_SITES}"
+cat "$ADMIX_SUMMARY"
+
 # ---------------------------------------------------------------------------
 # PHASE_MODE -- whole-chromosome (default) or hand off to the chunked path.
 #

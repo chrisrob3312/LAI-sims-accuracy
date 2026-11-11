@@ -87,19 +87,30 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # plausible sizes, nothing in any log to say the phasing never happened.
 #
 # The sample count separates the two cases and costs one index read.
+#
+# The count is not enough on its own: re-phased chunks with the SAME samples
+# keep the count. So the ligated file is current only if no chunk of this
+# chromosome is newer than it.
 if [[ -s "$RECHR" && -s "${RECHR}.csi" ]]; then
-    _n_have=$(bcftools query -l "$RECHR" 2>/dev/null | wc -l)
+    _n_have=$(bcftools query -l "$RECHR" | wc -l)
     # Compare against a chunk that is about to be ligated, not against the
     # soft-union: the chunks are what this step actually consumes.
     _probe=$(awk -v c="chr${CHR}" -F'\t' 'NR>1 && $2==c {print $3; exit}' "$CHUNKS_TSV")
     _probe_bcf="${CHUNK_DIR}/chr${CHR}_chunk${_probe}.phased.bcf"
     _n_want=0
-    [[ -s "$_probe_bcf" ]] && _n_want=$(bcftools query -l "$_probe_bcf" 2>/dev/null | wc -l)
-    if [[ "$_n_want" -gt 0 && "$_n_have" -eq "$_n_want" ]]; then
-        echo "[$(date +%T)] [chr${CHR}] rechr BCF current (${_n_have} samples), skipping"
+    [[ -s "$_probe_bcf" ]] && _n_want=$(bcftools query -l "$_probe_bcf" | wc -l)
+    _newer=""
+    while read -r _ci; do
+        _cf="${CHUNK_DIR}/chr${CHR}_chunk${_ci}.phased.bcf"
+        if [[ "$_cf" -nt "$RECHR" ]]; then _newer="$_cf"; break; fi
+    done < <(awk -v c="chr${CHR}" -F'\t' 'NR>1 && $2==c {print $3}' "$CHUNKS_TSV")
+    if [[ "$_n_want" -gt 0 && "$_n_have" -eq "$_n_want" && -z "$_newer" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] rechr BCF current (${_n_have} samples, newer than every chunk), skipping"
         exit 0
     fi
-    if [[ "$_n_want" -eq 0 ]]; then
+    if [[ -n "$_newer" && "$_n_have" -eq "$_n_want" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] STALE: $(basename "$_newer") is newer than the ligated file -- re-ligating"
+    elif [[ "$_n_want" -eq 0 ]]; then
         echo "[$(date +%T)] [chr${CHR}] cannot read a chunk to compare against;"
         echo "[$(date +%T)] [chr${CHR}] re-ligating rather than trusting the existing file"
     else
