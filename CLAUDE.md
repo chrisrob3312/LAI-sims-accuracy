@@ -20,6 +20,25 @@ Rule of thumb: if a wrong answer to the diagnostic would make the second
 block harmful (delete good data, submit a bad job, push wrong commit),
 they MUST be in separate blocks.
 
+## Diagnose from the logs first (IMPORTANT)
+
+When a job fails or a result looks wrong, **read the job's own `.out` and
+`.err` in full (`cat`, not a filtered `grep`) before forming a theory**.
+A diagnostic written around an assumption can confirm the wrong
+assumption -- the first lines of a 4a `.err` held the real bug
+(`line 264: sp: unbound variable`) while a targeted grep looked elsewhere.
+
+- Never suppress stderr in a diagnostic (`2>/dev/null`, `|| true` on the
+  thing being checked). A check that fails silently looks like a check
+  that passed.
+- **Look paths up from the scripts** (`grep -n` the variable that writes
+  the file) instead of guessing them. Say where each path came from.
+- Run cluster tools inside the env the pipeline uses:
+  `module load anaconda3/2024.06`, `source "$(conda info --base)/etc/profile.d/conda.sh"`,
+  `conda activate shapeit5` -- plink2 and bcftools are not on `(base)`.
+- Show raw output (headers, first rows, counts) alongside any summary, so
+  a parsing error in the check itself is visible.
+
 ## Other running preferences
 
 - Long RFMix / accuracy pilots run on the mhgcp cluster; slides + tables

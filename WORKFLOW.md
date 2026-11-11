@@ -33,8 +33,13 @@ here are for supervised ADMIXTURE and local-ancestry inference only.
 | 1a | `1a_prep-mxb-liftover_clm.sh` | MXB lifted to GRCh38 |
 | 1b | `1b_sgdp_liftover_clm.sh` | SGDP lifted to GRCh38 |
 | 1d | `1d_almarri_prep_clm.sh` | 137 Almarri per-chr BCFs |
-| 1c | `1c_phasing-jointcall_clm.sh` | cohort assembly + soft-union sites (**3,921 samples**) |
-| 1b | `1b_phase_prep_clm.sh` → `1b_phase_chunks_clm.sh` → `1b_phase_ligate_clm.sh` | phased panel (594 chunks, 8 cM / 2 cM overlap) |
+| 1c | `PHASE_MODE=chunked` `1c_phasing-jointcall_clm.sh` | 4-cohort merge + soft-union sites (**3,921 samples**) |
+| 1b | `1b_phase_chunks_clm.sh` → `1b_phase_ligate_clm.sh` | phased panel (594 chunks, 8 cM / 2 cM overlap) |
+
+`1b_phase_prep_clm.sh` (and `submit_chunked_phasing.sh`, which submits it) is
+the **2-cohort** July prep — HGDP+1KG + MXB only — and writes the same
+`merged_chrN.softunion.bcf` path 1c publishes. It now refuses to run unless
+`ALLOW_TWO_COHORT_PREP=1`.
 | 1e | `1e_king_dedup_clm.sh` | duplicate drops (KING > 0.354) |
 | 4a | `4a_build_homogeneity_panel_kN_clm.sh` | **ADMIXTURE K=8 Q table** — everything downstream reads this |
 | 5 | `scripts/split-homog-donors-reference.py` | donor / reference lists, per mode |
@@ -54,22 +59,148 @@ checkpoints.
 
 ## 3. Panel creation
 
-### 1c — cohort assembly
-Adds SGDP, Almarri and restored samples to the 3,448-sample joint call →
-**3,921**. Applies `reference_ids/panel_exclude_ids.txt` (named exclusions,
-e.g. `CHMI_CHMI3_WGS2`, a hydatidiform-mole cell line).
+### 3.0 Data path, script by script (what happens to the genotypes)
+
+Top to bottom is the order the data moves. **NEW** marks each step the July
+NAT accuracy run did not have. Numbers are chr22 from the November run
+(1c job 3742123).
+
+**Source files — one per cohort, each from a different calling pipeline**
+
+| cohort | n | source | how it was called |
+|---|---|---|---|
+| HGDP+1KG | 3,458 | `phased_haplotypes_v2_filter1/hgdp1kgp_chrN…filter1_SNP_maf005.vcf.gz` | gnomAD joint call, GRCh38, MAF ≥ 0.005 already applied (264,074 records); hom-ref at sites private to another cohort is absent, not 0/0 |
+| MXB | 50 | `mexican_50_autosomes.vcf.gz` | MXB calls, hg19 → lifted by 1a |
+| SGDP | 276 | Reich lab `phased_data2021/chr.sgdp.pub.N.bcf` | SGDP pipeline, **already phased**, hg19 → lifted by 1b_sgdp — **NEW** |
+| Almarri | 137 | Long Ranger per-sample phased VCFs | 10x linked reads, per-sample GATK, GRCh38 — **NEW** |
+
+**1a — `1a_prep-mxb-liftover_clm.sh`** (MXB; unchanged since July)
+1. contigs `1..22` → `chr1..chr22` (the UCSC chain needs the prefix)
+2. Picard `LiftoverVcf` hg19 → hg38, `RECOVER_SWAPPED_REF_ALT=true` (where
+   hg38's base is the old ALT, swaps REF/ALT and the genotypes); unliftable →
+   `mxb_lifted.rejected.vcf.gz`
+3. `bcftools norm -f hg38 -m-` (split multi-allelics, left-align)
+4. `bcftools +fixref -- -f hg38 -m flip -d` (flip strand where needed, drop
+   what cannot be fixed)
+5. sort, split → `01_merged_phased_panel/mxb_lifted.chrN.bcf`
+
+This is the **liftover control**: the same recipe gave all 50 MXB samples
+Q = 1.000 in July.
+
+**1b_sgdp — `1b_sgdp_liftover_clm.sh`** (SGDP — **NEW**)
+1. download `chr.sgdp.pub.N.bcf` (hg19, phased) to `00_sgdp_raw/` (cached;
+   size and header checked)
+2. `bcftools view -S sgdp_combined_candidates.txt --force-samples` (277
+   requested, 276 present) → `bcftools norm -m -any`
+3. contigs → chr-prefixed
+4. Picard `LiftoverVcf` — **identical recipe to 1a**; rejects →
+   `sgdp_prepped.chrN.rejected.vcf.gz`, reject % in the log
+5. `bcftools norm -f hg38 -m-` → `+fixref -m flip -d` → keep `chrN` → sort →
+   `sgdp_prepped.chrN.bcf`
+
+Different from MXB in the INPUT, not the recipe: a released, already-phased
+dataset from another caller. A site this release lacks is `./.` for all 276
+after the merge.
+
+**1d — `1d_almarri_prep_clm.sh`** (Almarri — **NEW**; already GRCh38, no liftover)
+1. per sample, per chr: `bcftools view -f PASS -i 'FMT/GQ>20'` →
+   `norm -c ws -m -snps --fasta-ref` → biallelic SNPs
+2. `bcftools merge -m none` (137 samples) → **`+missing2ref`**: every absent
+   genotype becomes 0/0
+3. strip to GT → `almarri_prepped.chrN.bcf` (393,138 records); asserts ~0
+   missingness
+
+A call removed by `GQ>20`, or a site with no coverage, becomes **hom-ref, not
+missing**: an uncertain het is recorded as 0/0. That can lower Almarri
+heterozygosity relative to cohorts whose uncertain calls stay missing.
+
+**1c — `1c_phasing-jointcall_clm.sh` with `PHASE_MODE=chunked`** (merge + site
+selection). In July this step was `1b_phase_prep_clm.sh`: the **same** merge →
+QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
+1. HGDP+1KG: drop `related_outliers.txt` + `panel_exclude_ids.txt`
+   (`bcftools view -S ^drop`) → 3,458. Job 3742123 resolved the exclusion list
+   to Slurm's spool directory, found nothing, and kept `CHMI_CHMI3_WGS2`; 1c now
+   stops instead, and 4a / the benchmark exclude CHMI by name.
+2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
+   excluded → **3,921**
+3. `bcftools merge` of the four files, **without `-0`**: a site absent from a
+   cohort's file is `./.` for that whole cohort. 1,153,425 records.
+4. plink2 site QC: `--max-alleles 2 --snps-only just-acgt --rm-dup exclude-all
+   --set-missing-var-ids @:#[b38]`
+5. **Soft-union site gate.** Groups come from `sample_groups.tsv` = gnomAD
+   HGDP+1KG metadata + MXB only; **SGDP and Almarri are in no group** (groups
+   sum to 3,507 of 3,921; the one missing is CHMI). Per group with ≥ 10
+   samples keep `AN>0 && MAF ≥ 0.005`, then take the union of positions:
+   AFR 768 → 221,495 · AMR 448 → 231,038 · CSA 691 → 164,673 · EAS 736 →
+   140,477 · EUR 682 → 159,766 · MEN 155 (HGDP Middle East, not Almarri) →
+   192,260 · OCE 27 → 109,295 ⇒ **301,309 positions, 301,913 records**
+   - SGDP and Almarri never decide which sites exist; their private variants
+     cannot enter the panel.
+   - At each kept site they carry whatever their file said, or `./.` where it
+     lacked the site.
+   - 604 positions hold **two records** (records − positions). Expected cause:
+     the sources disagree on the alleles and the merge kept both, so each
+     cohort is called on one record and `./.` on the other. To be confirmed.
+6. publish `01_merged_phased_panel/merged_chrN.softunion.bcf` and stop
 
 > `REPO_DIR` must resolve correctly or `EXCLUDE_IDS` points at Slurm's spool
-> directory and the exclusion silently does nothing. This happened: the panel
-> came out at exactly 3,921, which *looked* like confirmation but was the
-> arithmetic of the exclusion not happening.
+> directory. That is how CHMI got into the panel: 3,921 *looked* like
+> confirmation but was the arithmetic of the exclusion not happening.
 
-### 1b — chunked phasing
-SHAPEIT5 `phase_common` per 8 cM chunk (2 cM overlap, 594 chunks), then
-`ligate`. Each chunk is **idempotent with a staleness check**: if the chunk
-file exists, its sample count is compared to the soft-union's. Equal → skip;
-different → rebuild. If no chunk file exists it phases fresh and prints
-neither message, which is the normal from-scratch case.
+**1b_phase_chunks — `1b_phase_chunks_clm.sh`** (joint phasing; **same method
+as July** — the chunked path dates from June 15 — only the input changed: 3,921
+samples from 4 cohorts instead of ~3,449 from 2)
+- `SHAPEIT5_phase_common --input merged_chrN.softunion.bcf --map
+  chrN.b38.gmap.gz --region <8 cM chunk + 2 cM overlap> --filter-maf 0.001`,
+  594 chunks
+- **All 3,921 samples from all four cohorts are phased together** in every
+  chunk.
+- `phase_common` **imputes every `./.`** from the haplotypes of samples called
+  at that site. This is the only way phasing changes a genotype. Phase itself
+  — switch errors, chunk boundaries — cannot affect ADMIXTURE, which reads
+  unphased genotypes.
+- `--filter-maf 0.001` drops sites under 0.1% across all samples.
+- Idempotent with a staleness check: an existing chunk is reused only if its
+  sample count equals the soft-union's.
+
+**1b_phase_ligate — `1b_phase_ligate_clm.sh`**
+- `SHAPEIT5_ligate` per chromosome →
+  `merged_chrN.shapeit5_phased.softunion_maf005.bcf` (+ `.rechr.bcf` with bare
+  contigs for RFMix) — same command and filename as July.
+
+**1e — `1e_king_dedup_clm.sh`** (**NEW**) — concat → LD-prune →
+`plink2 --make-king-table` → `king/king.kin0`, `king/duplicate_pairs.tsv`,
+`reference_ids/panel_duplicate_drop_ids.txt`. November: 48 duplicate pairs,
+126 first-degree.
+
+**4a — `4a_build_homogeneity_panel_kN_clm.sh`** (**K=8 now, K=5 in July**)
+1. concat the 22 phased chromosomes → `admixture_k8/all_chr.phased.bcf`
+2. `plink2 --maf 0.01 --indep-pairwise 500 50 0.1` over all 3,921 at once
+   (same as July) → `--max-alleles 2 --snps-only just-acgt --make-bed` →
+   `admixture_k8/lai_ref` (528,876 SNPs)
+3. unsupervised ADMIXTURE K=8 → `admixture_k8/unsup/lai_ref.8.Q` (~10 h;
+   reused on a rerun unless deleted)
+4. **NEW — discovery:** name clusters by mean Q of the label pools, then
+   anchors = top 50 of the draw pool at Q ≥ 0.93 on the named cluster
+5. supervised ADMIXTURE K=8 on those anchors → labels → tiered homogeneity →
+   `lai_ref_panel_samples.k8.tsv`
+
+July had no step 4: the curated `*_rfmix.txt` lists were the supervised labels
+directly, and the unsupervised run only reported proportions.
+
+#### Where a cohort difference can enter the genotypes
+
+| step | cohorts | mechanism | what tests it |
+|---|---|---|---|
+| source calling | all four differ | caller, filters, coverage | same person twice (duplicate pairs): genotype discordance, Q difference |
+| liftover (1a, 1b_sgdp) | MXB, SGDP | strand / allele errors | duplicate pairs: 0/0 ↔ 1/1 swaps; MXB is the working control |
+| `GQ>20` + `missing2ref` (1d) | Almarri | uncertain ALT calls → 0/0 | pre-phasing het rate by cohort |
+| merge without `-0` (1c) | whoever lacks a site | whole-cohort `./.` | pre-phasing missingness; sites with AN = 0 per cohort |
+| SHAPEIT5 imputation | the same | `./.` filled from other cohorts' haplotypes | het / F on the ADMIXTURE input vs pre-phasing |
+| split records (1c) | 604 positions on chr22 | each cohort called on a different record | listing the duplicated positions |
+
+`scripts/diagnose-panel-batch.py` runs each test (modes `q`, `psc`, `het`,
+`pair-ids`, `pairs-gt`).
 
 ### 1e — KING de-duplication
 Genome-wide KING-robust between the merge and ADMIXTURE. Drops **only**
@@ -80,6 +211,21 @@ Almarri, which `1c`'s ID-level de-duplication cannot.
 ### 4a — ADMIXTURE K=8
 Three stages: anchor discovery across all 7 pools → supervised ADMIXTURE at
 K=8 → homogeneity filter.
+
+**Pools.** *Label pool* (names the clusters): the curated `*_rfmix.txt` list,
++ MXB for AMR; for OCE/MEN, which have no list, the draw pool. *Draw pool*
+(who may become an anchor): curated list + `*_<sp>_candidates.txt` + MXB for
+AMR + — with `DRAW_FROM_METADATA=1`, the default — every panel sample whose
+metadata super-pop is that one (`sample_groups.tsv`; Almarri manifest for MEN).
+
+> **Job 3747721 ran with no curated lists at all.** `seed_for()` read `$sp`
+> in the same `local` statement that assigned it, so it expanded to nothing
+> (`line 264: sp: unbound variable` ×14 in the `.err`), and both pools fell
+> back to SGDP only (+MXB for AMR). Cluster naming used SGDP samples and no
+> 1KG/HGDP sample could become an anchor. Fixed; the draw pools also gained
+> the metadata members, without which SAS (the curated HGDP Pakistani list was
+> 0/48 at ≥ 0.93 in July), OCE (HGDP Papuan/Bougainville) and MEN (HGDP Middle
+> East, Almarri) could not supply anchors.
 
 Writes `lai_ref_panel_samples.k8.tsv`, the Q table everything downstream
 reads: `sample, cohort, pop, super_pop, Q_sup_*, max_Q_sup, argmax_pop_sup,

@@ -36,6 +36,32 @@ LAI_MAF="${LAI_MAF:-0.005}"
 MIN_SUBPOP_N="${MIN_SUBPOP_N:-10}"
 
 set -euo pipefail
+
+# TWO-COHORT PREP -- refuses to run unless asked for by name.
+#
+# This is the June/July prep: it merges ONLY HGDP+1KG + MXB, and writes
+# ${OUTDIR}/merged_chr${CHR}.softunion.bcf -- the SAME path that
+# `PHASE_MODE=chunked sbatch 1c_phasing-jointcall_clm.sh` publishes for the
+# 4-cohort panel (HGDP+1KG + MXB + SGDP + Almarri). 1b_phase_chunks reads that
+# path without knowing who wrote it. So wherever the 4-cohort soft-union is
+# absent (cleaned up, or a chromosome being redone), this script -- or
+# submit_chunked_phasing.sh, which submits it -- would quietly build a panel
+# without SGDP and Almarri and the chunk array would phase it. Its skip-if-
+# exists check is the only thing that has prevented that so far.
+#
+# The 4-cohort route is 1c with PHASE_MODE=chunked, then 1b_phase_chunks and
+# 1b_phase_ligate (what submit_publication_rerun.sh does). Set
+# ALLOW_TWO_COHORT_PREP=1 only to rebuild the 2-cohort (July) panel on purpose.
+if [[ "${ALLOW_TWO_COHORT_PREP:-0}" != "1" ]]; then
+    echo "ERROR: 1b_phase_prep builds a 2-cohort soft-union (HGDP+1KG + MXB only)" >&2
+    echo "       at the path 1c PHASE_MODE=chunked uses for the 4-cohort panel." >&2
+    echo "       For the current panel run:" >&2
+    echo "         PHASE_MODE=chunked sbatch 1c_phasing-jointcall_clm.sh" >&2
+    echo "       then 1b_phase_chunks + 1b_phase_ligate." >&2
+    echo "       To rebuild the 2-cohort panel deliberately: ALLOW_TWO_COHORT_PREP=1" >&2
+    exit 1
+fi
+
 CHR=${SLURM_ARRAY_TASK_ID:?must run as SLURM array job (sbatch --array=1-22 ...)}
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 TMPDIR="${OUTDIR}/tmp/chr${CHR}"

@@ -202,10 +202,22 @@ unset HDR
 echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 
 # --------------------------------------------------------------------------
-# 2. Per sample: PASS, GQ > MIN_GQ, split multiallelics, left-align, SNVs only.
-# `-c ws` makes bcftools norm WARN on a REF mismatch and SET it from the FASTA
-# rather than dropping the record silently.
+# 2. Per sample: PASS, GQ > MIN_GQ, split multiallelics, left-align, SNVs only,
+#    then the SAME REF check MXB (1a) and SGDP (1b_sgdp) get:
+#    `bcftools +fixref -- -f <GRCh38> -m flip -d` (flip strand / swap REF-ALT
+#    consistently with the genotypes, drop what cannot be fixed).
+#
+# Recipe v1 used `norm -c ws`, which SETS a mismatched REF from the FASTA and
+# leaves ALT and the genotypes as they were -- for a swapped site that writes a
+# record whose genotypes no longer mean what they say. It also sent all three
+# commands' stderr to /dev/null, so how many REFs it rewrote is unknowable from
+# the logs. v2 warns (`-c w`), lets fixref resolve or drop, and keeps stderr in
+# the task's .err.
+#
+# The recipe tag is part of the cached per-sample filename, so a BCF built by
+# an older recipe is never reused by a newer one.
 # --------------------------------------------------------------------------
+SUB_RECIPE="v2"
 LIST="${TMP}/merge_list.txt"
 : > "$LIST"
 NS=0; NEMPTY=0
@@ -213,7 +225,7 @@ for f in "$VCF_DIR"/*.vcf.gz; do
     [[ -s "${f}.tbi" || -s "${f}.csi" ]] || {
         echo "ERROR: $(basename "$f") has no index. Run: bash $0 --index" >&2; exit 2; }
     base=$(basename "$f" .vcf.gz)
-    sub="${TMP}/${base}.bcf"
+    sub="${TMP}/${base}.${SUB_RECIPE}.bcf"
     # Reuse a cached per-sample BCF only if it READS BACK. Testing for the
     # index alone accepts a truncated BCF beside a complete .csi, which is
     # what a killed task leaves -- and these are cached precisely so a rerun
@@ -224,9 +236,13 @@ for f in "$VCF_DIR"/*.vcf.gz; do
         rm -f "$sub" "${sub}.csi"
         # Build beside the target and move, so this loop never leaves a
         # half-written pair for the next run to find.
-        bcftools view -r "$REGION" -f PASS -i "FMT/GQ>${MIN_GQ}" -Ou "$f" 2>/dev/null \
-          | bcftools norm -c ws -m -snps --fasta-ref "$REF_FA" -Ou 2>/dev/null \
-          | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.part" 2>/dev/null
+        echo "[$(date +%T)] [chr${CHR}] ${base}: PASS + GQ>${MIN_GQ} -> norm -> fixref" >&2
+        bcftools view -r "$REGION" -f PASS -i "FMT/GQ>${MIN_GQ}" -Ou "$f" \
+          | bcftools norm -c w -m -snps --fasta-ref "$REF_FA" -Ou \
+          | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.norm.bcf"
+        bcftools +fixref "${sub}.norm.bcf" -Ob -o "${sub}.part" \
+            -- -f "$REF_FA" -m flip -d
+        rm -f "${sub}.norm.bcf"
         bcftools index "${sub}.part"
         mv "${sub}.part.csi" "${sub}.csi"
         mv "${sub}.part" "$sub"
