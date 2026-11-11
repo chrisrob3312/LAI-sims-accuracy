@@ -24,8 +24,8 @@ S_BantuTswana-1.DG	HGDP01030	HGDP	AFR	BantuTswana	0
 S_BantuTswana-2.DG	HGDP01034	HGDP	AFR	BantuTswana	0	
 S_Basque-1.DG	HGDP01364	HGDP	EUR	Basque	0	
 S_Basque-2.DG	HGDP01365	HGDP	EUR	Basque	0	
-S_BedouinB-1.DG	HGDP00616	HGDP	EUR	BedouinB	0	
-S_BedouinB-2.DG	HGDP00650	HGDP	EUR	BedouinB	0	
+S_BedouinB-1.DG	HGDP00616	HGDP	MEN	BedouinB	0	
+S_BedouinB-2.DG	HGDP00650	HGDP	MEN	BedouinB	0	
 S_Bengali-1.DG	HG03006	1KG	SAS	Bengali	1	server_panel
 S_Bengali-2.DG	HG03007	1KG	SAS	Bengali	1	server_panel
 S_Bergamo-1.DG	HGDP01153	HGDP	EUR	Bergamo	0	
@@ -107,8 +107,8 @@ S_Miao-1.DG	HGDP01191	HGDP	EAS	Miao	0
 S_Miao-2.DG	HGDP01198	HGDP	EAS	Miao	0	
 S_Mongola-1.DG	HGDP01228	HGDP	EAS	Mongola	0	
 S_Mongola-2.DG	HGDP01223	HGDP	EAS	Mongola	0	
-S_Mozabite-1.DG	HGDP01253	HGDP	AFR	Mozabite	0	
-S_Mozabite-2.DG	HGDP01274	HGDP	AFR	Mozabite	0	
+S_Mozabite-1.DG	HGDP01253	HGDP	MEN	Mozabite	0	
+S_Mozabite-2.DG	HGDP01274	HGDP	MEN	Mozabite	0	
 S_Naxi-1.DG	HGDP01338	HGDP	EAS	Naxi	0	
 S_Naxi-3.DG	HGDP01345	HGDP	EAS	Naxi	0	
 S_Orcadian-1.DG	HGDP00798	HGDP	EUR	Orcadian	0	

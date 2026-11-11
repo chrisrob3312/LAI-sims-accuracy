@@ -137,14 +137,27 @@ AMR_POPULATIONS = {
 
 # WestEurasia populations that we bucket as Middle Eastern.
 # From the SGDP paper (Mallick et al., Nature 2016) supplementary Table S1.
+#
+# Matching is EXACT on SGDP's Population_ID, so the set must use SGDP's own
+# spellings. "Bedouin" and "Yemenite" matched nothing -- SGDP writes BedouinB
+# and Yemenite_Jew -- and those four genomes were labelled EUR. The short forms
+# stay for any other source that uses them; bucket() reports every entry that
+# matches no SGDP population, so the next misspelling shows up in the log.
+#
+# North Africa: Mozabite and Saharawi are in SGDP's "Africa" REGION. bucket()
+# used to map the region first and only consult this set inside WestEurasia, so
+# both were labelled AFR although they are listed here (and HGDP's Mozabite is
+# MID -> MEN in the gnomAD metadata). The MEN check now runs first for the
+# WestEurasia and Africa regions.
 MEN_POPULATIONS = {
-    "Bedouin",       "Palestinian", "Druze", "Mozabite", "Saharawi",
-    "Iranian",       "Yemenite",    "Jordanian",
+    "Bedouin",       "BedouinB",    "Palestinian", "Druze", "Mozabite", "Saharawi",
+    "Iranian",       "Yemenite",    "Yemenite_Jew", "Jordanian",
     "Assyrian",      "Georgian",    "Armenian",
     "Turkish",       "Kurdish",     "Iraqi_Jew",
     "Samaritan",     "Egyptian",    "Lebanese",
     "Chuvash",       # borderline Eurasian; drop if you want strict ME.
 }
+MEN_OVERRIDE_REGIONS = {"WestEurasia", "Africa"}
 
 def download_metadata(dst_path: str) -> None:
     """Fetch via urllib; fall back to curl/wget when the cluster's Python has no
@@ -236,9 +249,18 @@ def bucket(rows, cap_per_pop=None):
     """
     per_pop_seen = Counter()
     buckets = defaultdict(list)
+    seen_pops = {r["population"] for r in rows}
+    unmatched = sorted(MEN_POPULATIONS - seen_pops)
+    if unmatched:
+        print(f"[fetch] NOTE: MEN_POPULATIONS entries matching no SGDP population "
+              f"(spelling, or absent from SGDP): {', '.join(unmatched)}",
+              file=sys.stderr)
     for r in rows:
         region = r["region"]; pop = r["population"]
-        super_pop = SGDP_TO_SUPERPOP.get(region)
+        if region in MEN_OVERRIDE_REGIONS and pop in MEN_POPULATIONS:
+            super_pop = "MEN"
+        else:
+            super_pop = SGDP_TO_SUPERPOP.get(region)
         if super_pop is None:
             if region == "WestEurasia":
                 super_pop = "MEN" if pop in MEN_POPULATIONS else "EUR"

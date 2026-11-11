@@ -65,6 +65,8 @@ OCE	S_Papuan-8.DG	S_Papuan-8	HGDP00549	Papuan	Oceania	PapuaNewGuinea	M	-4.0	143.
 OCE	S_Papuan-9.DG	S_Papuan-9	HGDP00551	Papuan	Oceania	PapuaNewGuinea	M	-4.0	143.0	FullyPublic
 MEN	S_Armenian-1.DG	S_Armenian-1	armenia293	Armenian	WestEurasia	Armenia	M	39.815	46.752	FullyPublic
 MEN	S_Armenian-2.DG	S_Armenian-2	Armenian222	Armenian	WestEurasia	Armenia	M	40.605	43.101	FullyPublic
+MEN	S_BedouinB-1.DG	S_BedouinB-1	HGDP00616	BedouinB	WestEurasia	Israel(Negev)	M	31.0	35.0	FullyPublic
+MEN	S_BedouinB-2.DG	S_BedouinB-2	HGDP00650	BedouinB	WestEurasia	Israel(Negev)	F	31.0	35.0	FullyPublic
 MEN	S_Druze-1.DG	S_Druze-1	HGDP00569	Druze	WestEurasia	Israel(Carmel)	F	32.0	35.0	FullyPublic
 MEN	S_Druze-2.DG	S_Druze-2	HGDP00597	Druze	WestEurasia	Israel(Carmel)	M	32.0	35.0	FullyPublic
 MEN	S_Georgian-1.DG	S_Georgian-1	mg27	Georgian	WestEurasia	Georgia	M	42.500	41.850	FullyPublic
@@ -76,12 +78,18 @@ MEN	S_Iraqi_Jew-2.DG	S_Iraqi_Jew-2	IraqiJew4291	Iraqi_Jew	WestEurasia	Iraq	M	33.
 MEN	S_Jordanian-1.DG	S_Jordanian-1	Jordan445	Jordanian	WestEurasia	Jordan	M	32.055	35.914	FullyPublic
 MEN	S_Jordanian-2.DG	S_Jordanian-2	Jordan603	Jordanian	WestEurasia	Jordan	M	32.055	35.914	FullyPublic
 MEN	S_Jordanian-3.DG	S_Jordanian-3	Jordan214	Jordanian	WestEurasia	Jordan	M	32.055	35.914	FullyPublic
+MEN	S_Mozabite-1.DG	S_Mozabite-1	HGDP01253	Mozabite	Africa	Algeria	M	32.0	3.0	FullyPublic
+MEN	S_Mozabite-2.DG	S_Mozabite-2	HGDP01274	Mozabite	Africa	Algeria	F	32.0	3.0	FullyPublic
 MEN	S_Palestinian-1.DG	S_Palestinian-1	HGDP00722	Palestinian	WestEurasia	Israel(Central)	M	32.0	35.0	FullyPublic
 MEN	S_Palestinian-2.DG	S_Palestinian-2	HGDP00725	Palestinian	WestEurasia	Israel(Central)	M	32.0	35.0	FullyPublic
 MEN	S_Palestinian-3.DG	S_Palestinian-3	HGDP00737	Palestinian	WestEurasia	Israel(Central)	F	32.0	35.0	FullyPublic
+MEN	S_Saharawi-1.DG	S_Saharawi-1	SAH31	Saharawi	Africa	Western Sahara (Morocco)	M	27.3	-8.9	FullyPublic
+MEN	S_Saharawi-2.DG	S_Saharawi-2	SAH41	Saharawi	Africa	Western Sahara (Morocco)	M	27.3	-8.9	FullyPublic
 MEN	S_Samaritan-1.DG	S_Samaritan-1	Sam02	Samaritan	WestEurasia	Israel	M	32.203	35.270	FullyPublic
 MEN	S_Turkish-1.DG	S_Turkish-1	Kayseri23827	Turkish	WestEurasia	Turkey	M	38.7	35.5	FullyPublic
 MEN	S_Turkish-2.DG	S_Turkish-2	Kayseri24424	Turkish	WestEurasia	Turkey	F	38.7	35.5	FullyPublic
+MEN	S_Yemenite_Jew-1.DG	S_Yemenite_Jew-1	YemeniteJew4695	Yemenite_Jew	WestEurasia	Yemen	F	15.4	44.2	FullyPublic
+MEN	S_Yemenite_Jew-2.DG	S_Yemenite_Jew-2	YemeniteJew5433	Yemenite_Jew	WestEurasia	Yemen	M	15.4	44.2	FullyPublic
 AMR	S_Chane-1.DG	S_Chane-1	TGBS21	Chane	America	Argentina	M	-22.53	-63.82	FullyPublic
 AMR	B_Karitiana-3.DG	B_Karitiana-3	HGDP01015	Karitiana	America	Brazil	M	-10	-63	FullyPublic
 AMR	S_Karitiana-1.DG	S_Karitiana-1	HGDP01012	Karitiana	America	Brazil	M	-10.0	-63.0	FullyPublic
@@ -138,10 +146,6 @@ AFR	S_Mbuti-2.DG	S_Mbuti-2	HGDP00476	Mbuti	Africa	Congo	F	1.0	29.0	FullyPublic
 AFR	S_Mbuti-3.DG	S_Mbuti-3	HGDP00449	Mbuti	Africa	Congo	M	1.0	29.0	FullyPublic
 AFR	S_Mende-1.DG	S_Mende-1	HG03078	Mende	Africa	SierraLeone	M	8.5	-13.2	FullyPublic
 AFR	S_Mende-2.DG	S_Mende-2	HG03085	Mende	Africa	SierraLeone	F	8.5	-13.2	FullyPublic
-AFR	S_Mozabite-1.DG	S_Mozabite-1	HGDP01253	Mozabite	Africa	Algeria	M	32.0	3.0	FullyPublic
-AFR	S_Mozabite-2.DG	S_Mozabite-2	HGDP01274	Mozabite	Africa	Algeria	F	32.0	3.0	FullyPublic
-AFR	S_Saharawi-1.DG	S_Saharawi-1	SAH31	Saharawi	Africa	Western Sahara (Morocco)	M	27.3	-8.9	FullyPublic
-AFR	S_Saharawi-2.DG	S_Saharawi-2	SAH41	Saharawi	Africa	Western Sahara (Morocco)	M	27.3	-8.9	FullyPublic
 AFR	S_Somali-1.DG	S_Somali-1	Ayodo_81S	Somali	Africa	Kenya	F	5.6	48.3	FullyPublic
 AFR	B_Yoruba-3.DG	B_Yoruba-3	HGDP00936	Yoruba	Africa	Nigeria	M	7.4	3.9	FullyPublic
 AFR	S_Yoruba-1.DG	S_Yoruba-1	HGDP00928	Yoruba	Africa	Nigeria	F	7.4	3.9	FullyPublic
@@ -153,8 +157,6 @@ EUR	S_Adygei-2.DG	S_Adygei-2	HGDP01401	Adygei	WestEurasia	Russia(Caucasus)	F	44.
 EUR	S_Albanian-1.DG	S_Albanian-1	ALB212	Albanian	WestEurasia	Albania	F	41.3	19.8	FullyPublic
 EUR	S_Basque-1.DG	S_Basque-1	HGDP01364	Basque	WestEurasia	France	M	43.0	0.0	FullyPublic
 EUR	S_Basque-2.DG	S_Basque-2	HGDP01365	Basque	WestEurasia	France	F	43.0	0.0	FullyPublic
-EUR	S_BedouinB-1.DG	S_BedouinB-1	HGDP00616	BedouinB	WestEurasia	Israel(Negev)	M	31.0	35.0	FullyPublic
-EUR	S_BedouinB-2.DG	S_BedouinB-2	HGDP00650	BedouinB	WestEurasia	Israel(Negev)	F	31.0	35.0	FullyPublic
 EUR	S_Bergamo-1.DG	S_Bergamo-1	HGDP01153	Bergamo	WestEurasia	Italy(Bergamo)	M	46.0	10.0	FullyPublic
 EUR	S_Bergamo-2.DG	S_Bergamo-2	HGDP01172	Bergamo	WestEurasia	Italy(Bergamo)	F	46.0	10.0	FullyPublic
 EUR	S_Bulgarian-1.DG	S_Bulgarian-1	BulgarianB4	Bulgarian	WestEurasia	Bulgaria	M	42.163	24.741	FullyPublic
@@ -200,8 +202,6 @@ EUR	S_Tajik-1.DG	S_Tajik-1	tdj409_shugnan	Tajik	WestEurasia	Tajikistan	M	37.508	
 EUR	S_Tajik-2.DG	S_Tajik-2	tdj430_shugnan	Tajik	WestEurasia	Tajikistan	M	37.508	71.568	FullyPublic
 EUR	S_Tuscan-1.DG	S_Tuscan-1	HGDP01168	Tuscan	WestEurasia	Italy(Tuscany)	F	43.0	11.0	FullyPublic
 EUR	S_Tuscan-2.DG	S_Tuscan-2	HGDP01163	Tuscan	WestEurasia	Italy(Tuscany)	M	43.0	11.0	FullyPublic
-EUR	S_Yemenite_Jew-1.DG	S_Yemenite_Jew-1	YemeniteJew4695	Yemenite_Jew	WestEurasia	Yemen	F	15.4	44.2	FullyPublic
-EUR	S_Yemenite_Jew-2.DG	S_Yemenite_Jew-2	YemeniteJew5433	Yemenite_Jew	WestEurasia	Yemen	M	15.4	44.2	FullyPublic
 EAS	S_Aleut-1.DG	S_Aleut-1	Ale22	Aleut	CentralAsiaSiberia	Russia	M	55.18	166	FullyPublic
 EAS	S_Aleut-2.DG	S_Aleut-2	Ale20	Aleut	CentralAsiaSiberia	Russia	F	55.18	166	FullyPublic
 EAS	S_Altaian-1.DG	S_Altaian-1	altai363p	Altaian	CentralAsiaSiberia	Russia	M	50.840	85.654	FullyPublic

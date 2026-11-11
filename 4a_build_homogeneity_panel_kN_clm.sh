@@ -217,6 +217,33 @@ HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
 # These are CANDIDATES, not anchors -- anchors are the top-N discovered here.
 SGDP_MANIFEST="${SGDP_MANIFEST:-${REFS}/sgdp_manifest.tsv}"
 
+# Almarri 2021 manifest (sample<TAB>pop). Defined HERE, not next to the labeling
+# code, because the MEN draw pool below reads it and bash needs it set first.
+# Keyed on the PANEL sample name, which is appg.meta's long_ID
+# (longranger222_wgs_<n>_APPG<id>_GRCh38_gatk) -- not the pop_ID (UAE19) that
+# the distributed .fam uses. Build it on the cluster:
+#   bash scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv
+ALMARRI_META="${ALMARRI_META:-${REFS}/almarri_manifest.tsv}"
+ALMARRI_COUNTRIES="${ALMARRI_COUNTRIES:-IRAQ JORDAN OMAN SAUDI SYRIA UAE YEMEN}"
+
+# DRAW FROM METADATA. Every panel sample whose metadata super-pop is SP joins
+# SP's DRAW pool (never its label pool), on top of the curated seed and the
+# candidate files. The metadata is sample_groups.tsv (gnomAD HGDP+1KG region,
+# CSA->SAS, MID->MEN, MXB->AMR) plus the Almarri manifest for MEN.
+#
+# Why this is on by default. Without it the draw pools were the curated HGDP
+# seed plus SGDP, which left whole groups unable to supply anchors:
+#   SAS  the curated list is HGDP Pakistani (Sindhi/Makrani/Brahui/Balochi);
+#        in the July K=5 run 0 of 48 cleared Q>=0.93 (mean max-Q 0.619), so
+#        discovery could find no SAS anchor even with the seed bug fixed.
+#        1KG SAS (BEB/GIH/ITU/PJL/STU) were not in the pool at all.
+#   OCE  HGDP Papuan + Bougainville (27) were not in the pool; only SGDP.
+#   MEN  HGDP Bedouin/Druze/Palestinian/Mozabite (155) and Almarri (137) were
+#        not in the pool; only the 19 SGDP West Eurasians labelled MEN.
+# Membership confers nothing: the top-N >= ANCHOR_MIN_Q cut still decides who
+# is an anchor. DRAW_FROM_METADATA=0 restores seed + candidate files only.
+DRAW_FROM_METADATA="${DRAW_FROM_METADATA:-1}"
+
 # UNIFORM DISCOVERY ACROSS ALL 7 CANDIDATE POOLS.
 #
 # Every named super-pop now goes through the SAME path: assemble a candidate
@@ -260,8 +287,17 @@ cand_glob_for () {
 # Curated seed/label lists. These are the RFMix REFERENCE PANELS, read by all
 # four 3b_*.sh scripts, and are NEVER written by this script -- see the naming
 # note on the discovery outputs below. OCE and MEN have none.
+#
+# TWO `local` statements, not one. `local sp="$1" f="...$sp..."` expands every
+# word BEFORE `local` assigns any of them, so `$sp` inside the second word is
+# the CALLER's sp -- unset here, because the loop variable is $SP. Under set -u
+# the command substitution died ("line 264: sp: unbound variable", 14 times in
+# job 3747721), f became "${REFS}/_rfmix.txt", and `local` returned 0 so set -e
+# never fired. Every super-pop then ran with "no curated list": the vetted
+# exemplars were missing from both the draw pool and the cluster-naming pool.
 seed_for () {
-    local sp="$1" f="${REFS}/$(echo "$sp" | tr 'A-Z' 'a-z')_rfmix.txt"
+    local sp="$1"
+    local f="${REFS}/$(echo "$sp" | tr 'A-Z' 'a-z')_rfmix.txt"
     [[ -s "$f" ]] && echo "$f" || echo ""
 }
 
@@ -339,6 +375,35 @@ build_cand_union () {
         echo "[$(date +%T)]   ${sp} draw pool += $(basename "$MXB_POPINFO") (${c}, MXB)"
         awk -F'\t' 'NR>1 && NF {print $1}' "$MXB_POPINFO" >> "$out"
         n=$((n+1)); tot=$((tot+c))
+    fi
+    # Metadata members (see DRAW_FROM_METADATA). The group names are the ones
+    # make_sample_groups.sh writes; SAS and MEN each have a legacy alias.
+    if [[ "$DRAW_FROM_METADATA" == "1" && -s "$SAMPLE_GROUPS" ]]; then
+        local groups
+        case "$sp" in
+            SAS) groups="SAS CSA" ;;
+            MEN) groups="MEN MID" ;;
+            *)   groups="$sp" ;;
+        esac
+        local c; c=$(awk -v g=" ${groups} " 'NF>=2 && index(g, " "$2" ") {n++} END {print n+0}' "$SAMPLE_GROUPS")
+        if [[ "$c" -gt 0 ]]; then
+            echo "[$(date +%T)]   ${sp} draw pool += $(basename "$SAMPLE_GROUPS") (${c}, metadata: ${groups})"
+            awk -v g=" ${groups} " 'NF>=2 && index(g, " "$2" ") {print $1}' "$SAMPLE_GROUPS" >> "$out"
+            n=$((n+1)); tot=$((tot+c))
+        else
+            echo "[$(date +%T)]   ${sp} draw pool: 0 rows of ${groups} in $(basename "$SAMPLE_GROUPS")"
+        fi
+    fi
+    if [[ "$DRAW_FROM_METADATA" == "1" && "$sp" == "MEN" ]]; then
+        if [[ -s "$ALMARRI_META" ]]; then
+            local c; c=$(awk -F'\t' 'NR>1 && NF && $1!="sample"' "$ALMARRI_META" | wc -l)
+            echo "[$(date +%T)]   ${sp} draw pool += $(basename "$ALMARRI_META") (${c}, Almarri)"
+            awk -F'\t' 'NR>1 && NF && $1!="sample" {print $1}' "$ALMARRI_META" >> "$out"
+            n=$((n+1)); tot=$((tot+c))
+        else
+            echo "[$(date +%T)]   ${sp} draw pool: NO Almarri manifest at ${ALMARRI_META} --" \
+                 "the 137 Almarri genomes cannot be MEN anchors on this run"
+        fi
     fi
     sort -u -o "$out" "$out"
     local u; u=$(wc -l < "$out")
@@ -752,10 +817,12 @@ fi
 #
 # Two columns, sample and pop. Build it on the cluster from the ENA metadata:
 #   scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv
-# If the file is absent the ID PATTERN is used instead -- the sample IDs are
-# <COUNTRY><number> over seven countries -- and that is reported, not silent.
-ALMARRI_META="${ALMARRI_META:-${REFS}/almarri_manifest.tsv}"
-ALMARRI_COUNTRIES="${ALMARRI_COUNTRIES:-IRAQ JORDAN OMAN SAUDI SYRIA UAE YEMEN}"
+# If the file is absent the ID PATTERN is used instead, and that is reported.
+# The panel IDs are appg.meta's long_ID, longranger222_wgs_<n>_APPG<id>_GRCh38_
+# gatk; the <COUNTRY><n> form (UAE19) is the pop_ID of the distributed .fam and
+# matches no panel sample. Both patterns are tried. ALMARRI_META and
+# ALMARRI_COUNTRIES are set near the top of the script (the MEN draw pool reads
+# them before this point).
 
 DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 # The named exclusion list, read here as well as in 1c.
@@ -929,10 +996,16 @@ VALID_SUPERPOPS = set(POP_ORDER)
 PANEL_SUPERPOPS = [c for c in POP_ORDER if c != "OTH"]
 
 def cohort_of(s):
+    # Order matters: SGDP and Almarri are recognised by membership/ID form
+    # BEFORE the prefix rules, because an Almarri long_ID would otherwise fall
+    # through to OTHER and an LP6005/SS600 ID is an HGDP individual (sequenced
+    # by SGDP, called by gnomAD) that lives in the HGDP+1KG source.
     if s in sgdp_sp: return "SGDP"
+    if almarri_of(s): return "ALMARRI"
     if s.startswith("MXB"): return "MXB"
-    if s.startswith(("HGDP", "LP6005", "SS")): return "HGDP"
-    if s.startswith(("HG", "NA")): return "1KG"
+    if s.startswith(("HGDP", "LP6005", "SS600")): return "HGDP"
+    if _re.match(r"^(HG|NA)\d", s): return "1KG"
+    if s.startswith("CHMI"): return "CHMI"
     return "OTHER"
 
 # ALMARRI 2021. Read the manifest when it exists; otherwise fall back to the
@@ -941,6 +1014,9 @@ import os as _os, re as _re
 almarri_pop = {}
 _countries = [c for c in almarri_countries.replace(",", " ").split() if c]
 _almarri_re = _re.compile(r"^(" + "|".join(_countries) + r")(\d+)$", _re.I)
+# The form the panel actually carries (appg.meta long_ID). Population is not in
+# the ID, so a pattern hit without the manifest is labelled ALMARRI_UNKNOWN_POP.
+_almarri_long_re = _re.compile(r"(^longranger\d*_wgs_|(^|_)APPG\d+(_|$))")
 if almarri_meta_f and _os.path.exists(almarri_meta_f):
     with open(almarri_meta_f) as f:
         for line in f:
@@ -961,7 +1037,11 @@ def almarri_of(s):
     if s in almarri_pop:
         return almarri_pop[s]
     m = _almarri_re.match(s.strip())
-    return m.group(1).upper() if m else None
+    if m:
+        return m.group(1).upper()
+    if _almarri_long_re.search(s.strip()):
+        return "ALMARRI_UNKNOWN_POP"
+    return None
 
 def super_pop_of(s):
     # BUGFIX: the K=5 allowlist was ("AFR","AMR","EUR","EAS") -- only 4 values --

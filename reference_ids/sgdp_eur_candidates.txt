@@ -9,8 +9,6 @@ S_Adygei-2.DG
 S_Albanian-1.DG
 S_Basque-1.DG
 S_Basque-2.DG
-S_BedouinB-1.DG
-S_BedouinB-2.DG
 S_Bergamo-1.DG
 S_Bergamo-2.DG
 S_Bulgarian-1.DG
@@ -52,5 +50,3 @@ S_Tajik-1.DG
 S_Tajik-2.DG
 S_Tuscan-1.DG
 S_Tuscan-2.DG
-S_Yemenite_Jew-1.DG
-S_Yemenite_Jew-2.DG

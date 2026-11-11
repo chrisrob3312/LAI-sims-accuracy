@@ -35,10 +35,6 @@ S_Mbuti-2.DG
 S_Mbuti-3.DG
 S_Mende-1.DG
 S_Mende-2.DG
-S_Mozabite-1.DG
-S_Mozabite-2.DG
-S_Saharawi-1.DG
-S_Saharawi-2.DG
 S_Somali-1.DG
 S_Yoruba-1.DG
 S_Yoruba-2.DG

@@ -1,5 +1,7 @@
 S_Armenian-1.DG
 S_Armenian-2.DG
+S_BedouinB-1.DG
+S_BedouinB-2.DG
 S_Druze-1.DG
 S_Druze-2.DG
 S_Georgian-1.DG
@@ -11,9 +13,15 @@ S_Iraqi_Jew-2.DG
 S_Jordanian-1.DG
 S_Jordanian-2.DG
 S_Jordanian-3.DG
+S_Mozabite-1.DG
+S_Mozabite-2.DG
 S_Palestinian-1.DG
 S_Palestinian-2.DG
 S_Palestinian-3.DG
+S_Saharawi-1.DG
+S_Saharawi-2.DG
 S_Samaritan-1.DG
 S_Turkish-1.DG
 S_Turkish-2.DG
+S_Yemenite_Jew-1.DG
+S_Yemenite_Jew-2.DG

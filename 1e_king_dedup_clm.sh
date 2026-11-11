@@ -227,12 +227,20 @@ def load_ids(path, col=0, skip_header=True):
 mxb = load_ids(mxb_f)
 sgdp = load_ids(sgdp_f, col=1)
 
+import re
+# Almarri panel IDs are appg.meta's long_ID, longranger222_wgs_<n>_APPG<id>_
+# GRCh38_gatk -- they START with "longranger", so the old startswith("APPG")
+# matched none of the 137 and every one fell through to "1KG". LP6005*/SS600*
+# are HGDP individuals sequenced by SGDP and called by gnomAD (they come in with
+# the HGDP+1KG source), not 1KG. Anything unrecognised is OTHER, never 1KG.
+ALMARRI_RE = re.compile(r"(^longranger\d*_wgs_|(^|_)APPG\d+(_|$))")
 def source_of(s):
     if s in mxb: return "MXB"
     if s in sgdp or s.endswith(".DG"): return "SGDP"
-    if s.startswith("APPG"): return "ALMARRI"
-    if s.startswith("HGDP"): return "HGDP"
-    return "1KG"
+    if ALMARRI_RE.search(s): return "ALMARRI"
+    if s.startswith(("HGDP", "LP6005", "SS600")): return "HGDP"
+    if re.match(r"^(HG|NA)\d", s): return "1KG"
+    return "OTHER"
 
 def prio_of(s):
     return rank.get(source_of(s), len(PRIO))
