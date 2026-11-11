@@ -50,6 +50,28 @@ from itertools import permutations
 from collections import defaultdict
 
 
+def hanc_path(d, model, ch):
+    """Prefer the site-per-line .hanc2; fall back to .hanc and SAY SO.
+
+    bp2anc.pl writes ONE LINE PER HAPLOTYPE. Every reader here wants one line
+    per site, so 6b (like 2b) transposes once into .hanc2. Reading a raw .hanc
+    as if it were site-per-line does not fail -- it silently transposes the
+    interpretation, turning N_SITES x 2n into 2n x N_SITES, and every tract
+    and ancestry number computed from it is meaningless. So the fallback is
+    reported, not silent.
+    """
+    h2 = os.path.join(d, f"{model}.{ch}.hanc2")
+    if os.path.exists(h2):
+        return h2, None
+    h1 = os.path.join(d, f"{model}.{ch}.hanc")
+    if os.path.exists(h1):
+        return h1, (f"{ch}/{model}: no .hanc2, reading raw .hanc -- if that "
+                    f"file is haplotype-per-line (bp2anc's layout) every "
+                    f"number from it is transposed. Re-run 6b, which writes "
+                    f".hanc2.")
+    return None, None
+
+
 def read_tsv(path):
     if not os.path.exists(path):
         return None, []
@@ -259,8 +281,10 @@ def main():
                 comps, props, gen = models[m]
                 if gen == 0:
                     continue        # constant ancestry by construction
-                hanc = os.path.join(a.simset, ch, f"{m}.{ch}.hanc")
-                if not os.path.exists(hanc):
+                hanc, warn = hanc_path(os.path.join(a.simset, ch), m, ch)
+                if warn:
+                    notes.append(warn)
+                if hanc is None:
                     continue
                 fr, err = per_individual_fractions(hanc, len(comps))
                 if err:

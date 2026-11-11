@@ -7,6 +7,9 @@ use warnings;
 # Without this Perl auto-seeds from entropy and a run cannot be regenerated.
 srand($ENV{SIMU_SEED}) if defined $ENV{SIMU_SEED} && $ENV{SIMU_SEED} =~ /^\d+$/;
 
+# Donor-provenance log handle; opened lazily, only when SIMU_DONOR_LOG is set.
+our $DONOR_LOG_FH;
+
 my $script_dir = $0;
 $script_dir =~ s#[^/]*$##;
 
@@ -325,6 +328,32 @@ sub print_haplotypes {
 	# found source that's not being copied from:
 	$copying_sample[$pop_num][$new_copy_id] = 1;
 	$copying_ind[ $ind ] = $new_copy_id;
+
+	# DONOR PROVENANCE. Which donor haplotype each simulated segment was
+	# copied from, written only when SIMU_DONOR_LOG names a file.
+	#
+	# Why it matters: simulated individuals in different batches share donor
+	# segments at roughly third-to-fourth-cousin level. hap-IBD sees that;
+	# KING does not. A bootstrap that resamples PEOPLE therefore treats them
+	# as independent and gives intervals that are too narrow for any measure
+	# depending on which donors were used -- by up to ~2.7x for LAT3's NAT
+	# component. Resampling DONORS instead needs to know which donor each
+	# segment came from, which is exactly this line.
+	#
+	# The script is deterministic given SIMU_SEED and the .bp, so a set that
+	# has already been built can be replayed with the log switched on rather
+	# than re-simulated.
+	if (defined $ENV{SIMU_DONOR_LOG}) {
+	  if (!defined $DONOR_LOG_FH) {
+	    open($DONOR_LOG_FH, '>>', $ENV{SIMU_DONOR_LOG})
+	      or die "Couldn't open donor log $ENV{SIMU_DONOR_LOG}: $!\n";
+	    # unbuffered: a run that dies on "used all haplotypes" should still
+	    # leave the segments it had already assigned
+	    select((select($DONOR_LOG_FH), $| = 1)[0]);
+	    print $DONOR_LOG_FH "hap\tmarker\tpop_num\tdonor_id\n";
+	  }
+	  print $DONOR_LOG_FH "$ind\t$marker\t$pop_num\t$new_copy_id\n";
+	}
       }
       die "Error End pos = $end_pos, marker = $marker\n" if($end_pos < $marker);
 

@@ -131,7 +131,11 @@ def n_eff(ids, kin_by_pair):
     rel = 0.0
     for (a, b), k in kin_by_pair.items():
         if a in idset and b in idset:
-            rel += 2.0 * (2.0 * k)    # both (i,j) and (j,i), R_ij = 2*phi
+            # FLOOR AT ZERO. KING returns negative kinship for unrelated
+            # pairs, and summing those SHRINKS the denominator, inflating
+            # N^2 / sum(R). The negatives are estimation noise around zero,
+            # not evidence of less-than-independence, so they are clipped.
+            rel += 2.0 * (2.0 * max(k, 0.0))
     s += rel
     return (n * n / s) if s > 0 else 0.0, rel
 
@@ -195,20 +199,29 @@ def main():
     w(" estimate -- provided the power simulations use the same GRM. What it")
     w(" still costs is the information N_eff measures.")
     w("")
-    w(" HOW DONORS ARE ACTUALLY PICKED -- this figure is the CAUTIOUS one.")
-    w(" simu-mix.pl draws a donor haplotype uniformly at random but REJECTS")
-    w(" any already being copied from at that marker, so within one simu-mix")
-    w(" run the draws are WITHOUT REPLACEMENT: no two simulated haplotypes")
-    w(" share a donor at the same position. That is more even than the random")
-    w(" copying a reuse estimate assumes, so the true effective size is")
-    w(" somewhat HIGHER than a donor-count projection suggests.")
+    w(" *** THE KING NUMBER BELOW IS NOT THE CAUTIOUS ONE. ***")
     w("")
-    w(" It does not affect the number below, which is measured from the actual")
-    w(" KING table rather than projected -- whatever sharing the build created")
-    w(" is in those genotypes. It does mean a PROJECTION made before the build")
-    w(" understates N_eff, and that reuse is concentrated ACROSS batches: 6b")
-    w(" simulates each model in batches sized by the donor-concurrency limit,")
-    w(" and donors are distinct within a batch but may repeat between them.")
+    w(" An earlier version of this report said it was. That was wrong, and it")
+    w(" is wrong in the optimistic direction, so read this before quoting any")
+    w(" figure from it in a power calculation.")
+    w("")
+    w(" Donors are distinct WITHIN a simu-mix batch -- the sampler rejects any")
+    w(" haplotype already in use at that marker -- so the sharing that matters")
+    w(" is BETWEEN batches, and it is faint: roughly sum(p^2)/H, about 0.0045")
+    w(" for LAT3 and 0.0073 for SASEUR. That is below what KING resolves. In")
+    w(" IBD terms simulated individuals from different batches look like third")
+    w(" to fourth cousins -- hap-IBD detects that, KING does not.")
+    w("")
+    w(" So KING sees almost none of the donor-reuse relatedness and the N_eff")
+    w(" below comes out close to nominal. Use the DONOR-BASED figure instead")
+    w(" (the harmonization repo's lib/neff.R): it treats donors as drawn with")
+    w(" replacement, which is the conservative assumption, and gives LAT3's")
+    w(" NAT component N_eff = 39.9 at n=600. Nor is that flat in n -- the same")
+    w(" 46 donors give 31.6 at n=200, 35.3 at n=300, 39.9 at n=600.")
+    w("")
+    w(" What the KING number below IS good for: detecting relatedness the")
+    w(" design did not intend -- a real test genome related to a simulated")
+    w(" one, or a duplicate that survived 1e. Those it finds.")
     w("")
 
     w(" KINSHIP PAIRS IN THE COMBINED COHORT")

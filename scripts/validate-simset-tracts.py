@@ -130,6 +130,28 @@ def predicted_switches(gen, props):
     return (gen - 1) * (1.0 - sum(p * p for p in props))
 
 
+def hanc_path(d, model, ch):
+    """Prefer the site-per-line .hanc2; fall back to .hanc and SAY SO.
+
+    bp2anc.pl writes ONE LINE PER HAPLOTYPE. Every reader here wants one line
+    per site, so 6b (like 2b) transposes once into .hanc2. Reading a raw .hanc
+    as if it were site-per-line does not fail -- it silently transposes the
+    interpretation, turning N_SITES x 2n into 2n x N_SITES, and every tract
+    and ancestry number computed from it is meaningless. So the fallback is
+    reported, not silent.
+    """
+    h2 = os.path.join(d, f"{model}.{ch}.hanc2")
+    if os.path.exists(h2):
+        return h2, None
+    h1 = os.path.join(d, f"{model}.{ch}.hanc")
+    if os.path.exists(h1):
+        return h1, (f"{ch}/{model}: no .hanc2, reading raw .hanc -- if that "
+                    f"file is haplotype-per-line (bp2anc's layout) every "
+                    f"number from it is transposed. Re-run 6b, which writes "
+                    f".hanc2.")
+    return None, None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--simset", required=True,
@@ -186,9 +208,11 @@ def main():
         for m, info in sorted(models.items()):
             if info["gen"] == 0:
                 continue   # controls have constant ancestry by construction
-            hanc = os.path.join(d, f"{m}.{ch}.hanc")
-            if not os.path.exists(hanc):
-                skipped.append(f"{ch}/{m}: no .hanc"); continue
+            hanc, warn = hanc_path(d, m, ch)
+            if warn:
+                problems.append(warn)
+            if hanc is None:
+                skipped.append(f"{ch}/{m}: no .hanc2 or .hanc"); continue
             per_m, frac, err, n_hap, span_cm = tract_stats(hanc, pos)
             if err:
                 problems.append(f"{ch}/{m}: {err}"); continue

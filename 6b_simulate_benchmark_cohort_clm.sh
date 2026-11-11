@@ -110,11 +110,23 @@ write_dat () {
         echo "ERROR: ${model} has ${#c[@]} components but ${#p[@]} proportions" >&2
         return 1
     fi
-    printf '%s %s %s\n' "$n" "$model" "${c[*]}" > "$out"
-    printf '1 %s\n' "${p[*]}" >> "$out"
+    # THE FIRST NUMBER COUNTS HAPLOTYPES, NOT PEOPLE (admix-simu README;
+    # main.cc:459). Writing n gives half the cohort.
+    #
+    # AND EVERY PROPORTION LINE INCLUDES THE ADMIXED POPULATION ITSELF, as its
+    # first column. At generation 1 none of the population comes from the
+    # admixed pop (it does not exist yet) and p_i from each source; at the
+    # terminal generation all of it comes from the admixed pop and none from
+    # the sources -- random mating within, no new migration. The earlier
+    # version omitted that column, so the terminal line read "G 0 0 0", summed
+    # to zero, and the stock mixer refuses the file outright:
+    #   "Error on line 2: population proportions do not sum to 1.0"
+    # which is why the batching had never actually run against the real tool.
+    printf '%s %s %s\n' "$(( 2 * n ))" "$model" "${c[*]}" > "$out"
+    printf '1 0 %s\n' "${p[*]}" >> "$out"
     if [[ "$gen" -gt 1 ]]; then
         z=(); for _ in "${c[@]}"; do z+=("0"); done
-        printf '%s %s\n' "$gen" "${z[*]}" >> "$out"
+        printf '%s 1 %s\n' "$gen" "${z[*]}" >> "$out"
     fi
 }
 
@@ -333,6 +345,11 @@ while IFS=$'\t' read -r model comps props gen; do
         continue
     fi
 
+    DAT="${prefix}.dat"          # set BEFORE the batch loop: the stitch step
+                                 # below referenced it while it was still unset,
+                                 # which aborts under `set -u` and, worse,
+                                 # overwrites the PREVIOUS model's .dat when a
+                                 # stale value is left over.
     # -POP args in the .dat header's order.
     popargs=()
     IFS=',' read -r -a carr <<< "$comps"
@@ -394,33 +411,70 @@ while IFS=$'\t' read -r model comps props gen; do
     done
 
     # --- stitch the batches ----------------------------------------------
-    # COLUMN-wise: .hanc and .phgeno carry one character per HAPLOTYPE per
-    # site, so batches are joined side by side, not end to end. `paste -d ''`
-    # on one line per site does exactly that. Row counts must match or the
-    # sites are not the same sites.
+    # THE TWO FILES HAVE DIFFERENT LAYOUTS AND NEED DIFFERENT JOINS.
+    #
+    #   .hanc   from bp2anc.pl: ONE LINE PER HAPLOTYPE, each line N_SITES
+    #           characters. Batches STACK -- plain `cat`. 2b has always done
+    #           it this way (it then transposes to .hanc2); 6b did not.
+    #   .phgeno one line per SITE, one character per haplotype. Batches join
+    #           SIDE BY SIDE -- `paste -d ''`.
+    #
+    # An earlier version pasted both, on the belief that .hanc was
+    # site-per-line. The fixture that "verified" it was hand-written in
+    # site-per-line layout, so it tested the assumption against itself and
+    # could not have caught this.
+    #
+    # The per-batch check is on LINE LENGTH, not line count: every batch
+    # covers the same markers but holds a different number of haplotypes, so
+    # the last (short) batch fails a line-count check on every model.
     if [[ "$NBATCH" -eq 1 ]]; then
         mv "${prefix}.b1.hanc" "${prefix}.hanc"
-        [[ -s "${prefix}.b1.haps" ]] && mv "${prefix}.b1.haps" "${prefix}.haps"
         [[ -s "${prefix}.b1.phgeno" ]] && mv "${prefix}.b1.phgeno" "${prefix}.phgeno"
-        mv "${prefix}.b1.dat" "$DAT" 2>/dev/null || true
         cp "${PROV_DIR}/${prefix}.b1.dat" "${PROV_DIR}/${prefix}.dat" 2>/dev/null || true
     else
-        rows=$(wc -l < "${prefix}.b1.hanc")
+        width=$(head -1 "${prefix}.b1.hanc" | tr -d '\n' | wc -c)
         while read -r bpx; do
-            r=$(wc -l < "${bpx}.hanc")
-            [[ "$r" -eq "$rows" ]] || { echo "ERROR: ${bpx}.hanc has ${r} sites, ${prefix}.b1.hanc has ${rows}. Batches must share a marker set." >&2; exit 6; }
+            w=$(head -1 "${bpx}.hanc" | tr -d '\n' | wc -c)
+            [[ "$w" -eq "$width" ]] || { echo "ERROR: ${bpx}.hanc lines are ${w} sites, ${prefix}.b1.hanc is ${width}. Batches must share a marker set." >&2; exit 6; }
         done < "${prefix}.batchlist"
-        paste -d '' $(awk '{printf "%s.hanc ", $0}' "${prefix}.batchlist") > "${prefix}.hanc"
+        cat $(awk '{printf "%s.hanc ", $0}' "${prefix}.batchlist") > "${prefix}.hanc"
         if ls "${prefix}".b*.phgeno >/dev/null 2>&1; then
             paste -d '' $(awk '{printf "%s.phgeno ", $0}' "${prefix}.batchlist") > "${prefix}.phgeno"
         fi
-        : > "${prefix}.haps"
+        # NOT an empty .haps. The already-done check at the top of this loop
+        # tests `-s`, so a zero-byte marker never satisfies it: the model would
+        # re-simulate on every rerun and overwrite its archived .bp files --
+        # destroying the only thing that makes a unit reproducible. Record the
+        # batch layout instead, which is both non-empty and useful.
+        {
+            echo "# ${model} ${CHR}: ${NBATCH} batch(es), n=${n}"
+            cat "${prefix}.batchlist"
+        } > "${prefix}.haps"
         # The model's .dat records the FULL n; the per-batch ones are archived.
         write_dat "$model" "$comps" "$props" "$gen" "$n" "${prefix}.dat"
         cp "${prefix}.dat" "${PROV_DIR}/${prefix}.dat"
-        echo "[$(date +%T)] [${CHR}] [${model}] stitched ${NBATCH} batches -> $(head -1 "${prefix}.hanc" | wc -c) haplotype columns"
+        echo "[$(date +%T)] [${CHR}] [${model}] stitched ${NBATCH} batches -> $(wc -l < "${prefix}.hanc") haplotypes x ${width} sites"
     fi
-    DAT="${prefix}.dat"
+
+    # SITE-PER-LINE COPY, as 2b's .hanc2. The validators
+    # (validate-simset-tracts.py, cohort-ancestry-summary.py) read one line
+    # per site; bp2anc.pl writes one line per haplotype. Transpose once here
+    # rather than making every reader guess.
+    sed 's/./& /g' "${prefix}.hanc" > "${prefix}.hanc1"
+    python3 -c "import sys; rows=[l.split() for l in sys.stdin if l.strip()]; print('\n'.join(' '.join(c) for c in zip(*rows)))" \
+        < "${prefix}.hanc1" | tr -d ' ' > "${prefix}.hanc2"
+    rm -f "${prefix}.hanc1"
+    n_hap_out=$(wc -l < "${prefix}.hanc")
+    n_site_out=$(wc -l < "${prefix}.hanc2")
+    echo "[$(date +%T)] [${CHR}] [${model}] .hanc ${n_hap_out} haplotypes -> .hanc2 ${n_site_out} sites"
+    if [[ "$n_hap_out" -ne $(( 2 * n )) ]]; then
+        echo "ERROR: ${prefix}.hanc has ${n_hap_out} haplotypes, expected $(( 2 * n )) for n=${n}." >&2
+        exit 7
+    fi
+    if [[ "$n_site_out" -ne "$N_SITES" ]]; then
+        echo "ERROR: ${prefix}.hanc2 has ${n_site_out} sites, the .snp has ${N_SITES}." >&2
+        exit 7
+    fi
 done < .models.tsv
 rm -f .models.tsv
 
