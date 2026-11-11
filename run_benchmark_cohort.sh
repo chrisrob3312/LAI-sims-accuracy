@@ -77,6 +77,13 @@ REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.33}"
 # ANCESTRY GROUPS (reference_ids/population_aliases.tsv), not raw labels, so
 # HGDP Yoruba is not reported as a gap when 1000 Genomes YRI is in the panel.
 REF_MIN_PER_POP="${REF_MIN_PER_POP:-3}"
+# The model table. Sizes are an experimental-design decision that gets
+# revisited, so they live in a file rather than in the assembler's code.
+# LAT3 is 300 there, not the contract table's 600: NAT N_eff saturates on the
+# DONOR pool (about 31.6 at n=200, 35.3 at 300, 39.9 at 600 with 46 donors),
+# so the extra 400 individuals spend 19% of the imputation budget for roughly
+# 8 effective genomes. More donors lift the whole curve; more people do not.
+MODELS_TSV="${MODELS_TSV:-${REPO_DIR}/reference_ids/models.tsv}"
 
 DRY=0; FROM=""; ONLY=""; FORCE=""
 while [[ $# -gt 0 ]]; do
@@ -195,6 +202,7 @@ if want assemble; then
         run python3 -I "${REPO_DIR}/scripts/assemble-benchmark-cohort.py" \
             --panel "$PANEL_TSV" --refs "$REFS" --suffix "$BENCH_SUFFIX" \
             --design "$DESIGN" --flat-threshold "$FLAT_THRESHOLD" \
+            --models "$MODELS_TSV" \
             --out "${RESULTS}/benchmark_cohort" || FAILED=1
     fi
 fi

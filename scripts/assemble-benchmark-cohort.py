@@ -233,6 +233,15 @@ def main():
                     help="use one homogeneity threshold for every super-pop "
                          "(the plan document's literal 0.93) instead of the "
                          "tiered thresholds 4a applies")
+    ap.add_argument("--models", default="reference_ids/models.tsv",
+                    help="the model table (Doc 20's models.tsv). Model sizes "
+                         "live HERE, not in this file's MODELS list, because "
+                         "they are an experimental-design decision that gets "
+                         "revisited -- LAT3 is 300 rather than the contract "
+                         "table's 600 because NAT N_eff saturates on the DONOR "
+                         "pool, so the extra 400 individuals cost 19% of the "
+                         "imputation budget for about 8 effective genomes. "
+                         "Falls back to the built-in table when absent.")
     ap.add_argument("--design", choices=DESIGNS, default="paired-builds",
                     help="paired-builds (default): one chip per individual, "
                          "BOTH builds -- the liftover comparison is then "
@@ -458,6 +467,44 @@ def main():
         })
 
     # ---- step 8: deal into the six chip x build cells ------------------
+    # Load the model table from file when present; the built-in MODELS list is
+    # the fallback so the script still runs standalone.
+    global MODELS
+    if a.models and os.path.exists(a.models):
+        loaded, bad = [], []
+        with open(a.models) as fh:
+            for ln in fh:
+                ln = ln.split("#", 1)[0].rstrip("\n")
+                if not ln.strip():
+                    continue
+                f = ln.split("\t")
+                if len(f) < 7 or f[0].strip() == "model":
+                    continue
+                try:
+                    comp = tuple(x.strip() for x in f[1].split(","))
+                    prop = tuple(float(x) for x in f[2].split(","))
+                    gen, nn = int(f[3]), int(f[4])
+                except (ValueError, IndexError):
+                    bad.append(f[0]); continue
+                if len(comp) != len(prop):
+                    bad.append(f[0]); continue
+                if abs(sum(prop) - 1.0) > 1e-6:
+                    bad.append(f"{f[0]} (proportions sum to {sum(prop):g})")
+                    continue
+                loaded.append((f[0].strip(), comp, prop, gen, nn, f[6].strip()))
+        if bad:
+            sys.exit(f"FATAL: unusable row(s) in {a.models}: {bad}. "
+                     f"components and proportions must be comma lists of the "
+                     f"same length, and proportions must sum to 1.")
+        if loaded:
+            MODELS = loaded
+            tot = sum(m[4] for m in MODELS)
+            print(f"[models] {a.models}: {len(MODELS)} models, {tot} simulated "
+                  f"individuals")
+    else:
+        print(f"[models] {a.models} not found -- using the built-in table "
+              f"({sum(m[4] for m in MODELS)} individuals)")
+
     units, chips_of, builds_of = axis_for(a.design)
     groups = defaultdict(list)
     for t in test:

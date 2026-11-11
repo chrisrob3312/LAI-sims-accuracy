@@ -1,0 +1,38 @@
+# models.tsv -- the simulated cohort, one row per model (SIMSET_CONTRACT v2, Doc 20)
+#
+# Columns are the contract's: model, components, proportions, generations,
+# n_individuals, focal_ancestry, priority, cohort. components and proportions
+# are comma lists in the same order, and proportions sum to 1.
+#
+# LAT3 IS 300, NOT THE CONTRACT TABLE'S 600.
+#
+# N_eff for the NAT component saturates: with 46 donors it is about 31.6 at
+# n=200, 35.3 at 300 and 39.9 at 600. Going 200 -> 600 therefore spends 400
+# extra imputation-server samples -- 19% of the whole cohort -- to buy roughly
+# 8 effective genomes, because the ceiling is set by the DONOR pool, not by n.
+# More donors raise the whole curve; more people do not.
+#
+# 300 keeps margin over 200 for any measure that wants raw count (switch-error
+# rates are the candidate) while saving 14% of the server budget. Set it back
+# to 600 here if the switch-error analysis turns out to need it -- nothing
+# else has to change, because 6b batches from the donor lists and the cell
+# deal rebalances itself.
+#
+# The AMR donor pool is the thing worth growing: the Peruvian Genome Project
+# and the Indigenous American Genomic Diversity Project are both outstanding
+# requests, and either would lift NAT N_eff at every n.
+#
+model	components	proportions	generations	n_individuals	focal_ancestry	priority	cohort
+LAT3	NAT,EUR,AFR	0.50,0.45,0.05	16	300	NAT	primary	POOLED
+CAR3	NAT,EUR,AFR	0.10,0.50,0.40	16	200	AFR	secondary	POOLED
+AFAM2	AFR,EUR	0.80,0.20	7	200	AFR	secondary	POOLED
+MENA3	EUR,MEN,AFR	0.30,0.50,0.20	30	200	MEN	secondary	POOLED
+MENEUR	MEN,EUR	0.50,0.50	2	200	MEN	secondary	POOLED
+EASEUR	EAS,EUR	0.50,0.50	2	200	EAS	secondary	POOLED
+SASEUR	SAS,EUR	0.50,0.50	2	200	SAS	secondary	POOLED
+NAT1	NAT	1.0	0	60	NAT	control	POOLED
+EUR1	EUR	1.0	0	60	EUR	control	POOLED
+AFR1	AFR	1.0	0	60	AFR	control	POOLED
+EAS1	EAS	1.0	0	60	EAS	control	POOLED
+SAS1	SAS	1.0	0	60	SAS	control	POOLED
+MEN1	MEN	1.0	0	60	MEN	control	POOLED
