@@ -293,10 +293,16 @@ Measured on chr22 for 6 samples: **24–28% of each sample's ALT calls**,
 Almarri's heterozygosity and ALT frequencies were cut by about a quarter, a
 cohort signal (November's Almarri-only cluster) rather than ancestry. v4 makes
 every such call **missing** (SHAPEIT5 fills it from LD, as for any gap):
-FILTER not PASS once `ALMARRI_PASS_FILTERS` are removed (Long Ranger filters
-about the *phase*, not the genotype -- SHAPEIT5 re-phases everyone; only
-filters a file's header defines are removed), or GQ ≤ `MIN_GQ` (20) or
-missing. Two `setGT` passes, because a single expression mixing the site-level
+FILTER not PASS, or GQ ≤ `MIN_GQ` (20) or missing. Long Ranger 2.2.2's four
+filters on one sample's chr22 (16,629 non-PASS ALT calls, ~96% het): allele
+fraction (AO < 2 or < 0.15), rescued molecule in high-divergence sequence,
+phasing-inconsistent (the ALT does not segregate with the linked-read
+haplotypes -- the false-het signature of paralogous sequence, high GQ because
+GQ counts reads), and QUAL. All four are genotype filters, so
+`ALMARRI_PASS_FILTERS` (for a filter about the phase only) stays empty. The
+missingness guard runs on the merge before the site mask: masked, wholly
+missing records (segmental duplications) would fail a correct merge, and after
+the mask an unfilled one could pass. Two `setGT` passes, because a single expression mixing the site-level
 FILTER with per-sample GQ applies only the GQ part (bcftools 1.19, tested).
 Stamp `v4 fixref=<mode> lowq=missing minGQ=<n> pass=<filters> sitemask=<0|1>`;
 per-sample cache tagged by the same settings.

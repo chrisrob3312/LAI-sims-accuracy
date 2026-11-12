@@ -66,8 +66,8 @@
 #
 # v4: a low-quality call becomes MISSING (./.), never 0/0 -- as SGDP's raw prep
 # does with FL < 1 -- and SHAPEIT5 fills it from LD like any other gap:
-#   * FILTER not PASS (after removing ALMARRI_PASS_FILTERS: Long Ranger filters
-#     about the PHASE, not the genotype, which SHAPEIT5 redoes anyway), or
+#   * FILTER not PASS (after removing ALMARRI_PASS_FILTERS, for a filter about
+#     the PHASE only -- none of Long Ranger's is; see the setting), or
 #   * GQ <= MIN_GQ, or GQ missing.
 # Then `merge -0` fills only what is ABSENT from a sample's file (no call at
 # all) as 0/0; a missing call stays missing. Site mask, as for SGDP: where
@@ -102,8 +102,21 @@ REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 MIN_GQ="${MIN_GQ:-20}"
 # Long Ranger FILTER values to treat as passing (space-separated, beyond PASS):
-# filters about the PHASE of a call, not its genotype -- SHAPEIT5 re-phases the
-# whole panel. Everything else non-PASS is set missing.
+# only a filter about the PHASE of a call, not its genotype, belongs here --
+# SHAPEIT5 re-phases the whole panel. None does, so the default is empty.
+# Long Ranger 2.2.2's filters, and one sample's chr22 non-PASS ALT calls
+# (16,629; ~96% het; 12 Nov 2026):
+#   10X_ALLELE_FRACTION_FILTER          AO < 2 or ALT fraction < 0.15     ~8.2k
+#   10X_RESCUED_MOLECULE_HIGH_DIVERSITY reads placed by barcode rescue in
+#                                       high-divergence sequence          ~5.6k
+#   10X_PHASING_INCONSISTENT            alleles that do not segregate with
+#                                       the linked-read haplotypes        ~3.6k
+#   10X_QUAL_FILTER                     QUAL <= 15 (or hom-ALT QUAL < 50) ~2.1k
+#   (counts include calls carrying two or three of them)
+# PHASING_INCONSISTENT is not "phase uncertain": an ALT on both haplotypes'
+# molecules is the signature of a false het, typically paralogous sequence in
+# segmental duplications. Its GQ is high (3,583 of 3,593 > 20) because GQ comes
+# from read counts, which a paralog inflates. All four are genotype filters.
 ALMARRI_PASS_FILTERS="${ALMARRI_PASS_FILTERS:-}"
 # Site mask: where more Almarri genotypes are missing than ALT, set all of
 # Almarri missing at that site (1 = on, as SGDP_SITE_MASK).
@@ -356,44 +369,50 @@ M0="${TMP}/almarri.merged.unmasked.bcf"
 bcftools merge -m none -0 -l "$LIST" --threads "$THREADS" -Ou \
   | bcftools annotate -x 'INFO,^FORMAT/GT' --threads "$THREADS" -Ob -o "$M0"
 bcftools index -f "$M0"
-# Site mask, as SGDP's: where more Almarri genotypes are missing than ALT, the
-# cohort's evidence there is mostly low-quality calls, so all of Almarri is
-# set missing rather than half-trusted.
-N_SITES_MASK=$(bcftools query -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")' -f '%POS\n' "$M0" | wc -l)
-if [[ "$ALMARRI_SITE_MASK" == "1" ]]; then
-    bcftools +setGT "$M0" -Ob -o "$MERGED" -- -t q -n . -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")'
-    rm -f "$M0" "${M0}.csi"
-    echo "[$(date +%T)] [chr${CHR}] site mask: all of Almarri set missing at ${N_SITES_MASK} sites (more missing than ALT)"
-else
-    mv "$M0" "$MERGED"; rm -f "${M0}.csi"
-    echo "[$(date +%T)] [chr${CHR}] ALMARRI_SITE_MASK=0: no site mask (${N_SITES_MASK} sites would qualify)"
-fi
-bcftools index -f "$MERGED"
 
 # --------------------------------------------------------------------------
-# 4. Prove the absent sites were filled.
-# If they were not, the merge would still succeed and emit a BCF that is ~99%
-# missing genotypes. That panel would then be phased and carried through every
-# downstream stage looking superficially fine. Measure it instead of trusting
-# it. Missing calls left on purpose (low quality, site mask) are a few percent.
+# 4. Prove the absent genotypes were filled -- on the merge BEFORE the site
+# mask. Unfilled, a merge of single-sample files is ~99% missing (a record is
+# called only in its carriers), the BCF still writes, and the panel would be
+# phased looking superficially fine. Measured before the mask because the mask
+# blanks exactly the records an unfilled merge leaves mostly missing, so after
+# it the failure could pass; and because masked, wholly-missing records -- in
+# the segmental duplications the first 20k records of chr22 are full of --
+# would fail a correct merge. Here only the low-quality calls are missing.
 # --------------------------------------------------------------------------
-NSAMP=$(bcftools query -l "$MERGED" | wc -l)
-NREC=$(bcftools view -H "$MERGED" | wc -l)
+NSAMP=$(bcftools query -l "$M0" | wc -l)
+NREC=$(bcftools view -H "$M0" | wc -l)
 [[ "$NREC" -gt 0 ]] || { echo "ERROR: merged chr${CHR} has no records"; exit 1; }
 # The producer is wrapped so its SIGPIPE death (head -20000 closes the pipe
 # long before a whole chromosome is written) cannot fail the assignment under
 # pipefail. Sampling the first 20k records is deliberate: the question is
-# whether the absent sites were filled at all, and that is visible immediately.
-FRAC_MISSING=$( { bcftools query -f '[%GT\t]\n' "$MERGED" || true; } | head -20000 \
+# whether the absent genotypes were filled at all, and that is visible at once.
+FRAC_MISSING=$( { bcftools query -f '[%GT\t]\n' "$M0" || true; } | head -20000 \
   | awk '{for(i=1;i<=NF;i++){t++; if($i=="./."||$i==".|."||$i==".") m++}} END{printf "%.4f", (t>0?m/t:1)}')
-echo "[$(date +%T)] [chr${CHR}] merged: ${NSAMP} samples, ${NREC} records, missing GT fraction ${FRAC_MISSING}"
+echo "[$(date +%T)] [chr${CHR}] merged: ${NSAMP} samples, ${NREC} records, missing GT fraction before the site mask ${FRAC_MISSING}"
 if awk -v f="$FRAC_MISSING" -v m="$MAX_MISSING" 'BEGIN{exit !(f>m)}'; then
     echo "ERROR: ${FRAC_MISSING} of genotypes are missing, above MAX_MISSING=${MAX_MISSING}." >&2
-    echo "       That is the signature of a merge whose absent sites were not" >&2
-    echo "       filled: single-sample VCFs carry no hom-ref sites, so every site" >&2
+    echo "       That is the signature of a merge whose absent genotypes were not" >&2
+    echo "       filled: single-sample VCFs carry no hom-ref sites, so a genotype" >&2
     echo "       absent from a sample is ./. unless merge -0 fills it." >&2
     exit 3
 fi
+
+# --------------------------------------------------------------------------
+# 5. Site mask, as SGDP's: where more Almarri genotypes are missing than ALT,
+# the cohort's evidence there is mostly low-quality calls, so all of Almarri is
+# set missing rather than half-trusted.
+# --------------------------------------------------------------------------
+N_SITES_MASK=$(bcftools query -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")' -f '%POS\n' "$M0" | wc -l)
+if [[ "$ALMARRI_SITE_MASK" == "1" ]]; then
+    bcftools +setGT "$M0" -Ob -o "$MERGED" -- -t q -n . -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")'
+    rm -f "$M0" "${M0}.csi"
+    echo "[$(date +%T)] [chr${CHR}] site mask: all of Almarri set missing at ${N_SITES_MASK} of ${NREC} sites (more missing than ALT)"
+else
+    mv "$M0" "$MERGED"; rm -f "${M0}.csi"
+    echo "[$(date +%T)] [chr${CHR}] ALMARRI_SITE_MASK=0: no site mask (${N_SITES_MASK} of ${NREC} sites would qualify)"
+fi
+bcftools index -f "$MERGED"
 # Per-sample heterozygous and missing genotypes (bcftools stats PSC: $6 nHets,
 # $14 nMissing), so a cohort-wide shift in either shows in every run's log.
 read -r MEAN_HET MEAN_MISS < <(bcftools stats -s - "$MERGED" \
