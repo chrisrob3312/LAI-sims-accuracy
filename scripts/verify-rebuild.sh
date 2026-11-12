@@ -244,24 +244,45 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
                 [[ "$l" == *homog* ]] && ! is_new "$f" && continue
                 awk -v l="$l" 'NF {print "R", $1, l}' "$f"
             done
+            # IDs 4a keeps out of the homogeneous panel anyway: 1e's duplicate
+            # drop list (when it is this rebuild's) and the named exclusions.
+            [[ -f "$DROP" && "$DROP" -nt "$P22" ]] && awk 'NF && $1 !~ /^#/ {print "X", $1, "-"}' "$DROP"
+            [[ -s reference_ids/panel_exclude_ids.txt ]] && awk 'NF && $1 !~ /^#/ {print "X", $1, "-"}' reference_ids/panel_exclude_ids.txt
         } > "$DR"
         awk -v OFS='\t' '
-            FNR == NR { if ($1 == "D") { x = ($2 in d) ? d[$2] "," $3 : $3; d[$2] = x }
-                        else           { x = ($2 in r) ? r[$2] "," $3 : $3; r[$2] = x }
+            FNR == NR { if      ($1 == "D") { v = ($2 in d) ? d[$2] "," $3 : $3; d[$2] = v }
+                        else if ($1 == "R") { v = ($2 in r) ? r[$2] "," $3 : $3; r[$2] = v }
+                        else                  x[$2] = 1
                         next }
             FNR == 1  { sub(/^#/, ""); for (i = 1; i <= NF; i++) h[$i] = i; next }
             { a = $h["IID1"]; b = $h["IID2"]; ks = $h["KINSHIP"]; k = ks + 0
-              if (!((a in d && b in r) || (b in d && a in r))) next
+              if ((a in d) == (b in d)) next          # neither is a donor, or both are
               if (!(a in d)) { t = a; a = b; b = t }
-              print a, d[a], b, r[b], ks, (k > 0.354 ? "duplicate" : k > 0.177 ? "1st" : k > 0.0884 ? "2nd" : "3rd") }' \
+              print a, d[a], b, ((b in r) ? r[b] : (b in x) ? "(excluded by 4a)" : "(no list)"), ks,
+                    (k > 0.354 ? "duplicate" : k > 0.177 ? "1st" : k > 0.0884 ? "2nd" : "3rd") }' \
             "$DR" "$KIN" | sort -t$'\t' -k5,5gr > "${DR}.hits"
-        NCL=$(awk -F'\t' '$6 != "3rd"' "${DR}.hits" | wc -l); N3=$(awk -F'\t' '$6 == "3rd"' "${DR}.hits" | wc -l)
+        NCL=$(awk -F'\t' '$4 !~ /^\(/ && $6 != "3rd"' "${DR}.hits" | wc -l)
+        N3=$(awk -F'\t' '$4 !~ /^\(/ && $6 == "3rd"' "${DR}.hits" | wc -l)
+        NOL=$(awk -F'\t' '$4 == "(no list)" && $6 != "3rd"' "${DR}.hits" | wc -l)
+        NOL3=$(awk -F'\t' '$4 == "(no list)" && $6 == "3rd"' "${DR}.hits" | wc -l)
+        NX=$(awk -F'\t' '$4 == "(excluded by 4a)"' "${DR}.hits" | wc -l)
+        [[ "$NX" -eq 0 ]] || info "${NX} relative(s) of donors are on 1e's duplicate drop list or panel_exclude_ids.txt (4a keeps them out; not listed below)"
         if [[ "$NCL" -eq 0 ]]; then pass "no simulation donor has a 2nd-degree or closer relative in a reference list"
-        else fail "${NCL} donor/reference pair(s) at 2nd degree or closer: hold 2b_simu and fix the lists before it starts"; fi
+        else fail "${NCL} donor/reference pair(s) at 2nd degree or closer: take one of each pair off its list before the stage that reads it starts (2b: donor lists; 3b / FLARE: reference lists)"; fi
         [[ "$N3" -eq 0 ]] || warn "${N3} donor/reference pair(s) at 3rd degree (kinship 0.0442-0.0884)"
-        if [[ -s "${DR}.hits" ]]; then
-            info "donor  donor_lists  reference  reference_lists  kinship  degree (raw):"
-            sed 's/^/          /' "${DR}.hits"
+        # Relatives on no list yet: 4a excludes the donors themselves from the
+        # homogeneous panel, by ID, but not their relatives -- so until 4a has
+        # written amr_homog_rfmix.txt these are candidates for the HOMOG arms.
+        if [[ "$NOL" -gt 0 ]]; then
+            if is_new "reference_ids/amr_homog_rfmix.txt"; then
+                info "${NOL} close relative(s) of donors elsewhere in the panel, on no reference list"
+            else
+                warn "${NOL} close relative(s) of donors elsewhere in the panel: 4a excludes donors by ID, not their relatives, and could admit these to amr_homog_rfmix.txt"
+            fi
+        fi
+        if [[ $((NCL + N3 + NOL)) -gt 0 ]]; then
+            info "donor  donor_lists  relative  relative_lists  kinship  degree (raw; 3rd degree on no list omitted: ${NOL3}):"
+            awk -F'\t' '$4 != "(excluded by 4a)" && !($4 == "(no list)" && $6 == "3rd")' "${DR}.hits" | sed 's/^/          /'
         fi
         rm -f "$DR" "${DR}.hits"
     fi

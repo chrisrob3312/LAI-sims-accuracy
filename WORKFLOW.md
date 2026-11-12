@@ -311,7 +311,11 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    are no unused ones to replace them with. `verify-rebuild.sh` attributes
    each list's missing IDs to this drop, and (section 7) checks KING's
    table for any donor with a relative at 3rd degree or closer in a
-   reference list. 2b's donor/reference check compares IDs only.
+   reference list. 2b's donor/reference check compares IDs only. It also
+   lists donors' close relatives elsewhere in the panel: `related_outliers.txt`
+   covers HGDP+1KG pairs only, and 4a keeps the donors themselves out of the
+   homogeneous panel (by ID) but not their relatives, so an SGDP, MXB or
+   Almarri relative of an HGDP donor can reach `amr_homog_rfmix.txt`.
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
    excluded → **3,921** in November. Then **every input's remaining
    multi-allelic records are split** (`norm -m -any`): `merge -m none` joins
