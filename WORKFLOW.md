@@ -133,6 +133,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | once, before the first chained run | `bash scripts/reset-publication-outputs.sh` — moves the previous `02_simulations` / `03_rfmix` / `03_flare` gen12 trees aside and writes `rebuild_epoch`. The RFMix and FLARE arms reuse any output they find, whatever its age, so without this the old pilot would be skipped over as done and re-scored; the driver refuses to chain them until `--check` passes | moves (never deletes) |
 | plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
+| after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
 | any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
 
 ---
@@ -356,7 +357,12 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    records only on identical REF+ALT, so a SNP allele inside a cohort's
    multi-allelic or SNP+indel record never met another cohort's biallelic
    record, and with the fill below that cohort would read 0/0 on it.
-3. Site provenance logged (from these files, before any fill). Then the
+3. Site provenance logged (from these files, before any fill) -- COUNTS per
+   cohort and class (absent / swapped / flipped / other ALT / other REF), at
+   three stages: `provenance/chrN.{merged,qc,softunion}.{cohorts,patterns}.tsv`
+   and `[provenance ...]` lines in the 1c log. The POSITIONS, with each
+   cohort's missingness and AF, come from `scripts/cohort-site-report.sh`
+   after 1c (`provenance/chrN.site_report.tsv.gz`). Then the
    **0/0 fill** (`FILL_REF_COHORTS`, rebuild default **"HGDP1KG MXB
    ALMARRI"**; 1c on its own: off): for a cohort whose file is a complete
    variant callset, a record absent from it is 0/0 for that cohort instead of
