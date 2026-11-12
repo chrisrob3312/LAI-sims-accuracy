@@ -63,6 +63,18 @@ echo "  repo: ok"
 echo "  cluster paths: ok"
 
 # 0c. Tools
+# R_LIBS_USER exactly as run_accuracy_pilot.sh sets it, BEFORE the dplyr check:
+# /opt/biobuilds-2016.04 otherwise shadows the env's tidyverse with a 2016
+# magrittr R 4 refuses to load, and this precheck would fail on a library the
+# scoring step itself never uses. Exported, so the scoring step sees the same.
+if [[ -z "${R_LIBS_USER:-}" ]]; then
+    if [[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX}/lib/R/library" ]]; then
+        export R_LIBS_USER="${CONDA_PREFIX}/lib/R/library"
+    elif [[ -d "$HOME/.conda/envs/shapeit5/lib/R/library" ]]; then
+        export R_LIBS_USER="$HOME/.conda/envs/shapeit5/lib/R/library"
+    fi
+fi
+echo "  R_LIBS_USER=${R_LIBS_USER:-<unset>}"
 command -v Rscript >/dev/null                   || die "Rscript not on PATH (conda activate shapeit5?)"
 command -v git     >/dev/null                   || die "git not on PATH"
 Rscript -e 'suppressMessages(library(dplyr))' 2>/dev/null \

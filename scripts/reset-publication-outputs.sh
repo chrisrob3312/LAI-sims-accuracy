@@ -90,5 +90,6 @@ if [[ -n "${DRY_RUN:-}" ]]; then
     echo "[reset] DRY RUN -- nothing moved, no epoch written"
     exit 0
 fi
-echo "rebuild_epoch ${STAMP} commit=$(git -C "$REPO_DIR" rev-parse --short HEAD)" > "$EPOCH"
+# (cd ...) rather than git -C: the cluster's git (1.8) has no -C.
+echo "rebuild_epoch ${STAMP} commit=$(cd "$REPO_DIR" && git rev-parse --short HEAD)" > "$EPOCH"
 echo "[reset] wrote ${EPOCH}: $(cat "$EPOCH")"

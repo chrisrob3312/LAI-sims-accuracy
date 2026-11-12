@@ -98,8 +98,17 @@ PLUGINS=$(bcftools plugin -l)
 for pl in fill-tags fixref missing2ref setGT; do
     if grep -qw -- "$pl" <<<"$PLUGINS"; then pass "bcftools plugin ${pl}"; else fail "bcftools plugin ${pl} missing"; fi
 done
-RCHK=$(Rscript -e 'm <- c("dplyr","tidyr","readr","ggplot2","purrr"); x <- m[!sapply(m, requireNamespace, quietly = TRUE)]; cat(if (length(x)) paste(x, collapse=" ") else "OK")' 2>&1)
-if [[ "$RCHK" == "OK" ]]; then pass "R packages for accuracy_v2.R (dplyr tidyr readr ggplot2 purrr)"; else fail "R packages missing for accuracy_v2.R: ${RCHK}"; fi
+# R exactly as run_accuracy_pilot.sh runs it: with R_LIBS_USER on the shapeit5
+# env's R library, because a system-wide /opt/biobuilds-2016.04 library
+# otherwise shadows the env's tidyverse with a 2016 magrittr R 4 cannot load.
+RLU="${R_LIBS_USER:-}"
+if [[ -z "$RLU" ]]; then
+    if [[ -n "${CONDA_PREFIX:-}" && -d "${CONDA_PREFIX}/lib/R/library" ]]; then RLU="${CONDA_PREFIX}/lib/R/library"
+    elif [[ -d "$HOME/.conda/envs/shapeit5/lib/R/library" ]]; then RLU="$HOME/.conda/envs/shapeit5/lib/R/library"; fi
+fi
+RCHK=$(R_LIBS_USER="$RLU" Rscript -e 'for (p in c("dplyr","tidyr","readr","ggplot2","purrr")) suppressMessages(library(p, character.only = TRUE)); cat("OK\n")' 2>&1)
+if [[ "$(tail -1 <<<"$RCHK")" == "OK" ]]; then pass "R packages for accuracy_v2.R load (dplyr tidyr readr ggplot2 purrr; R_LIBS_USER=${RLU:-unset})"
+else fail "R packages for accuracy_v2.R do not load with R_LIBS_USER=${RLU:-unset}; R said:"; echo "$RCHK" | sed 's/^/          /'; fi
 info "java: $(java -version 2>&1 | awk 'NR == 1')"
 
 section "3. reference files"
