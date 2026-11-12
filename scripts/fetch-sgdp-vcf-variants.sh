@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=sgdp_fetch
 #SBATCH --partition=atkinson,mhgcp
+# sbatch passes on the submitting shell's PATH, so with the conda env active
+# curl may be the env's build: same SIGILL exclusion as every other stage.
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=72:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
