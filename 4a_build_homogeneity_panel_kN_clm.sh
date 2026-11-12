@@ -838,8 +838,56 @@ if [[ -s "$PANEL_EXCLUDE" ]]; then
 else
     echo "[$(date +%T)]   WARNING: no named-exclusion list at ${PANEL_EXCLUDE}"
 fi
+# Donors' RELATIVES. The panel keeps relatives (only duplicates are removed,
+# by 1e), but a relative pair is never split across donor and reference: a
+# reference holding a donor's first-degree relative holds long stretches of
+# that donor's haplotypes, which inflates accuracy exactly as the donor itself
+# would. Same rule and threshold as split-homog-donors-reference.py
+# (--role-kinship 0.177): a donor's relatives go where the donor is -- out of
+# the homogeneous panel, which the HOMOG arms use as reference. ID checks
+# (above, and 2b's) cannot see this.
+ROLE_KINSHIP="${ROLE_KINSHIP:-0.177}"
+KING_KIN0="${KING_KIN0:-${HOMOG_DIR}/king/king.kin0}"
+DONOR_REL="${ADM_DIR}/donor_relatives.k${K}.tsv"
+if [[ -s "$KING_KIN0" ]]; then
+    python3 -I - "$KING_KIN0" "$ROLE_KINSHIP" "$DONOR_REL" "$REFS" <<'PYEOF'
+import glob, os, sys
+kin_f, thr, out_f, refs = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4]
+donors = {}
+for f in sorted(glob.glob(os.path.join(refs, "*_simulation.txt"))):
+    for line in open(f):
+        w = line.split()
+        if w:
+            donors.setdefault(w[0], []).append(os.path.basename(f)[:-len(".txt")])
+with open(kin_f) as fh:
+    head = fh.readline().lstrip("#").rstrip("\n").split("\t")
+    idx = {n: i for i, n in enumerate(head)}
+    miss = [c for c in ("IID1", "IID2", "KINSHIP") if c not in idx]
+    if miss:
+        sys.exit(f"ERROR: {kin_f} header {head} lacks {miss}")
+    pairs = []
+    for line in fh:
+        f = line.rstrip("\n").split("\t")
+        a, b, k = f[idx["IID1"]], f[idx["IID2"]], float(f[idx["KINSHIP"]])
+        if k < thr or (a in donors) == (b in donors):
+            continue
+        d, r = (a, b) if a in donors else (b, a)
+        pairs.append((r, d, k))
+with open(out_f, "w") as g:
+    g.write("relative\tdonor\tdonor_lists\tkinship\n")
+    for r, d, k in sorted(pairs, key=lambda x: -x[2]):
+        g.write(f"{r}\t{d}\t{','.join(donors[d])}\t{k:.4f}\n")
+print(f"  donors' relatives at KING >= {thr}: {len({p[0] for p in pairs})} sample(s), "
+      f"{len(pairs)} pair(s) -> {out_f}")
+PYEOF
+    awk -F'\t' 'NR > 1 {print $1}' "$DONOR_REL" >> "$SIM_DONORS"
+    if [[ $(wc -l < "$DONOR_REL") -gt 1 ]]; then sed 's/^/    /' "$DONOR_REL"; fi
+else
+    echo "[$(date +%T)]   WARNING: no ${KING_KIN0} (1e not run): donors' relatives are NOT kept"
+    echo "[$(date +%T)]   out of the homogeneous panel; 2b's kinship check cannot run either."
+fi
 sort -u -o "$SIM_DONORS" "$SIM_DONORS"
-echo "[$(date +%T)] simulation donors to exclude from the homog panel: $(wc -l < "$SIM_DONORS")"
+echo "[$(date +%T)] simulation donors (and their relatives) to exclude from the homog panel: $(wc -l < "$SIM_DONORS")"
 
 echo "[$(date +%T)] write lai_ref_panel_samples.k${K}.tsv"
 SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"

@@ -80,6 +80,17 @@
 #                      the MHC and the chr9 pericentromere, which ran out of
 #                      time at the main array's limit in November).
 #   THROTTLE / CHUNK_THROTTLE   per-array concurrency (default 15 / 60).
+#   OUTLIERS           none (default): 1c keeps relatives -- only duplicates are
+#                      removed (1e), and 2b / 4a keep relatives at KING >= 0.177
+#                      on one side of the donor/reference split. A 2-column
+#                      (super-pop, sample) file instead drops those IDs, e.g. the
+#                      lab's related_outliers.txt that July and November dropped.
+#
+# RE-SUBMITTING WHILE PREPS RUN. A prep job (1a, SGDP prep, 1d) already queued
+# or running is ADOPTED -- 1c waits on it -- never submitted a second time: two
+# copies of one prep write the same files (three copies of 1a, 3753425-7,
+# failed on one shared temp VCF). Jobs from 1c onward that are still queued
+# from an earlier submission make this script refuse: cancel them first.
 # =============================================================================
 set -euo pipefail
 
@@ -119,8 +130,21 @@ HEAVY_CHUNKS="${HEAVY_CHUNKS:-209,302}"
 THROTTLE="${THROTTLE:-15}"
 CHUNK_THROTTLE="${CHUNK_THROTTLE:-60}"
 CHUNKS_TSV="${CHUNKS_TSV:-${REPO_DIR}/resources/b38_chunks.tsv}"
+OUTLIERS="${OUTLIERS:-none}"
 
 die () { echo "[rebuild] FATAL: $*" >&2; exit 2; }
+WHO="${USER:-$(id -un)}"
+# Array master id of a job of this name that is queued or running, or "".
+# Two different ids = two copies already in flight, which no re-submission
+# should paper over.
+inflight () {
+    command -v squeue > /dev/null || { echo ""; return 0; }
+    local ids
+    ids=$(squeue -h -u "$WHO" -n "$1" -o %A | sort -u)
+    [[ $(awk 'NF' <<<"$ids" | wc -l) -le 1 ]] || die "two '$1' jobs are already queued or running" \
+        "($(tr '\n' ' ' <<<"$ids")): cancel the duplicate before re-submitting"
+    echo "$ids"
+}
 
 # ---- prechecks: everything a stage would discover hours in ----------------
 [[ -s "$CHUNKS_TSV" ]] || die "missing ${CHUNKS_TSV} (build with resources/build_b38_chunks.py)"
@@ -138,6 +162,7 @@ if [[ "$SGDP_PREP" == "1b_sgdp_liftover_clm.sh" ]]; then
     [[ " ${FILL_REF_COHORTS} " != *" SGDP "* ]] || die "FILL_REF_COHORTS includes SGDP, but SGDP_PREP" \
         "is the imputed release: a site missing from it is one 1KG phase 3 lacks, not a 0/0."
 fi
+[[ "$OUTLIERS" == none || -s "$OUTLIERS" ]] || die "OUTLIERS=${OUTLIERS} not found (none keeps every sample)"
 case "$SOFTUNION_GROUPS" in superpop|sample_groups) ;; *) die "SOFTUNION_GROUPS must be superpop or sample_groups";; esac
 case "$FIXREF_MODE" in flip|flip-all) ;; *) die "FIXREF_MODE must be flip or flip-all";; esac
 for s in scripts/build-missingness-groups.py scripts/admix-site-filter.py scripts/sbatch-when-ready.sh \
@@ -222,9 +247,39 @@ submit () {   # submit <label> <sbatch args...> <script>
     echo "$jid"
 }
 
+# Prep jobs already in flight are adopted, not duplicated (header).
+jobname_of () { awk -F= '/^#SBATCH --job-name=/ {print $2; exit}' "$1"; }
+J_1A_LIVE=$(inflight "$(jobname_of 1a_prep-mxb-liftover_clm.sh)")
+J_SG_LIVE=""
+if [[ "$SGDP_PREP" != "none" ]]; then J_SG_LIVE=$(inflight "$(jobname_of "$SGDP_PREP")"); fi
+J_1D_LIVE=$(inflight "$(jobname_of 1d_almarri_prep_clm.sh)")
+for _j in "$J_1A_LIVE" "$J_SG_LIVE" "$J_1D_LIVE"; do
+    [[ -z "$_j" || "$_j" =~ ^[0-9]+$ ]] || die "could not read an in-flight prep job id (got '${_j}')"
+done
+# Anything from 1c onward that is still queued belongs to an earlier
+# submission, and this one would run beside it on the same files.
+DOWNSTREAM_NAMES=" 1c_phase 1b_chunk 1b_ligate 1e_king_dedup 4a_homog_kN 2b_simu 3b_rfmix 3b_homog 3b_chip 3b_chip_homog 3b_flare finalize_pilot "
+if command -v squeue > /dev/null; then
+    QUEUED=$(squeue -h -u "$WHO" -o '%A %j %T' | awk -v n="$DOWNSTREAM_NAMES" 'index(n, " " $2 " ")' | sort -u)
+    if [[ -n "$QUEUED" ]]; then
+        echo "[rebuild] jobs from 1c onward are still queued from an earlier submission:" >&2
+        sed 's/^/            /' <<<"$QUEUED" >&2
+        if [[ -n "$DRY_RUN" ]]; then
+            echo "[rebuild] DRY RUN: a real run REFUSES until they are cancelled" >&2
+        else
+            die "cancel them first (scancel --state=PENDING -u ${WHO} -n <name> for each name above)"
+        fi
+    fi
+fi
+
 echo "[rebuild] chunks: ${N_CHUNKS} (main ${MAIN_SPEC}; heavy ${HEAVY_CHUNKS})" >&2
 echo "[rebuild] HGDP+1KG source: ${HGDP1KG_PATTERN}" >&2
-echo "[rebuild] fixref mode (every prep): ${FIXREF_MODE}; MXB stamp: ${MXB_MODE} -> re-lift MXB: ${RERUN_MXB}" >&2
+echo "[rebuild] relatedness: OUTLIERS=${OUTLIERS}$([[ "$OUTLIERS" == none ]] && echo ' -- relatives kept; 1e drops duplicates only')" >&2
+if [[ -n "$J_1A_LIVE" ]]; then
+    echo "[rebuild] fixref mode (every prep): ${FIXREF_MODE}; MXB: adopting 1a job ${J_1A_LIVE} (queued or running)" >&2
+else
+    echo "[rebuild] fixref mode (every prep): ${FIXREF_MODE}; MXB stamp: ${MXB_MODE} -> re-lift MXB: ${RERUN_MXB}" >&2
+fi
 echo "[rebuild] SGDP prep: ${SGDP_PREP}${SGDP_STATE:+; ${SGDP_STATE}}" >&2
 echo "[rebuild] absent-as-0/0 cohorts: ${FILL_REF_COHORTS:-(none)}; fill check ${FILL_GUARD}" \
      "(groups >= ${FILL_GUARD_MIN_N}, >= ${FILL_GUARD_MIN_AC} copies, P < ${FILL_GUARD_MAX_P})" >&2
@@ -232,14 +287,19 @@ echo "[rebuild] soft-union MAF groups: ${SOFTUNION_GROUPS}" >&2
 echo "[rebuild] ADMIXTURE site rule: groups <= ${ADMIX_GROUP_MAXMISS} (n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}" >&2
 echo "[rebuild] 4a reads: ${ADMIX_INPUT:-phased} (site filter ${ADMIX_SITE_FILTER:-1}); 1e reads: ${KING_INPUT:-phased} (site filter ${KING_SITE_FILTER:-1})" >&2
 
+adopt () { echo "[rebuild] $1: adopting job $2 (already queued or running)" >&2; echo "$2"; }
 PREP_DEPS=()
-if [[ "$RERUN_MXB" == "1" ]]; then
+if [[ -n "$J_1A_LIVE" ]]; then
+    PREP_DEPS+=("$(adopt 1a_mxb "$J_1A_LIVE")")
+elif [[ "$RERUN_MXB" == "1" ]]; then
     PREP_DEPS+=("$(submit 1a_mxb 1a_prep-mxb-liftover_clm.sh)")
 fi
 if [[ "$SGDP_PREP" != "none" ]]; then
-    PREP_DEPS+=("$(submit sgdp_prep --array=1-22%${THROTTLE} ${SGDP_DEP[@]+"${SGDP_DEP[@]}"} "$SGDP_PREP")")
+    if [[ -n "$J_SG_LIVE" ]]; then PREP_DEPS+=("$(adopt sgdp_prep "$J_SG_LIVE")")
+    else PREP_DEPS+=("$(submit sgdp_prep --array=1-22%${THROTTLE} ${SGDP_DEP[@]+"${SGDP_DEP[@]}"} "$SGDP_PREP")"); fi
 fi
-PREP_DEPS+=("$(submit 1d_almarri --array=1-22%${THROTTLE} 1d_almarri_prep_clm.sh)")
+if [[ -n "$J_1D_LIVE" ]]; then PREP_DEPS+=("$(adopt 1d_almarri "$J_1D_LIVE")")
+else PREP_DEPS+=("$(submit 1d_almarri --array=1-22%${THROTTLE} 1d_almarri_prep_clm.sh)"); fi
 DEP_1C=$(IFS=:; echo "${PREP_DEPS[*]}")
 
 # 1c's settings travel in the environment of THIS submission only (sbatch
@@ -250,7 +310,7 @@ DEP_1C=$(IFS=:; echo "${PREP_DEPS[*]}")
 J_1C=$(export PHASE_MODE=chunked REQUIRE_COHORTS="SGDP ALMARRI" \
            HGDP1KG_PATTERN ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS ADMIX_MISS_MIN_N \
            FILL_REF_COHORTS FILL_GUARD FILL_GUARD_MIN_N FILL_GUARD_MIN_AC FILL_GUARD_MAX_P \
-           SOFTUNION_GROUPS
+           SOFTUNION_GROUPS OUTLIERS
        submit 1c_merge --array=1-22%${THROTTLE} --dependency=afterok:${DEP_1C} \
            1c_phasing-jointcall_clm.sh)
 J_CH=$(submit chunks --array=${MAIN_SPEC}%${CHUNK_THROTTLE} --dependency=afterok:${J_1C} \

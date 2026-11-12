@@ -11,7 +11,8 @@ Create with `conda env create -f envs/shapeit5.yml`, activate with `conda activa
 1a_prep-mxb-liftover_clm.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
-1c_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
+1c_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG (relatives kept, `OUTLIERS=none`;
+earlier panels used the post-outlier set) with the lifted MXB, SGDP and Almarri,
 applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
 plink2 site QC, and SHAPEIT5_phase_common joint phasing. Imputation will be done with
 TOPMed/All-of-Us so rare-variant phasing is OFF by default; set `RUN_PHASE_RARE=1` at submit

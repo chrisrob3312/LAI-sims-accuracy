@@ -161,12 +161,19 @@ else
         PIDS="${TMPDIR:-/tmp}/verify_panel_ids.$$"; RIDS="${TMPDIR:-/tmp}/verify_ro_ids.$$"
         bcftools query -l "$F21" | sort > "$PIDS"
         if [[ -s "$OUTLIERS" ]]; then awk 'NF {print $2}' "$OUTLIERS" | sort -u > "$RIDS"; else : > "$RIDS"; fi
+        # What 1c dropped for relatedness, from its stamp (outliers=none: nobody).
+        SO=""
+        if [[ -s "${F21}.recipe" ]]; then SO=$(grep -o 'outliers=[^ ]*' "${F21}.recipe" | head -1); SO="${SO#outliers=}"; fi
+        info "1c relatedness drop (stamp): outliers=${SO:-<not recorded: built before the setting existed>}"
         for l in amr_rfmix afr_rfmix eur_rfmix pel_rfmix pel_eas_rfmix amr_hgdpmxb_rfmix mxb_rfmix mxb_simulation \
                  amr_simulation amr_hgdpmxb_simulation afr_simulation eur_simulation; do
             miss=$(awk 'NF {print $1}' "reference_ids/${l}.txt" | sort -u | comm -23 - "$PIDS")
             m=$(awk 'NF' <<<"$miss" | wc -l)
             [[ "$m" -eq 0 ]] && continue
-            if [[ -s "$OUTLIERS" ]]; then
+            if [[ "$SO" == none ]]; then
+                warn "reference_ids/${l}.txt: ${m} IDs not in the panel, and 1c dropped nobody for relatedness -- check the list:" \
+                     "$(awk 'NF' <<<"$miss" | head -5 | tr '\n' ' ')"
+            elif [[ -s "$OUTLIERS" ]]; then
                 ro=$(awk 'NF' <<<"$miss" | comm -12 - "$RIDS" | wc -l)
                 warn "reference_ids/${l}.txt: ${m} IDs not in the panel, ${ro} of them on 1c's related/outlier drop list (the arms run without them)"
             else
@@ -219,12 +226,13 @@ if is_new "$P22" && [[ -s "$DP" && "$DP" -nt "$P22" ]]; then
     if [[ -f "$DROP" && "$DROP" -nt "$P22" ]]; then pass "drop list for 4a: $(awk 'NF' "$DROP" | wc -l) IDs (${DROP})"
     else fail "1e wrote duplicate pairs but no current drop list at ${DROP} (4a reads it)"; fi
 else info "not yet (no duplicate list from this rebuild's phased panel)"; fi
-# Donor/reference RELATIVES. 2b refuses an ID that is both a simulation donor
-# and a reference sample, but it compares IDs only. A donor's close relative in
-# a reference list leaks the same way at a smaller dose -- RFMix is handed long
-# stretches of that donor's haplotypes -- and no ID check can see it. 1c's
-# related_outliers.txt drop covers close HGDP+1KG pairs; this covers every
-# cohort, from the KING table 1e writes (every pair at kinship >= 0.0442).
+# Donor/reference RELATIVES. The project keeps relatives (1e removes duplicates
+# only) under one rule: a pair at KING >= ROLE_KINSHIP (0.177, first degree)
+# is never split across donor and reference, or RFMix is handed long stretches
+# of a donor's haplotypes (split-homog-donors-reference.py, 4a and 2b apply
+# it). 2b's ID check cannot see relatives. This reads 1e's table (every pair
+# >= 0.0442) as soon as 1e is done, before 4a and 2b run.
+ROLE_KINSHIP="${ROLE_KINSHIP:-0.177}"
 KIN="${HOMOG_DIR}/king/king.kin0"
 if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
     KH=$(head -1 "$KIN")
@@ -249,7 +257,7 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
             [[ -f "$DROP" && "$DROP" -nt "$P22" ]] && awk 'NF && $1 !~ /^#/ {print "X", $1, "-"}' "$DROP"
             [[ -s reference_ids/panel_exclude_ids.txt ]] && awk 'NF && $1 !~ /^#/ {print "X", $1, "-"}' reference_ids/panel_exclude_ids.txt
         } > "$DR"
-        awk -v OFS='\t' '
+        awk -v OFS='\t' -v thr="$ROLE_KINSHIP" '
             FNR == NR { if      ($1 == "D") { v = ($2 in d) ? d[$2] "," $3 : $3; d[$2] = v }
                         else if ($1 == "R") { v = ($2 in r) ? r[$2] "," $3 : $3; r[$2] = v }
                         else                  x[$2] = 1
@@ -259,30 +267,23 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
               if ((a in d) == (b in d)) next          # neither is a donor, or both are
               if (!(a in d)) { t = a; a = b; b = t }
               print a, d[a], b, ((b in r) ? r[b] : (b in x) ? "(excluded by 4a)" : "(no list)"), ks,
-                    (k > 0.354 ? "duplicate" : k > 0.177 ? "1st" : k > 0.0884 ? "2nd" : "3rd") }' \
+                    (k > 0.354 ? "duplicate" : k > 0.177 ? "1st" : k > 0.0884 ? "2nd" : "3rd"),
+                    (k >= thr ? "SPLIT" : "-") }' \
             "$DR" "$KIN" | sort -t$'\t' -k5,5gr > "${DR}.hits"
-        NCL=$(awk -F'\t' '$4 !~ /^\(/ && $6 != "3rd"' "${DR}.hits" | wc -l)
+        NBR=$(awk -F'\t' '$4 !~ /^\(/ && $7 == "SPLIT"' "${DR}.hits" | wc -l)
+        N2=$(awk -F'\t' '$4 !~ /^\(/ && $7 != "SPLIT" && $6 == "2nd"' "${DR}.hits" | wc -l)
         N3=$(awk -F'\t' '$4 !~ /^\(/ && $6 == "3rd"' "${DR}.hits" | wc -l)
-        NOL=$(awk -F'\t' '$4 == "(no list)" && $6 != "3rd"' "${DR}.hits" | wc -l)
-        NOL3=$(awk -F'\t' '$4 == "(no list)" && $6 == "3rd"' "${DR}.hits" | wc -l)
+        NOL=$(awk -F'\t' '$4 == "(no list)" && $7 == "SPLIT"' "${DR}.hits" | wc -l)
         NX=$(awk -F'\t' '$4 == "(excluded by 4a)"' "${DR}.hits" | wc -l)
+        if [[ "$NBR" -eq 0 ]]; then pass "no donor/reference pair at KING >= ${ROLE_KINSHIP} (relatives stay on one side)"
+        else fail "${NBR} donor/reference pair(s) at KING >= ${ROLE_KINSHIP}: relatives on both sides. 2b refuses to run with them -- move the reference member to the donor side (or off its list) before 2b starts"; fi
+        [[ "$N2" -eq 0 ]] || warn "${N2} donor/reference pair(s) at 2nd degree (kept and reported; the one-side rule is >= ${ROLE_KINSHIP})"
+        [[ "$N3" -eq 0 ]] || info "${N3} donor/reference pair(s) at 3rd degree (kept and reported)"
+        [[ "$NOL" -eq 0 ]] || info "${NOL} first-degree relative(s) of donors on no list: 4a keeps them out of the homogeneous panel (admixture_k${K}/donor_relatives.k${K}.tsv)"
         [[ "$NX" -eq 0 ]] || info "${NX} relative(s) of donors are on 1e's duplicate drop list or panel_exclude_ids.txt (4a keeps them out; not listed below)"
-        if [[ "$NCL" -eq 0 ]]; then pass "no simulation donor has a 2nd-degree or closer relative in a reference list"
-        else fail "${NCL} donor/reference pair(s) at 2nd degree or closer: take one of each pair off its list before the stage that reads it starts (2b: donor lists; 3b / FLARE: reference lists)"; fi
-        [[ "$N3" -eq 0 ]] || warn "${N3} donor/reference pair(s) at 3rd degree (kinship 0.0442-0.0884)"
-        # Relatives on no list yet: 4a excludes the donors themselves from the
-        # homogeneous panel, by ID, but not their relatives -- so until 4a has
-        # written amr_homog_rfmix.txt these are candidates for the HOMOG arms.
-        if [[ "$NOL" -gt 0 ]]; then
-            if is_new "reference_ids/amr_homog_rfmix.txt"; then
-                info "${NOL} close relative(s) of donors elsewhere in the panel, on no reference list"
-            else
-                warn "${NOL} close relative(s) of donors elsewhere in the panel: 4a excludes donors by ID, not their relatives, and could admit these to amr_homog_rfmix.txt"
-            fi
-        fi
-        if [[ $((NCL + N3 + NOL)) -gt 0 ]]; then
-            info "donor  donor_lists  relative  relative_lists  kinship  degree (raw; 3rd degree on no list omitted: ${NOL3}):"
-            awk -F'\t' '$4 != "(excluded by 4a)" && !($4 == "(no list)" && $6 == "3rd")' "${DR}.hits" | sed 's/^/          /'
+        if [[ $((NBR + N2 + N3 + NOL)) -gt 0 ]]; then
+            info "donor  donor_lists  relative  relative_lists  kinship  degree  split (raw):"
+            awk -F'\t' '$4 !~ /^\(/ || ($4 == "(no list)" && $7 == "SPLIT")' "${DR}.hits" | sed 's/^/          /'
         fi
         rm -f "$DR" "${DR}.hits"
     fi
@@ -296,6 +297,12 @@ if is_new "$P22" && [[ -s "$ST" && "$ST" -nt "$P22" ]]; then
     shopt -s nullglob; ANCH=(reference_ids/*_anchors.k${K}.txt); shopt -u nullglob
     if [[ ${#ANCH[@]} -gt 0 ]]; then info "anchors per super-pop:"; wc -l "${ANCH[@]}" | sed 's/^/          /'
     else fail "4a wrote no reference_ids/*_anchors.k${K}.txt"; fi
+    DRL="${HOMOG_DIR}/admixture_k${K}/donor_relatives.k${K}.tsv"
+    if [[ -f "$DRL" && "$DRL" -nt "$P22" ]]; then
+        info "4a kept $(( $(wc -l < "$DRL") - 1 )) relative(s) of simulation donors (KING >= ${ROLE_KINSHIP}) out of the homogeneous panel: ${DRL}"
+    else
+        warn "no current ${DRL}: this 4a ran without the donor-relatives rule (or without 1e's KING table)"
+    fi
     info "samples by super-pop: total / included (raw):"
     awk -F'\t' 'NR == 1 {for (i = 1; i <= NF; i++) h[$i] = i; next}
                 {t[$h["super_pop"]]++; if ($h["included"] == 1) n[$h["super_pop"]]++}

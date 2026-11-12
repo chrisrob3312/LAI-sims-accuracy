@@ -51,8 +51,9 @@ B. COHORT PREP (in parallel; FIXREF_MODE=flip-all in every prep)
 C. MERGE + SITE SELECTION   1c_phasing-jointcall_clm.sh (PHASE_MODE=chunked, array 1-22)
     - skip when the published soft-union is newer than every input and stamped
       with the same settings and code
-    - HGDP+1KG: drop related_outliers.txt + panel_exclude_ids.txt (Koenig's 60
-      QC removals, CHMI); chr-prefix; norm -m -any -c w -> +fixref -m flip-all -d
+    - HGDP+1KG: drop panel_exclude_ids.txt (Koenig's 60 QC removals, CHMI);
+      relatives KEPT (OUTLIERS=none; July/November dropped related_outliers.txt);
+      chr-prefix; norm -m -any -c w -> +fixref -m flip-all -d
     - add SGDP, Almarri (drop IDs already present or excluded)
     - refuse unless every cohort's prep stamp records the same fixref mode
     - split any multi-allelic record left in any input (norm -m -any)
@@ -291,33 +292,39 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
   hash of 1c and its helpers); otherwise rebuilds (`FORCE_1C=1` always does).
 - *Fixref consistency:* reads each cohort's prep stamp and stops if any was
   made with a different `FIXREF_MODE` than 1c's own HGDP+1KG step.
-1. HGDP+1KG: drop `related_outliers.txt` + `panel_exclude_ids.txt`
-   (`bcftools view -S ^drop`) → 3,398 + MXB. Job 3742123 resolved the
-   exclusion list to Slurm's spool directory, found nothing, and kept
-   `CHMI_CHMI3_WGS2`; 1c now stops instead, and 4a / the benchmark exclude
-   CHMI by name. Then `norm -m -any -c w` + `+fixref -m ${FIXREF_MODE} -d` (flip-all): every
-   multi-allelic record split (was `-m -snps`, which left SNP+indel records
-   whole), REF checked against GRCh38.
-   *The reference and donor lists name 28 of the dropped IDs* (checked
-   against the November panel, 12 Nov 2026: every one is in v2 and on
-   `related_outliers.txt`). No stage complains: 2b and 3b select samples
-   with `plink2 --keep` and FLARE with `bcftools view --force-samples`, which
-   skip absent IDs. So July and November ran with fewer samples than the
-   lists hold: `amr_rfmix` 20 of 31 (Maya 11, Pima 3, Karitiana 2, Surui 2,
-   Colombian 2), `amr_hgdpmxb_rfmix` 45 of 56, `afr_rfmix` 48 of 50,
-   `eur_rfmix` 49 of 50, `pel_rfmix` 84 of 86, `pel_eas_rfmix` 576 of 587,
-   `amr_simulation` 28 of 31, `amr_hgdpmxb_simulation` 53 of 56. All 62 HGDP
-   Indigenous American genomes are on one of the two AMR lists, so there
-   are no unused ones to replace them with. `verify-rebuild.sh` attributes
-   each list's missing IDs to this drop, and (section 7) checks KING's
-   table for any donor with a relative at 3rd degree or closer in a
-   reference list. 2b's donor/reference check compares IDs only. It also
-   lists donors' close relatives elsewhere in the panel: `related_outliers.txt`
-   covers HGDP+1KG pairs only, and 4a keeps the donors themselves out of the
-   homogeneous panel (by ID) but not their relatives, so an SGDP, MXB or
-   Almarri relative of an HGDP donor can reach `amr_homog_rfmix.txt`.
+1. HGDP+1KG: drop `panel_exclude_ids.txt` (`bcftools view -S ^drop`). Job
+   3742123 resolved the exclusion list to Slurm's spool directory, found
+   nothing, and kept `CHMI_CHMI3_WGS2`; 1c now stops instead, and 4a / the
+   benchmark exclude CHMI by name. Then `norm -m -any -c w` + `+fixref -m
+   ${FIXREF_MODE} -d` (flip-all): every multi-allelic record split (was
+   `-m -snps`, which left SNP+indel records whole), REF checked against GRCh38.
+
+   **Relatives are kept** (`OUTLIERS=none`, the default from 12 Nov 2026),
+   the policy 1e and the benchmark already state: only duplicates / MZ twins
+   are removed (1e, KING > 0.354); the GWAS models kinship with a GRM
+   (GENESIS); and pruning relatives preferentially removes less-studied
+   populations, where background relatedness is higher. The one rule: a pair
+   at KING >= 0.177 is never split across donor / reference / test. It is
+   applied by `split-homog-donors-reference.py` (benchmark), by 4a (a
+   simulation donor's relatives are kept out of the homogeneous panel, listed
+   in `admixture_k8/donor_relatives.k8.tsv`) and by 2b (refuses to simulate
+   while a donor has such a relative in any reference list; its ID check
+   cannot see relatives). `verify-rebuild.sh` section 7 shows the same pairs
+   as soon as 1e has run, before 4a and 2b.
+
+   *July and November dropped `related_outliers.txt` here* (693 IDs,
+   relatives and outliers; 3,398 HGDP+1KG kept). The reference and donor
+   lists name 28 of them; no stage complained, because 2b and 3b select
+   samples with `plink2 --keep` and FLARE with `bcftools view
+   --force-samples`, which skip absent IDs. So those runs used fewer samples
+   than the lists hold: `amr_rfmix` 20 of 31 (Maya 11, Pima 3, Karitiana 2,
+   Surui 2, Colombian 2), `amr_hgdpmxb_rfmix` 45 of 56, `afr_rfmix` 48 of
+   50, `eur_rfmix` 49 of 50, `pel_rfmix` 84 of 86, `pel_eas_rfmix` 576 of
+   587, `amr_simulation` 28 of 31, `amr_hgdpmxb_simulation` 53 of 56. With
+   relatives kept the lists are whole again. `OUTLIERS=<2-col file>` restores
+   a drop; 1c stamps which (`outliers=` in the soft-union's `.recipe`).
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
-   excluded → **3,921** in November. Then **every input's remaining
+   excluded → **3,921** in November (relatives dropped; more with them kept). Then **every input's remaining
    multi-allelic records are split** (`norm -m -any`): `merge -m none` joins
    records only on identical REF+ALT, so a SNP allele inside a cohort's
    multi-allelic or SNP+indel record never met another cohort's biallelic

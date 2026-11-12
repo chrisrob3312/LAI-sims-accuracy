@@ -25,7 +25,8 @@
 #      al.'s UNFILTERED phased_haplotypes_v2 release: 4,091 QC'd genomes, SNVs
 #      and indels, no MAF cut -- so the MAF floor is applied per super-pop in
 #      step 4 instead of inherited from filter1's global -q 0.005), drop the
-#      kinship outliers in related_outliers.txt and the named exclusions,
+#      named exclusions (and, only if OUTLIERS names a list, those IDs --
+#      by default nobody is dropped for relatedness; see OUTLIERS below),
 #      chr-prefix contigs, split every multi-allelic record and check REF
 #      against GRCh38 (norm -m -any -c w, +fixref). Prior phase is irrelevant:
 #      the merged panel is re-phased jointly.
@@ -79,7 +80,18 @@ PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_P
 # variants that are common in one super-pop and rare overall. The prior phase
 # is not used: the merged panel is re-phased jointly.
 HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chr__CHR__.filtered.SNV_INDEL.phased.shapeit5.bcf}"
-OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
+# RELATEDNESS. Relatives are KEPT -- the project's policy, stated in
+# 1e_king_dedup_clm.sh: only duplicates / MZ twins are removed (1e, KING >
+# 0.354); the GWAS models kinship with a GRM (GENESIS); every donor /
+# reference / test split keeps relatives at KING >= 0.177 on ONE side (2b, 4a,
+# split-homog-donors-reference.py). Pruning relatives would preferentially
+# remove less-studied populations, where background relatedness is higher.
+#   OUTLIERS=none    (default) drop nobody for relatedness.
+#   OUTLIERS=<file>  drop column 2 of a 2-column (super-pop, sample) list --
+#                    e.g. the lab's related_outliers.txt (693 IDs, relatives
+#                    and outliers), which the July and November panels dropped:
+#   /storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt
+OUTLIERS="${OUTLIERS:-none}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
 
@@ -155,6 +167,11 @@ EXCLUDE_IDS="${EXCLUDE_IDS:-${REPO_DIR}/reference_ids/panel_exclude_ids.txt}"
     echo "       REPO_DIR=${REPO_DIR} (from SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-unset})" >&2
     echo "       Pass EXCLUDE_IDS=<path> explicitly, or submit from the repo." >&2
     exit 1; }
+if [[ "$OUTLIERS" != none && ! -s "$OUTLIERS" ]]; then
+    echo "ERROR: OUTLIERS=${OUTLIERS} does not exist or is empty." >&2
+    echo "       OUTLIERS=none keeps every sample (relatives included)." >&2
+    exit 1
+fi
 
 mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 
@@ -198,7 +215,11 @@ _code_md5=$(cat "${BASH_SOURCE[0]}" "${REPO_DIR}/scripts/fill-contradictions.py"
                "${REPO_DIR}/scripts/admix-site-filter.py" "${REPO_DIR}/scripts/site-provenance.py" \
             | md5sum | cut -c1-12)
 _excl_md5=$(md5sum < "$EXCLUDE_IDS" | cut -c1-12)
-PUB_RECIPE="1c code=${_code_md5} excl=${_excl_md5} src=${HGDP1KG_PATTERN}"
+# The relatedness drop is part of the stamp: a soft-union built without
+# relatives must never be reused as one built with them, or the reverse.
+if [[ "$OUTLIERS" == none ]]; then _outl=none; _outl_in=""
+else _outl=$(md5sum < "$OUTLIERS" | cut -c1-12); _outl_in="$OUTLIERS"; fi
+PUB_RECIPE="1c code=${_code_md5} excl=${_excl_md5} outliers=${_outl} src=${HGDP1KG_PATTERN}"
 for _v in FILL_REF_COHORTS FILL_GUARD FILL_GUARD_MIN_N FILL_GUARD_MIN_AC FILL_GUARD_MAX_P \
           SOFTUNION_GROUPS FIXREF_MODE HGDP1KG_NORMALIZE ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS \
           ADMIX_MISS_MIN_N REQUIRE_COHORTS; do
@@ -210,7 +231,7 @@ if [[ "${PHASE_MODE:-whole}" == "chunked" && "${FORCE_1C:-0}" != "1" \
    && [[ "$(cat "${PUB}.recipe")" == "$PUB_RECIPE" ]] && bcftools view -h "$PUB" > /dev/null; then
     _stale=""
     for _in in "${HGDP1KG_PATTERN//__CHR__/$CHR}" "$MXB_LIFTED" "$SGDP_PREPPED" "$ALMARRI_PREPPED" \
-               "$EXCLUDE_IDS" "$SAMPLE_GROUPS" "$OUTLIERS" "${REPO_DIR}/reference_ids/sgdp_manifest.tsv"; do
+               "$EXCLUDE_IDS" "$SAMPLE_GROUPS" "$_outl_in" "${REPO_DIR}/reference_ids/sgdp_manifest.tsv"; do
         if [[ -e "$_in" && "$_in" -nt "$PUB" ]]; then _stale+=" $(basename "$_in")"; fi
     done
     if [[ -z "$_stale" ]]; then
@@ -225,7 +246,8 @@ elif [[ -s "$PUB" ]]; then
 fi
 rm -f "${PUB}.recipe"
 
-# 1. Resolve per-chrom HGDP+1KG file, drop kinship outliers, normalize contig
+# 1. Resolve per-chrom HGDP+1KG file, drop the named exclusions (and the
+#    OUTLIERS list, if one is given), normalize contig
 #    naming to chr-prefixed (to match the lifted MXB BCF from step 1a).
 #
 #    HGDP1KG_PATTERN expands the literal token __CHR__ to the chromosome
@@ -235,9 +257,12 @@ rm -f "${PUB}.recipe"
 #    discarded -- this gives the joint phasing of all cohorts that we need.
 #
 #    v2 (like filter1, which is cut from it) holds 4,091 samples including
-#    relatives; we drop the kinship outliers in related_outliers.txt. The file is 2 cols (super-pop,
-#    sample_id) -- bcftools -S expects one ID per line, so extract col 2 to
-#    a temp file first.
+#    relatives, and keeps them (OUTLIERS=none, the default). The July and
+#    November panels dropped related_outliers.txt here (693 IDs), which took
+#    11 of the 31 amr_rfmix samples -- 4 of 6 Karitiana, 4 of 7 Pima -- out of
+#    every RFMix run without an error. An OUTLIERS list is 2 cols (super-pop,
+#    sample_id); bcftools -S expects one ID per line, so col 2 goes to a temp
+#    file first.
 HGDP1KG_CHR_SRC="${HGDP1KG_PATTERN//__CHR__/$CHR}"
 [[ -s "$HGDP1KG_CHR_SRC" ]] || {
     echo "ERROR: missing per-chrom HGDP+1KG file $HGDP1KG_CHR_SRC"
@@ -245,9 +270,15 @@ HGDP1KG_CHR_SRC="${HGDP1KG_PATTERN//__CHR__/$CHR}"
     exit 1
 }
 
-echo "[$(date +%T)] [chr${CHR}] drop kinship outliers from $HGDP1KG_CHR_SRC"
-OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.txt"
-awk '{print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
+OUTLIERS_IDS="${TMPDIR}/related_outlier_ids.chr${CHR}.txt"
+if [[ "$OUTLIERS" == none ]]; then
+    : > "$OUTLIERS_IDS"
+    echo "[$(date +%T)] [chr${CHR}] relatedness drop: none (OUTLIERS=none -- relatives kept;" \
+         "1e removes duplicates only)"
+else
+    awk 'NF {print $2}' "$OUTLIERS" > "$OUTLIERS_IDS"
+    echo "[$(date +%T)] [chr${CHR}] dropping the $(wc -l < "$OUTLIERS_IDS") IDs listed in ${OUTLIERS}"
+fi
 
 # Fold the named exclusions in with the kinship outliers so there is ONE drop
 # list and one bcftools pass. Reported separately, because "excluded by name"

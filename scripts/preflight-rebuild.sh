@@ -23,7 +23,8 @@ PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 BRANCH="${BRANCH:-claude/setup-shapeit5-conda-xlcdl}"
 SR=/storage/atkinson/shared_resources/reference
 HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-${SR}/ReferencePanels/TGP_HGDP_jointcall/original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chr__CHR__.filtered.SNV_INDEL.phased.shapeit5.bcf}"
-OUTLIERS="${OUTLIERS:-${SR}/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
+# none (the rebuild default): 1c keeps relatives. A file: 1c drops its column 2.
+OUTLIERS="${OUTLIERS:-none}"
 GNOMAD_META="${GNOMAD_META:-${SR}/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/gnomad_meta_updated.tsv}"
 REF_FA="${REF_FA:-${SR}/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 CHAIN="${CHAIN:-${SR}/genetic_maps/liftover/hg19ToHg38.over.chain.gz}"
@@ -136,7 +137,9 @@ if [[ -s "$F22" ]]; then
     N22=$(bcftools query -l "$F22" | wc -l)
     if [[ "$N22" -eq 4091 ]]; then pass "chr22: ${N22} samples"; else warn "chr22: ${N22} samples (4,091 expected)"; fi
 fi
-if [[ -s "$OUTLIERS" ]]; then pass "related_outliers.txt: $(wc -l < "$OUTLIERS") lines"; else fail "missing ${OUTLIERS}"; fi
+if [[ "$OUTLIERS" == none ]]; then pass "relatedness drop: none (OUTLIERS=none -- relatives kept, 1e drops duplicates only)"
+elif [[ -s "$OUTLIERS" ]]; then pass "relatedness drop list ${OUTLIERS}: $(wc -l < "$OUTLIERS") lines"
+else fail "OUTLIERS=${OUTLIERS} is missing (none keeps every sample)"; fi
 file_ok "gnomAD metadata (4a)" "$GNOMAD_META"
 if [[ -s "$SAMPLE_GROUPS" ]]; then pass "sample_groups.tsv: $(wc -l < "$SAMPLE_GROUPS") samples"; else fail "missing ${SAMPLE_GROUPS} (make_sample_groups.sh)"; fi
 

@@ -162,6 +162,50 @@ if [[ "$OVERLAP" -gt 0 ]]; then
     echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
 fi
 
+# ---------------------------------------------------------------------------
+# DONOR <-> REFERENCE RELATIVES. The same leak one step removed: the panel
+# keeps relatives (1e removes duplicates only), so a donor's first-degree
+# relative can sit in a reference list, handing RFMix long stretches of the
+# donor's haplotypes. The project's rule -- relatives at KING >= ROLE_KINSHIP
+# (0.177) stay on ONE side of the donor/reference/test split, as in
+# split-homog-donors-reference.py -- checked against 1e's KING table. 4a keeps
+# donors' relatives out of the homogeneous panel; the curated lists in
+# reference_ids/ are fixed by hand, and this is where a breach in them stops.
+# ---------------------------------------------------------------------------
+ROLE_KINSHIP="${ROLE_KINSHIP:-0.177}"
+KING_KIN0="${KING_KIN0:-${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}/king/king.kin0}"
+if [[ -s "$KING_KIN0" ]]; then
+    REL_HITS=$(awk -v thr="$ROLE_KINSHIP" -v OFS='\t' -v dfile="$DONOR_UNION" -v rfile="$REF_UNION" '
+        FILENAME == dfile { don[$1] = 1; next }
+        FILENAME == rfile { ref[$1] = 1; next }
+        FNR == 1 { sub(/^#/, ""); for (i = 1; i <= NF; i++) h[$i] = i
+                   if (!("IID1" in h) || !("IID2" in h) || !("KINSHIP" in h)) { print "BAD_HEADER"; exit }
+                   next }
+        ($h["KINSHIP"] + 0) >= thr {
+            a = $h["IID1"]; b = $h["IID2"]
+            if (b in don && a in ref) { t = a; a = b; b = t }
+            if (a in don && b in ref) print "donor " a, "reference " b, "kinship " $h["KINSHIP"] }' \
+        "$DONOR_UNION" "$REF_UNION" "$KING_KIN0")
+    if [[ "$REL_HITS" == BAD_HEADER* ]]; then
+        echo "ERROR: ${KING_KIN0} has no IID1/IID2/KINSHIP columns -- cannot check donor/reference relatives."
+        exit 1
+    fi
+    N_REL=$(awk 'NF' <<<"$REL_HITS" | wc -l)
+    echo "[$(date +%T)] donor/reference relatives (KING >= ${ROLE_KINSHIP}, ${KING_KIN0}): ${N_REL}"
+    if [[ "$N_REL" -gt 0 ]]; then
+        echo "ERROR: ${N_REL} donor/reference pair(s) are relatives at KING >= ${ROLE_KINSHIP}:"
+        sed 's/^/         /' <<<"$REL_HITS"
+        echo "       Put each pair on ONE side: move the reference member to the donor"
+        echo "       list (or off the reference list), then re-submit this stage."
+        if [[ "${ALLOW_DONOR_IN_REF:-0}" != "1" ]]; then
+            exit 1
+        fi
+        echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
+    fi
+else
+    echo "[$(date +%T)] NOTE: no ${KING_KIN0} (1e has not run) -- donor/reference RELATIVES not checked"
+fi
+
 WORKDIR="${OUTDIR}/${ADMIX_POP}/gen${GEN}"
 mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR"

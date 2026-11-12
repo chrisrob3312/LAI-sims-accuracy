@@ -207,27 +207,26 @@ else
     fi
 fi
 
-# 1b. soft-union sample count -- the SAME 3921 check, available ~10h earlier.
+# 1b. soft-union sample count, available ~10h before the ligated panel.
 #
 # Every chunk phases against ${PANEL_DIR}/merged_<chr>.softunion.bcf, which 1c
-# wrote. Whatever sample count that file carries is what ligate will emit and
-# what stages 4-6 will measure, so there is no reason to wait for the ligated
-# panel to find out whether the cohort additions made it through. If this says
-# 3448 the chunk array is phasing the wrong panel and should be cancelled now,
-# not after 594 tasks have finished.
+# wrote; whatever sample count it carries is what ligate emits and stages 4-6
+# measure. 3,448 = the July panel (HGDP+1KG and MXB only): the chunk array is
+# phasing the wrong panel and should be cancelled now. November's was 3,921
+# with relatives dropped; with relatives kept (OUTLIERS=none) it is larger --
+# the stamp says which.
 su=$(ls -t "$PANEL_DIR"/merged_chr*.softunion.bcf 2>/dev/null | head -1)
 if [[ -z "$su" ]]; then
-    printf ' %-34s %s\n' "soft-union input (3921?)" "not started (1c has written no soft-union)"
+    printf ' %-34s %s\n' "soft-union input" "not started (1c has written no soft-union)"
 else
-    n_su=$(bcftools query -l "$su" 2>/dev/null | wc -l)
-    if [[ "$n_su" -eq 3921 ]]; then
-        printf ' %-34s %s\n' "soft-union input (3921?)" \
-          "ok (${n_su} samples in $(basename "$su") -- chunks are phasing the new panel)"
-    elif [[ "$n_su" -gt 3448 ]]; then
-        printf ' %-34s %s\n' "soft-union input (3921?)" \
-          "${n_su} samples -- more than the old 3448 but not 3921, check 1c cohort adds"
+    n_su=$(bcftools query -l "$su" | wc -l)
+    so="no stamp"
+    [[ -s "${su}.recipe" ]] && so=$(grep -o 'outliers=[^ ]*' "${su}.recipe" | head -1)
+    if [[ "$n_su" -gt 3448 ]]; then
+        printf ' %-34s %s\n' "soft-union input" \
+          "${n_su} samples in $(basename "$su") (${so:-outliers= not in stamp})"
     else
-        printf ' %-34s %s\n' "soft-union input (3921?)" \
+        printf ' %-34s %s\n' "soft-union input" \
           "*** PROBLEM: only ${n_su} samples -- chunks are phasing the OLD panel"
     fi
 fi
