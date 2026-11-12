@@ -163,6 +163,19 @@ def side(lists):
     d = any(x.endswith("_simulation") for x in lists)
     r = any(x.endswith("_rfmix") for x in lists)
     return "both" if (d and r) else "donor" if d else "reference" if r else "none"
+# The column may name only the TYPE of relationship ("[siblings]") and not the
+# partner, in which case no pair can be formed from it -- say so rather than
+# report "0 pairs", which would read as "no relatives across the split".
+EMPTY = {"", "NA", "[]", "{}", "None", "nan"}
+n_typed = sum(1 for s in listed if s in meta for c in rel_cols if meta[s][col[c]].strip() not in EMPTY)
+n_named = sum(1 for s in listed if s in meta for c in rel_cols
+              if any(t != s for t, _ in partners(meta[s][col[c]])))
+print(f"  curated samples with a recorded relationship: {n_typed}; naming the partner: {n_named}")
+if n_typed and not n_named:
+    print("  The column records the TYPE of relationship only (e.g. '[siblings]'), not who with,")
+    print("  so pairs -- and which side each member is on -- cannot be read from the metadata.")
+    print("  First look: 1e's KING table, verify-rebuild.sh section 7, as soon as 1e has run.")
+    sys.exit(0)
 seen = set(); n_split = 0; n_pairs = 0
 for s in sorted(listed):
     r = meta.get(s)
