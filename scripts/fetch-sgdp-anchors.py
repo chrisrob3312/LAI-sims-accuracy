@@ -130,9 +130,15 @@ SGDP_TO_SUPERPOP = {
 
 # SGDP "America" populations that are homogeneous NAT (per Reich lab curation
 # in Mallick et al. 2016 Table S1). Excludes Mexican-American / admixed cohorts.
+#
+# Mixtec (S_Mixtec-1, S_Mixtec-2; Oaxaca, Mexico) added Nov 2026 at the
+# user's request: two public Indigenous Mexican genomes this list had left out.
+# Being a CANDIDATE is not being an anchor or a reference sample -- 4a's
+# data-driven homogeneity filter decides that from the Q values, so a Mixtec
+# genome with European admixture simply does not qualify.
 AMR_POPULATIONS = {
     "Karitiana", "Surui", "Mayan", "Pima", "Mixe",
-    "Zapotec", "Piapoco", "Quechua", "Chane",
+    "Zapotec", "Mixtec", "Piapoco", "Quechua", "Chane",
 }
 
 # WestEurasia populations that we bucket as Middle Eastern.

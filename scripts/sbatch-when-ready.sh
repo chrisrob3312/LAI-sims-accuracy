@@ -118,20 +118,39 @@ while :; do
     fi
     free=$(( CAP - used ))
     if [[ "$free" -ge $(( NEED + MARGIN )) ]]; then
-        jid=$(sbatch --parsable "$@" 2>&1); rc=$?
-        # --parsable gives "id" or "id;cluster"; anything else is an error
-        # message that happens to have been printed on stdout.
-        id="${jid%%;*}"; id="${id%%$'\n'*}"
-        if [[ $rc -eq 0 && "$id" =~ ^[0-9]+$ ]]; then
+        # The id is read from STDOUT only ("id" or "id;cluster" with --parsable).
+        # This cluster's job_submit plugin prints an informational
+        # "sbatch: slurm_job_submit: partition=..." line on STDERR for EVERY job.
+        # Merging stderr into the id and taking its first line read that line as
+        # a refusal and re-submitted a job that had already been queued: three
+        # copies of 1a (3753425-7) from one call. So: stdout parsed, stderr
+        # shown, and a successful sbatch is NEVER retried.
+        errf=$(mktemp)
+        out=$(sbatch --parsable "$@" 2> "$errf"); rc=$?
+        err=$(cat "$errf"); rm -f "$errf"
+        id=$(printf '%s\n' "$out" | awk -F';' '$1 ~ /^[0-9]+$/ {id = $1} END {print id}')
+        [[ -n "$err" ]] && say "sbatch said: ${err//$'\n'/ | }"
+        if [[ $rc -eq 0 && -n "$id" ]]; then
             say "submitted as ${id} (queue was ${used}/${CAP})"
             printf '%s\n' "$id"
             exit 0
         fi
+        if [[ $rc -eq 0 ]]; then
+            say "sbatch exited 0 but printed no job id (stdout: '${out//$'\n'/ | }')."
+            say "A job MAY have been queued, so this does NOT retry. Check: squeue -u ${WHOAMI}"
+            exit 3
+        fi
+        # sbatch failed. Only a transient refusal is worth waiting out; anything
+        # else (bad option, bad partition, bad dependency) fails the same way
+        # every time.
+        if ! grep -qiE 'temporarily|timed out|unable to contact|try again|limit|qos|resource' <<<"${err} ${out}"; then
+            say "sbatch failed (exit ${rc}) with an error waiting will not fix. NOTHING WAS SUBMITTED."
+            exit 4
+        fi
         # Room existed, so this is backpressure, not the cap. Say so: the two
         # need different responses and only one of them is "wait for jobs to
         # finish".
-        say "room existed (${used}/${CAP}) but sbatch refused -- controller backpressure, not the cap"
-        say "  ${jid//$'\n'/ | }"
+        say "room existed (${used}/${CAP}) but sbatch refused (exit ${rc}) -- controller backpressure, not the cap"
     else
         say "queue ${used}/${CAP}, ${free} free, need $(( NEED + MARGIN )) -- waiting"
     fi

@@ -110,16 +110,25 @@ submit() {
     # continues around the hole -- which is how a FLARE arm vanished from a
     # submission while every other stage queued normally and the summary
     # looked complete.
-    local jid="" attempt
+    local jid="" attempt out rc errf
     for attempt in 1 2 3 4 5; do
-        jid=$("${line[@]}" 2>/dev/null || true)
-        # --parsable prints the bare id (or id;cluster)
-        jid="${jid%%;*}"
-        [[ "$jid" =~ ^[0-9]+$ ]] && break
+        # The id is on STDOUT ("id" or "id;cluster"). This cluster's job_submit
+        # plugin prints an informational "sbatch: slurm_job_submit: ..." line on
+        # STDERR for every job: shown here, never parsed. A successful sbatch is
+        # never retried -- that is how a stage gets queued twice.
+        errf=$(mktemp)
+        out=$("${line[@]}" 2> "$errf"); rc=$?
+        [[ -s "$errf" ]] && sed 's/^/        /' "$errf" >&2
+        rm -f "$errf"
+        jid=$(printf '%s\n' "$out" | awk -F';' '$1 ~ /^[0-9]+$/ {id = $1} END {print id}')
+        [[ $rc -eq 0 && -n "$jid" ]] && break
+        if [[ $rc -eq 0 ]]; then
+            die "sbatch exited 0 for [${label}] but printed no job id ('${out}'). A job MAY have been
+       queued: check squeue before re-running anything."
+        fi
         jid=""
         local wait=$((attempt * 20))
-        echo "        sbatch did not return a job id (attempt ${attempt}/5);" \
-             "retrying in ${wait}s" >&2
+        echo "        sbatch failed (exit ${rc}, attempt ${attempt}/5); retrying in ${wait}s" >&2
         sleep "$wait"
     done
     if [[ -z "$jid" ]]; then
