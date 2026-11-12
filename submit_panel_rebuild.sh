@@ -33,16 +33,29 @@
 #                      is off by default. 1 re-lifts MXB too (adds hours ahead
 #                      of 1c).
 #   SGDP_PREP=<script> the SGDP prep to run; default 1b_sgdp_liftover_clm.sh
-#                      (phased_data2021 -- it no-ops on chromosomes already
-#                      prepped). Set to the per-sample prep once it exists.
-#                      SGDP_PREP=none skips the stage.
-#   HGDP1KG_PATTERN    the HGDP+1KG source; default = phased_haplotypes_v2_filter1,
-#                      the source July used (4,091 samples). The u235158 archive
-#                      November used adds 60 samples that are Koenig et al.'s QC
-#                      removals; they are now in panel_exclude_ids.txt either way.
+#                      (phased_data2021, GLIMPSE-imputed against 1KG phase 3).
+#                      The rebuild is meant to use the raw per-sample WGS calls
+#                      (vcf_variants) instead, so this default is REFUSED
+#                      unless ALLOW_IMPUTED_SGDP=1; set SGDP_PREP to the raw
+#                      prep once it exists. SGDP_PREP=none skips the stage.
+#   HGDP1KG_PATTERN    the HGDP+1KG source; default = the UNFILTERED Koenig et
+#                      al. release (original_data_downloads/phased_haplotypes_v2,
+#                      4,091 samples, SNVs + indels, no MAF cut) so 1c applies
+#                      the 0.005 MAF per super-pop. filter1 is the same release
+#                      cut at a global MAF 0.005. The 60 extra samples of the
+#                      u235158 archive are Koenig's QC removals and are in
+#                      panel_exclude_ids.txt.
 #   FILL_REF_COHORTS   cohorts whose file is a complete variant callset, so a
-#                      site absent from it is 0/0 for them (see 1c). Default
-#                      empty; "MXB ALMARRI" for the current sources.
+#                      record absent from it is 0/0 for them, checked against
+#                      the other cohorts (1c 3a). Default "HGDP1KG MXB ALMARRI";
+#                      add SGDP only with the raw per-sample prep (never the
+#                      imputed release -- refused). "" turns the fill off.
+#   FILL_GUARD / FILL_GUARD_MIN_N / FILL_GUARD_MIN_AC / FILL_GUARD_MAX_P
+#                      the fill check (default 1 / 20 / 5 / 1e-3).
+#   SOFTUNION_GROUPS   whose samples define a super-pop's MAF for the soft-union:
+#                      superpop (default; every cohort, pooled by super-pop) or
+#                      sample_groups (the July/November rule: HGDP+1KG and MXB
+#                      only, so a variant only SGDP or Almarri carry is lost).
 #   ADMIX_GROUP_MAXMISS / ADMIX_TOTAL_MAXMISS / ADMIX_MISS_MIN_N
 #                      the ADMIXTURE site rule (default 0.15 / 0.07 / 5).
 #   ADMIX_INPUT / KING_INPUT   phased (default) or softunion: what 4a / 1e read.
@@ -63,8 +76,16 @@ cd "$REPO_DIR"
 DRY_RUN="${DRY_RUN:-}"
 RERUN_MXB="${RERUN_MXB:-0}"
 SGDP_PREP="${SGDP_PREP:-1b_sgdp_liftover_clm.sh}"
-HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr__CHR__.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
-FILL_REF_COHORTS="${FILL_REF_COHORTS:-}"
+ALLOW_IMPUTED_SGDP="${ALLOW_IMPUTED_SGDP:-0}"
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chr__CHR__.filtered.SNV_INDEL.phased.shapeit5.bcf}"
+# ${VAR-default}, not ${VAR:-default}: FILL_REF_COHORTS="" must mean "no fill",
+# not "the default".
+FILL_REF_COHORTS="${FILL_REF_COHORTS-HGDP1KG MXB ALMARRI}"
+FILL_GUARD="${FILL_GUARD:-1}"
+FILL_GUARD_MIN_N="${FILL_GUARD_MIN_N:-20}"
+FILL_GUARD_MIN_AC="${FILL_GUARD_MIN_AC:-5}"
+FILL_GUARD_MAX_P="${FILL_GUARD_MAX_P:-1e-3}"
+SOFTUNION_GROUPS="${SOFTUNION_GROUPS:-superpop}"
 ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.15}"
 ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
 ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
@@ -83,13 +104,23 @@ _probe="${HGDP1KG_PATTERN//__CHR__/22}"
 [[ -s "$_probe" ]] || die "HGDP1KG_PATTERN does not resolve for chr22: ${_probe}"
 [[ -s reference_ids/panel_exclude_ids.txt ]] || die "missing reference_ids/panel_exclude_ids.txt"
 [[ "$SGDP_PREP" == "none" || -f "$SGDP_PREP" ]] || die "SGDP_PREP=${SGDP_PREP} not found"
-for s in scripts/build-missingness-groups.py scripts/admix-site-filter.py scripts/sbatch-when-ready.sh; do
+# The imputed SGDP release is what put a whole-cohort gap at 39.6% of chr22's
+# soft-union in November; the rebuild is meant to use the raw WGS calls.
+if [[ "$SGDP_PREP" == "1b_sgdp_liftover_clm.sh" ]]; then
+    [[ "$ALLOW_IMPUTED_SGDP" == "1" ]] || die "SGDP_PREP is the GLIMPSE-imputed phased_data2021 prep." \
+        "Point SGDP_PREP at the raw per-sample prep, or set ALLOW_IMPUTED_SGDP=1 to use it anyway."
+    [[ " ${FILL_REF_COHORTS} " != *" SGDP "* ]] || die "FILL_REF_COHORTS includes SGDP, but SGDP_PREP" \
+        "is the imputed release: a site missing from it is one 1KG phase 3 lacks, not a 0/0."
+fi
+case "$SOFTUNION_GROUPS" in superpop|sample_groups) ;; *) die "SOFTUNION_GROUPS must be superpop or sample_groups";; esac
+for s in scripts/build-missingness-groups.py scripts/admix-site-filter.py scripts/sbatch-when-ready.sh \
+         scripts/fill-contradictions.py scripts/softunion-sites.py scripts/site-provenance.py; do
     [[ -f "$s" ]] || die "missing $s"
 done
 if [[ ! -s reference_ids/almarri_manifest.tsv ]]; then
     echo "[rebuild] WARNING: no reference_ids/almarri_manifest.tsv -- 4a will label Almarri" >&2
     echo "          MEN from the ID pattern, without the country. Build it first:" >&2
-    echo "            bash scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv" >&2
+    echo "            bash scripts/build-almarri-manifest.sh <almarri_prepped.chrN.bcf> > reference_ids/almarri_manifest.tsv" >&2
 fi
 
 # Main chunk array = every index except the heavy ones.
@@ -121,7 +152,9 @@ submit () {   # submit <label> <sbatch args...> <script>
 echo "[rebuild] chunks: ${N_CHUNKS} (main ${MAIN_SPEC}; heavy ${HEAVY_CHUNKS})" >&2
 echo "[rebuild] HGDP+1KG source: ${HGDP1KG_PATTERN}" >&2
 echo "[rebuild] SGDP prep: ${SGDP_PREP}; MXB liftover rerun: ${RERUN_MXB}" >&2
-echo "[rebuild] absent-as-0/0 cohorts: ${FILL_REF_COHORTS:-(none)}" >&2
+echo "[rebuild] absent-as-0/0 cohorts: ${FILL_REF_COHORTS:-(none)}; fill check ${FILL_GUARD}" \
+     "(groups >= ${FILL_GUARD_MIN_N}, >= ${FILL_GUARD_MIN_AC} copies, P < ${FILL_GUARD_MAX_P})" >&2
+echo "[rebuild] soft-union MAF groups: ${SOFTUNION_GROUPS}" >&2
 echo "[rebuild] ADMIXTURE site rule: groups <= ${ADMIX_GROUP_MAXMISS} (n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}" >&2
 echo "[rebuild] 4a reads: ${ADMIX_INPUT:-phased} (site filter ${ADMIX_SITE_FILTER:-1}); 1e reads: ${KING_INPUT:-phased} (site filter ${KING_SITE_FILTER:-1})" >&2
 
@@ -142,7 +175,8 @@ DEP_1C=$(IFS=:; echo "${PREP_DEPS[*]}")
 # the other stages' submissions.
 J_1C=$(export PHASE_MODE=chunked REQUIRE_COHORTS="SGDP ALMARRI" \
            HGDP1KG_PATTERN ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS ADMIX_MISS_MIN_N \
-           FILL_REF_COHORTS
+           FILL_REF_COHORTS FILL_GUARD FILL_GUARD_MIN_N FILL_GUARD_MIN_AC FILL_GUARD_MAX_P \
+           SOFTUNION_GROUPS
        submit 1c_merge --array=1-22%${THROTTLE} --dependency=afterok:${DEP_1C} \
            1c_phasing-jointcall_clm.sh)
 J_CH=$(submit chunks --array=${MAIN_SPEC}%${CHUNK_THROTTLE} --dependency=afterok:${J_1C} \

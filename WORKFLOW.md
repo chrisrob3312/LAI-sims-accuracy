@@ -73,9 +73,9 @@ NAT accuracy run did not have. Numbers are chr22 from the November run
 
 | cohort | n | source | how it was called |
 |---|---|---|---|
-| HGDP+1KG | 3,398 (July) | `phased_haplotypes_v2_filter1/hgdp1kgp_chrN…filter1_SNP_maf005.vcf.gz` (4,091 samples) | Koenig et al. 2024 joint call (`phased_haplotypes_v2`) + lab filter: SNPs, global MAF ≥ 0.005 (chr21: 201,577 records). **The default again.** November used the u235158 archive instead (4,151 samples, 262,522 chr21 records); its 60 extra samples are Koenig's QC removals and are now excluded by name. The unfiltered `phased_haplotypes_v2` is in `original_data_downloads/` |
+| HGDP+1KG | 3,398 (July) | **Default now:** `original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chrN.filtered.SNV_INDEL.phased.shapeit5.bcf` — Koenig et al. 2024, **unfiltered** (4,091 QC'd samples; SNVs + indels; their site QC HWE / F_MISSING ≤ 0.1 / ExcHet; no MAF cut; chr21: 923,540 SNPs) | Joint call. July and November used `processed_data/phased_haplotypes_v2_filter1` = this release cut to biallelic SNPs at a **global** MAF ≥ 0.005 (chr21: 201,120 of 923,540 SNPs kept), which removed variants common in one super-pop but rare overall before the per-super-pop soft-union could see them. November's u235158 archive (4,151 samples) added Koenig's 60 QC removals; they are excluded by name |
 | MXB | 50 | `mexican_50_autosomes.vcf.gz` | GATK HaplotypeCaller → GenotypeGVCFs **joint call**, PASS, singletons kept; hg19 → lifted by 1a. A site it lacks = no MXB carrier |
-| SGDP | 276 | Reich lab `phased_data2021/chr.sgdp.pub.N.bcf` | **GLIMPSE-imputed against 1KG phase 3** from mpileup (README: "GT: Phased and imputed genotypes"), so only 1KG-p3 sites; hg19 → lifted by 1b_sgdp — **NEW**; to be replaced by a raw SGDP release |
+| SGDP | 276 | Reich lab `phased_data2021/chr.sgdp.pub.N.bcf` | **GLIMPSE-imputed against 1KG phase 3** from mpileup (README: "GT: Phased and imputed genotypes"), so only 1KG-p3 sites; hg19 → lifted by 1b_sgdp. **Being replaced** by the raw per-sample WGS calls, `vcf_variants/` (279 public samples, GATK UnifiedGenotyper, variant sites only, per-call filter level FL, hs37d5; one 57 GB tar): `scripts/fetch-sgdp-vcf-variants.sh` fetches and md5-checks it; the prep (FL filter → merge with absent = 0/0 like Almarri → liftover like 1a) follows. The rebuild driver refuses the imputed release unless `ALLOW_IMPUTED_SGDP=1` |
 | Almarri | 137 | Long Ranger per-sample phased VCFs | 10x linked reads, per-sample GATK, GRCh38 — **NEW** |
 
 **1a — `1a_prep-mxb-liftover_clm.sh`** (MXB; unchanged since July)
@@ -128,40 +128,68 @@ heterozygosity relative to cohorts whose uncertain calls stay missing.
 selection). In July this step was `1b_phase_prep_clm.sh`: the **same** merge →
 QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
 1. HGDP+1KG: drop `related_outliers.txt` + `panel_exclude_ids.txt`
-   (`bcftools view -S ^drop`) → 3,458. Job 3742123 resolved the exclusion list
-   to Slurm's spool directory, found nothing, and kept `CHMI_CHMI3_WGS2`; 1c now
-   stops instead, and 4a / the benchmark exclude CHMI by name.
+   (`bcftools view -S ^drop`) → 3,398 + MXB. Job 3742123 resolved the
+   exclusion list to Slurm's spool directory, found nothing, and kept
+   `CHMI_CHMI3_WGS2`; 1c now stops instead, and 4a / the benchmark exclude
+   CHMI by name. Then `norm -m -any -c w` + `+fixref -m flip -d`: every
+   multi-allelic record split (was `-m -snps`, which left SNP+indel records
+   whole), REF checked against GRCh38.
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
-   excluded → **3,921**
-3. `bcftools merge -m none` of the four files (1,153,425 records in
-   November). Without `-0`, a site absent from a cohort's file is `./.` for
-   that whole cohort. `FILL_REF_COHORTS` (off by default; "MXB ALMARRI" for
-   the current sources) makes it 0/0 for cohorts whose file is a complete
-   variant callset: a sites-only union is merged into each such file with
-   `-0`, which fills only sites the file lacks. Site provenance is logged here.
+   excluded → **3,921** in November. Then **every input's remaining
+   multi-allelic records are split** (`norm -m -any`): `merge -m none` joins
+   records only on identical REF+ALT, so a SNP allele inside a cohort's
+   multi-allelic or SNP+indel record never met another cohort's biallelic
+   record, and with the fill below that cohort would read 0/0 on it.
+3. Site provenance logged (from these files, before any fill). Then the
+   **0/0 fill** (`FILL_REF_COHORTS`, rebuild default **"HGDP1KG MXB
+   ALMARRI"**; 1c on its own: off): for a cohort whose file is a complete
+   variant callset, a record absent from it is 0/0 for that cohort instead of
+   `./.`. Done by merging each such file with `-0` against a union of every
+   input's records that carries one placeholder sample (GT `./.`), then
+   removing the placeholder. The earlier sites-only union could not work:
+   `-0` only fills records at which some input has FORMAT/GT, so the records
+   a cohort lacked came out with no genotype at all (tested on bcftools 1.19;
+   the fill had never run on the cluster). `./.` calls inside a file stay
+   missing. Never for the imputed SGDP release (the driver refuses).
+   Then `bcftools merge -m none` of the four files (1,153,425 records in
+   November).
 4. plink2 site QC: `--max-alleles 2 --snps-only just-acgt --rm-dup exclude-all
-   --set-missing-var-ids @:#[b38]`, then **every position still holding more
-   than one record is dropped** (split multi-allelic sites: cohorts saw
-   different ALTs). Logged with counts; provenance logged again.
-5. **Soft-union site gate.** Groups come from `sample_groups.tsv` = gnomAD
-   HGDP+1KG metadata + MXB only; **SGDP and Almarri are in no group** (groups
-   sum to 3,507 of 3,921; the one missing is CHMI). Per group with ≥ 10
-   samples keep `AN>0 && MAF ≥ 0.005`, then take the union of positions:
-   AFR 768 → 221,495 · AMR 448 → 231,038 · CSA 691 → 164,673 · EAS 736 →
-   140,477 · EUR 682 → 159,766 · MEN 155 (HGDP Middle East, not Almarri) →
-   192,260 · OCE 27 → 109,295 ⇒ **301,309 positions, 301,913 records**
-   - SGDP and Almarri never decide which sites exist; their private variants
-     cannot enter the panel.
-   - At each kept site they carry whatever their file said, or `./.` where it
-     lacked the site.
-   - 604 positions hold **two records** (records − positions). Expected cause:
-     the sources disagree on the alleles and the merge kept both, so each
-     cohort is called on one record and `./.` on the other. To be confirmed.
+   --set-missing-var-ids @:#[b38]`. Then:
+   - **3a — groups and fill check.** Cohort × super-pop groups
+     (`build-missingness-groups.py`; built once, used by 3a, 5 and 6). For
+     every record a filled cohort's file lacked, `fill-contradictions.py`
+     asks whether another cohort of the same super-pop makes "nobody here
+     carries it" implausible: ≥ 5 copies there, and P(no copy in this
+     cohort's haplotypes | that frequency) = (1 − AF)^AN < 1e-3, both groups
+     ≥ 20 samples. If so the source's own QC dropped a real site, and the
+     position is dropped rather than entering as a cohort-wide 0/0.
+     `provenance/chrN.fill_check.tsv`.
+   - **3b** — every position still holding more than one record (split
+     multi-allelic sites: cohorts saw different ALTs) and every 3a position
+     is dropped. Logged with counts; provenance logged again.
+5. **Soft-union site gate**, one `+fill-tags -S` pass
+   (`softunion-sites.py`; same rule, read once instead of once per group).
+   Per group with ≥ 10 samples keep `AN>0 && MAF ≥ 0.005`, union of
+   positions. `SOFTUNION_GROUPS` decides whose samples form the groups:
+   - **`superpop` (rebuild default):** every cohort's samples pooled by
+     super-pop (HGDP1KG_AMR + MXB_AMR + SGDP_AMR → AMR; Almarri → MEN). With
+     the fill, AN includes the filled 0/0s, so a cohort-unique variant's MAF
+     is its frequency in the whole super-pop.
+   - **`sample_groups`** = July/November: `sample_groups.tsv` (gnomAD
+     HGDP+1KG metadata + MXB) only; **SGDP and Almarri are in no group**
+     (groups summed to 3,507 of 3,921), so their private variants could not
+     enter the panel. November: AFR 768 → 221,495 · AMR 448 → 231,038 · CSA
+     691 → 164,673 · EAS 736 → 140,477 · EUR 682 → 159,766 · MEN 155 (HGDP
+     Middle East, not Almarri) → 192,260 · OCE 27 → 109,295 ⇒ **301,309
+     positions, 301,913 records** (604 positions with two records — now
+     removed in 3b).
+   Group sizes and passing counts: `provenance/chrN.softunion_groups.tsv`.
 6. **ADMIXTURE site list** (`merged_chrN.admix_sites.bed` + `.summary.tsv`):
    the positions where every cohort × super-pop group with ≥ 5 samples is
-   ≤ 10% missing and the whole panel ≤ 7%, on these PRE-phasing genotypes.
-   Cohort comes from the file a sample was merged from. Only 4a and 1e use
-   it; the soft-union below, and so the LAI panel, keeps every site.
+   ≤ 15% missing and the whole panel ≤ 7%, on these PRE-phasing genotypes.
+   With the fill, filled cohorts have no source-file gaps left, so this rule
+   acts on unfilled cohorts and on genuinely uncalled genotypes. Only 4a and
+   1e use it; the soft-union, and so the LAI panel, keeps every site.
 7. publish `01_merged_phased_panel/merged_chrN.softunion.bcf` and stop
 
 > `REPO_DIR` must resolve correctly or `EXCLUDE_IDS` points at Slurm's spool

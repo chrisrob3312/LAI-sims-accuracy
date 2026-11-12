@@ -4,6 +4,10 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1c_phase
 #SBATCH --partition=atkinson,mhgcp
+# Same exclusion as every other stage (reason in 1b_sgdp_liftover_clm.sh): the
+# mhgcp-t* CPUs lack instructions this conda env's bcftools is built with, and
+# a task that lands there dies at once with SIGILL (exit 132, empty log).
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=72:00:00
 #SBATCH --mem=96G
 #SBATCH --cpus-per-task=32
@@ -17,28 +21,29 @@
 # DESCRIPTION
 # ============================================================================
 # Per-chrom (SLURM array 1-22):
-#   1. Take per-chrom HGDP+1KG filter1 file (HGDP1KG_PATTERN, default points
-#      at the colleague's `phased_haplotypes_v2_filter1/` per-chrom outputs),
-#      drop kinship outliers from related_outliers.txt, and normalize contig
-#      naming to chr-prefixed so it lines up with the lifted MXB BCF and with
-#      SHAPEIT5's `--region chr${CHR}`. Prior phase in the filter1 input is
-#      irrelevant -- SHAPEIT5 re-phases jointly with MXB in step 6.
-#   2. bcftools merge with the lifted MXB chunk (output of 1a_prep-mxb-liftover_clm.sh).
-#      NOTE: merge (column-wise sample join), NOT concat. Different samples,
-#      same/overlapping sites -> 4147 sample columns per site. Missing in one
-#      panel becomes ./. and is imputed by SHAPEIT5 during phasing.
-#   3. plink2 site QC: biallelic SNPs, ACGT only, dedup IDs (no --geno here;
-#      missingness is enforced per-superpop in step 4).
-#   4. Per-superpop pre-filter -- subset the QC'd BCF to each superpop in
-#      sample_groups.tsv (>= MIN_SUBPOP_N samples), recompute AC,AN on the
-#      subset, keep sites where AN>0 AND MAF >= LAI_MAF; emit each pop's
-#      passing sites to a TSV. Soft-union = sort -u of all per-pop TSVs.
-#      F_MISSING is NOT filtered: the HGDP+1KG postoutlier joint call is
-#      sparse-encoded (homref dropped at MXB-private sites), which makes
-#      per-pop missingness uninformative. AN>0 already skips sites a pop
-#      has no information on, and SHAPEIT5 imputes residual missing GTs.
+#   1. Take the per-chrom HGDP+1KG file (HGDP1KG_PATTERN; default = Koenig et
+#      al.'s UNFILTERED phased_haplotypes_v2 release: 4,091 QC'd genomes, SNVs
+#      and indels, no MAF cut -- so the MAF floor is applied per super-pop in
+#      step 4 instead of inherited from filter1's global -q 0.005), drop the
+#      kinship outliers in related_outliers.txt and the named exclusions,
+#      chr-prefix contigs, split every multi-allelic record and check REF
+#      against GRCh38 (norm -m -any -c w, +fixref). Prior phase is irrelevant:
+#      the merged panel is re-phased jointly.
+#   2. Add MXB (1a), SGDP and Almarri (dedup by ID, exclusions), split any
+#      multi-allelic record still in them, log site provenance, fill records
+#      absent from a complete callset as 0/0 (FILL_REF_COHORTS), then
+#      bcftools merge -m none (column-wise sample join, NOT concat).
+#   3. plink2 site QC (biallelic ACGT SNPs, dedup); drop positions that still
+#      hold more than one record, and positions where a 0/0 fill is
+#      contradicted by another cohort of the same super-pop
+#      (scripts/fill-contradictions.py).
+#   4. Per-superpop MAF soft-union, one pass: keep a site if, in ANY
+#      super-pop group with >= MIN_SUBPOP_N samples, AN>0 and MAF >= LAI_MAF.
+#      SOFTUNION_GROUPS=superpop (default) pools every cohort's samples by
+#      super-pop; =sample_groups is the July/November rule (sample_groups.tsv
+#      only, i.e. HGDP+1KG and MXB -- SGDP and Almarri counted nowhere).
 #   5. Subset the full-sample QC'd BCF to the soft-union site list -- this is
-#      the input to SHAPEIT5 phase_common.
+#      the input to SHAPEIT5 phase_common. 5b writes the ADMIXTURE site list.
 #   6. SHAPEIT5_phase_common joint phase against the SHAPEIT4-format hg38 gmap.
 #   7. Rename chr$CHR -> $CHR for downstream RFMix.
 #
@@ -64,12 +69,16 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
 # Inputs
-# Per-chrom filter1 file pattern -- use the literal token __CHR__ as the
-# placeholder. Default points at the colleague's per-chrom phased +
-# MAF005-filtered + indexed outputs (chr-prefixed, outliers still present).
-# SHAPEIT5 will re-phase them jointly with MXB anyway, so the prior phase
-# information in these files isn't relied upon.
-HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr__CHR__.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
+# Per-chrom HGDP+1KG file pattern -- the literal token __CHR__ is the
+# placeholder. Default: the UNFILTERED Koenig et al. 2024 release on disk,
+# original_data_downloads/phased_haplotypes_v2 (chr-prefixed BCFs, 4,091
+# QC'd genomes, SNVs + indels, site QC = HWE / F_MISSING <= 0.1 / ExcHet, no
+# MAF cut). filter1 (processed_data/phased_haplotypes_v2_filter1) is the same
+# file cut to biallelic SNPs at a GLOBAL MAF >= 0.005, which on chr21 keeps
+# 201,120 of 923,540 SNPs and removes before the soft-union can see them the
+# variants that are common in one super-pop and rare overall. The prior phase
+# is not used: the merged panel is re-phased jointly.
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chr__CHR__.filtered.SNV_INDEL.phased.shapeit5.bcf}"
 OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
@@ -176,14 +185,13 @@ FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 #    naming to chr-prefixed (to match the lifted MXB BCF from step 1a).
 #
 #    HGDP1KG_PATTERN expands the literal token __CHR__ to the chromosome
-#    number to form the per-chrom path. Default points at the colleague's
-#    filter1 phased BCFs (already MAF005-filtered, indexed, chr-prefixed
-#    contigs). SHAPEIT5 re-phases the merge from genotypes in step 6, so
-#    any prior phasing in the input is discarded -- this gives us the
-#    joint phasing of HGDP+1KG + MXB that we need.
+#    number to form the per-chrom path. Default points at the unfiltered
+#    Koenig v2 BCFs (indexed, chr-prefixed contigs). The merged panel is
+#    re-phased from genotypes, so any prior phasing in the input is
+#    discarded -- this gives the joint phasing of all cohorts that we need.
 #
-#    These filter1 files are pre-outlier (n=4091); we still drop the kinship
-#    outliers from related_outliers.txt. The file is 2 cols (super-pop,
+#    v2 (like filter1, which is cut from it) holds 4,091 samples including
+#    relatives; we drop the kinship outliers in related_outliers.txt. The file is 2 cols (super-pop,
 #    sample_id) -- bcftools -S expects one ID per line, so extract col 2 to
 #    a temp file first.
 HGDP1KG_CHR_SRC="${HGDP1KG_PATTERN//__CHR__/$CHR}"
@@ -226,7 +234,8 @@ HGDP1KG_PREP="${TMPDIR}/hgdp1kg_chr${CHR}.prep.bcf"
 bcftools view -S "^${DROP_IDS}" --force-samples \
     --threads "$THREADS" -Ob -o "$HGDP1KG_PREP" "$HGDP1KG_CHR_SRC"
 bcftools index "$HGDP1KG_PREP"
-NHGDP1KG=$(bcftools view "$HGDP1KG_PREP" -H | wc -l)
+# -G: count records without printing ~3,400 genotypes per line to do it.
+NHGDP1KG=$(bcftools view -G -H "$HGDP1KG_PREP" | wc -l)
 NSAMP_HGDP1KG=$(bcftools query -l "$HGDP1KG_PREP" | wc -l)
 echo "[$(date +%T)] [chr${CHR}] HGDP+1KG: ${NSAMP_HGDP1KG} samples, ${NHGDP1KG} records"
 [[ "$NHGDP1KG" -gt 0 ]] || { echo "ERROR: HGDP+1KG chr${CHR} is empty"; exit 1; }
@@ -260,20 +269,20 @@ else
     exit 1
 fi
 
-# 1b. Normalise HGDP+1KG the way MXB, SGDP and Almarri are normalised: split
-#     multi-allelic SNPs and check REF against GRCh38 (+fixref: flip / swap
-#     consistently with the genotypes, drop what cannot be fixed). On today's
-#     biallelic, REF-correct sources this is a pass that changes nothing; on a
-#     raw joint callset it keeps the biallelic parts of multi-allelic sites,
-#     which plink2's --max-alleles 2 below would otherwise drop whole.
+# 1b. Normalise HGDP+1KG the way MXB and SGDP are normalised: split EVERY
+#     multi-allelic record into biallelic ones (-m -any, as 1a/1b do with -m-;
+#     -m -snps left SNP+indel records whole, so the SNP allele inside one
+#     could not join another cohort's biallelic SNP record) and check REF
+#     against GRCh38 (+fixref: flip / swap consistently with the genotypes,
+#     drop what cannot be fixed). plink2 below removes the indel halves.
 HGDP1KG_NORMALIZE="${HGDP1KG_NORMALIZE:-1}"
 if [[ "$HGDP1KG_NORMALIZE" == "1" ]]; then
     HG_NORM="${TMPDIR}/hgdp1kg_chr${CHR}.norm.bcf"
-    echo "[$(date +%T)] [chr${CHR}] normalise HGDP+1KG: norm -m -snps -c w + fixref flip -d"
-    bcftools norm -m -snps -f "$REF_FA" -c w --threads "$THREADS" -Ou "$HGDP1KG_CHR" \
+    echo "[$(date +%T)] [chr${CHR}] normalise HGDP+1KG: norm -m -any -c w + fixref flip -d"
+    bcftools norm -m -any -f "$REF_FA" -c w --threads "$THREADS" -Ou "$HGDP1KG_CHR" \
       | bcftools +fixref -Ob -o "$HG_NORM" -- -f "$REF_FA" -m flip -d
     bcftools index -f "$HG_NORM"
-    echo "[$(date +%T)] [chr${CHR}] HGDP+1KG after normalisation: $(bcftools view -H "$HG_NORM" | wc -l) records (was ${NHGDP1KG})"
+    echo "[$(date +%T)] [chr${CHR}] HGDP+1KG after normalisation: $(bcftools view -G -H "$HG_NORM" | wc -l) records (was ${NHGDP1KG})"
     HGDP1KG_CHR="$HG_NORM"
 fi
 
@@ -393,6 +402,31 @@ add_cohort ALMARRI "$ALMARRI_PREPPED" || exit 1
 
 echo "[$(date +%T)] [chr${CHR}] panel after all cohorts: $(wc -l < "$SEEN_IDS") samples"
 
+# 2b. Split every multi-allelic record still in an input (norm -m -any), so
+#     each ALT allele is its own biallelic record in every cohort. bcftools
+#     merge -m none joins records only when REF and ALT match exactly, so a
+#     SNP allele inside a cohort's multi-allelic or SNP+indel record stays a
+#     separate record from another cohort's biallelic record at that
+#     position. With the 0/0 fill below, the cohort that DOES carry the SNP
+#     would then be filled 0/0 on the other cohort's record. After the split,
+#     a position with two SNP ALTs is two records and 3b removes it whole, as
+#     before. HGDP+1KG was split in 1b; 1a/1b split with -m-, while 1d split
+#     only SNPs, so this mostly confirms there is nothing left to split.
+for _i in "${!MERGE_INPUTS[@]}"; do
+    _lab="${MERGE_LABELS[$_i]}"
+    if [[ "$_lab" == "HGDP1KG" && "$HGDP1KG_NORMALIZE" == "1" ]]; then continue; fi
+    _nm=$(bcftools view -G -H -m3 "${MERGE_INPUTS[$_i]}" | wc -l)
+    if [[ "$_nm" -gt 0 ]]; then
+        _out="${TMPDIR}/${_lab}.split.chr${CHR}.bcf"
+        bcftools norm -m -any --threads "$THREADS" -Ob -o "$_out" "${MERGE_INPUTS[$_i]}"
+        bcftools index -f "$_out"
+        echo "[$(date +%T)] [chr${CHR}] ${_lab}: split ${_nm} multi-allelic records (norm -m -any)"
+        MERGE_INPUTS[$_i]="$_out"
+    else
+        echo "[$(date +%T)] [chr${CHR}] ${_lab}: no multi-allelic records"
+    fi
+done
+
 # SITE PROVENANCE, logged at three stages (raw merge, after QC, soft-union)
 # BEFORE anything is decided from it: per cohort, how many of its file's
 # records reach the panel, how many are unique to that study, and -- for every
@@ -419,38 +453,77 @@ provenance () {   # provenance <stage> <bcf>
 }
 
 # ABSENT = HOM-REF, for cohorts whose file is a COMPLETE variant callset.
-# A site missing from such a file means no sample in that cohort carries the
+# A record missing from such a file means no sample in that cohort carries the
 # ALT, so its samples are 0/0 there -- the assumption Almarri's per-sample
 # merge already makes with missing2ref. Without this, `bcftools merge` leaves
-# the whole cohort ./. at every such site and SHAPEIT5 has to guess it.
+# the whole cohort ./. at every such record and SHAPEIT5 has to guess it.
 #
-# Only for complete callsets. MXB is a GATK joint call (GenotypeGVCFs, PASS,
-# singletons kept); Almarri is per-sample + missing2ref. NOT the current SGDP
-# release (GLIMPSE-imputed against 1KG phase 3: a missing site is one 1KG p3
-# lacks, and the same person is non-ref there 28% of the time) and NOT a
-# MAF-filtered HGDP+1KG source (missing can mean "rare", not "absent").
+# Only for complete callsets: HGDP+1KG v2 (Koenig: every variant passing
+# their site QC, no MAF cut), MXB (GATK joint call, PASS, singletons kept),
+# Almarri (per-sample + missing2ref). NOT the current SGDP release
+# (GLIMPSE-imputed against 1KG phase 3: a missing site is one 1KG p3 lacks,
+# and the same person is non-ref there 28% of the time) and NOT a
+# MAF-filtered HGDP+1KG source such as filter1 (missing can mean "rare").
 #
-# How: a sites-only union of every input is merged with the cohort's file
-# using -0, which fills ONLY sites the file lacks; ./. calls inside the file
-# stay missing. Off unless FILL_REF_COHORTS names the cohorts, e.g.
-#   FILL_REF_COHORTS="MXB ALMARRI"
+# The case where "absent" is NOT "nobody carries it" -- the source's own site
+# QC dropped a real variant -- is caught in 3a: if another cohort of the same
+# super-pop carries the allele at a frequency at which this cohort's samples
+# could not all lack it, the position is dropped instead of filled.
+#
+# How: a union of every input's records, carrying ONE placeholder sample whose
+# GT is ./., is merged with the cohort's file using -0, which fills only the
+# records the file lacks; ./. calls inside the file stay missing. Then the
+# placeholder is removed. Tested on bcftools 1.19 (cluster: 1.20): with a
+# sites-only union (view -G) instead, the records a cohort lacked came out
+# with no genotype at all ('.'), not 0/0 -- -0 fills only records at which
+# some input has FORMAT/GT. Off unless FILL_REF_COHORTS names the cohorts.
 FILL_REF_COHORTS="${FILL_REF_COHORTS:-}"
+FILLED_COHORTS=""
 if [[ -n "$FILL_REF_COHORTS" ]]; then
+    for _c in $FILL_REF_COHORTS; do
+        case "$_c" in
+            HGDP1KG|MXB|SGDP|ALMARRI) ;;
+            *) echo "ERROR: FILL_REF_COHORTS has unknown cohort '${_c}' (valid: HGDP1KG MXB SGDP ALMARRI)" >&2; exit 1 ;;
+        esac
+        if [[ " ${MERGE_LABELS[*]} " != *" ${_c} "* ]]; then
+            echo "[$(date +%T)] [chr${CHR}] FILL_REF_COHORTS names ${_c}, which is not in this run -- nothing to fill"
+        fi
+    done
+    FILL_PH="__fill_placeholder__"
+    _usites=()
+    for _i in "${!MERGE_INPUTS[@]}"; do
+        _s="${TMPDIR}/sites_only.${MERGE_LABELS[$_i]}.chr${CHR}.bcf"
+        bcftools view -G --threads "$THREADS" -Ob -o "$_s" "${MERGE_INPUTS[$_i]}"
+        bcftools index -f "$_s"
+        _usites+=("$_s")
+    done
+    UNION_RAW="${TMPDIR}/union_sites_raw.chr${CHR}.bcf"
     UNION_SITES="${TMPDIR}/union_sites.chr${CHR}.bcf"
-    echo "[$(date +%T)] [chr${CHR}] sites-only union of ${#MERGE_INPUTS[@]} inputs (for the 0/0 fill)"
-    bcftools merge -m none --threads "$THREADS" -Ou "${MERGE_INPUTS[@]}" \
-      | bcftools view -G -Ob -o "$UNION_SITES"
+    bcftools merge -m none --threads "$THREADS" -Ob -o "$UNION_RAW" "${_usites[@]}"
+    _uhdr=$(bcftools view -h "$UNION_RAW") || { echo "ERROR: cannot read header of $UNION_RAW" >&2; exit 1; }
+    {
+        grep '^##' <<<"$_uhdr"
+        grep -q '^##FORMAT=<ID=GT,' <<<"$_uhdr" \
+            || echo '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">'
+        printf '#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s\n' "$FILL_PH"
+        bcftools query -f '%CHROM\t%POS\t%ID\t%REF\t%ALT\t.\t.\t.\tGT\t./.\n' "$UNION_RAW"
+    } | bcftools view -Ob -o "$UNION_SITES"
     bcftools index -f "$UNION_SITES"
+    unset _uhdr
+    echo "[$(date +%T)] [chr${CHR}] union of ${#MERGE_INPUTS[@]} inputs: $(bcftools view -G -H "$UNION_SITES" | wc -l) records (for the 0/0 fill)"
     for _i in "${!MERGE_INPUTS[@]}"; do
         _lab="${MERGE_LABELS[$_i]}"
         [[ " ${FILL_REF_COHORTS} " == *" ${_lab} "* ]] || continue
         _out="${TMPDIR}/${_lab}.absent_as_ref.chr${CHR}.bcf"
-        _before=$(bcftools view -H "${MERGE_INPUTS[$_i]}" | wc -l)
-        bcftools merge -m none -0 --threads "$THREADS" -Ob -o "$_out" "$UNION_SITES" "${MERGE_INPUTS[$_i]}"
+        _before=$(bcftools view -G -H "${MERGE_INPUTS[$_i]}" | wc -l)
+        bcftools merge -m none -0 --threads "$THREADS" -Ou "$UNION_SITES" "${MERGE_INPUTS[$_i]}" \
+          | bcftools view -I -s "^${FILL_PH}" --threads "$THREADS" -Ob -o "$_out"
         bcftools index -f "$_out"
-        echo "[$(date +%T)] [chr${CHR}] ${_lab}: ${_before} records in its file;" \
-             "$(bcftools view -H "$_out" | wc -l) after filling absent sites as 0/0"
+        _after=$(bcftools view -G -H "$_out" | wc -l)
+        echo "[$(date +%T)] [chr${CHR}] ${_lab}: ${_before} records in its file; ${_after} after" \
+             "filling the $(( _after - _before )) records it lacks as 0/0"
         MERGE_INPUTS[$_i]="$_out"
+        FILLED_COHORTS+="${_lab} "
     done
 fi
 
@@ -498,77 +571,143 @@ if ! grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$_QHDR"; then
 fi
 unset _QHDR
 
-# 3b. Drop every position that still holds more than one SNP record: a split
-#     multi-allelic site, either because two cohorts saw different ALTs at it
-#     or because a cohort's own multi-allelic record was split by norm -m. The
-#     panel is biallelic by design, and at such a position each cohort is
-#     called on one record and missing on the other.
+# 3a. Cohort x super-pop groups (scripts/build-missingness-groups.py): cohort
+#     = the FILE a sample was merged from, super-pop from sample_groups.tsv /
+#     the SGDP manifest (Almarri = MEN, MXB = AMR). Built once, here -- the
+#     sample set does not change after QC -- and used by the fill check below,
+#     the soft-union groups (step 4) and the ADMIXTURE site list (5b).
+SGDP_MANIFEST="${SGDP_MANIFEST:-${REPO_DIR}/reference_ids/sgdp_manifest.tsv}"
+MISS_GROUPS="${TMPDIR}/miss_groups.chr${CHR}.tsv"
+PANEL_SAMPLES="${TMPDIR}/panel_samples.chr${CHR}.txt"
+bcftools query -l "$QCED" > "$PANEL_SAMPLES"
+bcftools query -l "$MXB_LIFTED" > "${TMPDIR}/cohort_mxb.chr${CHR}.txt"
+COHORT_ARGS=(--cohort "MXB=${TMPDIR}/cohort_mxb.chr${CHR}.txt")
+# Membership from THIS run's cohorts, not from whether a *_kept.txt exists:
+# those files outlive the run that wrote them.
+if [[ " ${MERGE_LABELS[*]} " == *" SGDP "* ]];    then COHORT_ARGS+=(--cohort "SGDP=${TMPDIR}/sgdp_kept.txt"); fi
+if [[ " ${MERGE_LABELS[*]} " == *" ALMARRI "* ]]; then COHORT_ARGS+=(--cohort "ALMARRI=${TMPDIR}/almarri_kept.txt"); fi
+python3 -I "${REPO_DIR}/scripts/build-missingness-groups.py" \
+    --samples "$PANEL_SAMPLES" "${COHORT_ARGS[@]}" \
+    --default-cohort HGDP1KG --groups "$SAMPLE_GROUPS" --sgdp-manifest "$SGDP_MANIFEST" \
+    > "$MISS_GROUPS"
+# bcftools +fill-tags -S rejects sample names shorter than 3 characters
+# ("Could not parse the file": an off-by-one in its parser, 1.19 and 1.20).
+# Every real ID is far longer; fail here, clearly, if that ever changes.
+_short=$(awk 'length($1) < 3' "$MISS_GROUPS" | wc -l)
+[[ "$_short" -eq 0 ]] || { echo "ERROR: ${_short} sample name(s) shorter than 3 characters;" \
+    "bcftools +fill-tags -S cannot read them:" >&2; awk 'length($1) < 3' "$MISS_GROUPS" >&2; exit 1; }
+
+#     FILL CHECK. For each filled cohort, every record its file lacked (so it
+#     now reads 0/0 there) is tested against the OTHER cohorts' groups of the
+#     same super-pop: when one carries >= FILL_GUARD_MIN_AC copies at a
+#     frequency at which this cohort's haplotypes would all lack the allele
+#     with probability < FILL_GUARD_MAX_P (both groups >= FILL_GUARD_MIN_N
+#     samples), "absent" cannot mean "nobody carries it" -- the source's own
+#     QC dropped a real site -- and the position is dropped with 3b's instead
+#     of entering the panel as a cohort-wide 0/0. Counts per cohort and
+#     super-pop -> ${PROV_DIR}/chr${CHR}.fill_check.tsv.
+FILL_GUARD="${FILL_GUARD:-1}"
+FILL_GUARD_MIN_N="${FILL_GUARD_MIN_N:-20}"
+FILL_GUARD_MIN_AC="${FILL_GUARD_MIN_AC:-5}"
+FILL_GUARD_MAX_P="${FILL_GUARD_MAX_P:-1e-3}"
+FILL_DROP="${TMPDIR}/fill_contradictions.chr${CHR}.tsv"
+: > "$FILL_DROP"
+if [[ -n "$FILLED_COHORTS" && "$FILL_GUARD" == "1" ]]; then
+    GUARD_ARGS=()
+    for _c in $FILLED_COHORTS; do
+        GUARD_ARGS+=(--cohort-sites "${_c}=${TMPDIR}/sites.${_c}.chr${CHR}.tsv")
+    done
+    GUARD_FMT=$(python3 -I "${REPO_DIR}/scripts/fill-contradictions.py" --groups "$MISS_GROUPS" --print-format)
+    echo "[$(date +%T)] [chr${CHR}] fill check: ${FILLED_COHORTS}(min_n ${FILL_GUARD_MIN_N}," \
+         "min_ac ${FILL_GUARD_MIN_AC}, max_p ${FILL_GUARD_MAX_P})"
+    bcftools +fill-tags "$QCED" -Ou -- -S "$MISS_GROUPS" -t AC,AN \
+      | bcftools query -f "$GUARD_FMT" \
+      | python3 -I "${REPO_DIR}/scripts/fill-contradictions.py" --groups "$MISS_GROUPS" \
+            --filled "$FILLED_COHORTS" "${GUARD_ARGS[@]}" \
+            --min-n "$FILL_GUARD_MIN_N" --min-ac "$FILL_GUARD_MIN_AC" --max-p "$FILL_GUARD_MAX_P" \
+            --chrom "chr${CHR}" --out "$FILL_DROP" --summary "${PROV_DIR}/chr${CHR}.fill_check.tsv"
+    cat "${PROV_DIR}/chr${CHR}.fill_check.tsv"
+elif [[ -n "$FILLED_COHORTS" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] FILL_GUARD=${FILL_GUARD}: the 0/0 fills of ${FILLED_COHORTS}are NOT checked"
+fi
+N_FILL_DROP=$(wc -l < "$FILL_DROP")
+
+# 3b. Drop every position that still holds more than one SNP record (a split
+#     multi-allelic site: two cohorts saw different ALTs at it, or a cohort's
+#     own multi-allelic record was split), together with the fill check's
+#     positions. The panel is biallelic by design, and at a split position
+#     each cohort is called on one record and missing on the other.
 MULTI_POS="${TMPDIR}/multirecord_positions.chr${CHR}.tsv"
 bcftools query -f '%CHROM\t%POS\n' "$QCED" | uniq -d > "$MULTI_POS"
 N_MULTI=$(wc -l < "$MULTI_POS")
+N_MULTI_REC=0
 if [[ "$N_MULTI" -gt 0 ]]; then
     N_MULTI_REC=$(bcftools query -f '%CHROM\t%POS\n' "$QCED" \
                   | awk 'NR==FNR {d[$1"\t"$2]=1; next} ($1"\t"$2) in d' "$MULTI_POS" - | wc -l)
-    bgzip -f "$MULTI_POS"
-    tabix -s1 -b2 -e2 -f "${MULTI_POS}.gz"
+fi
+DROP_POS="${TMPDIR}/drop_positions.chr${CHR}.tsv"
+sort -k1,1 -k2,2n -u "$MULTI_POS" "$FILL_DROP" > "$DROP_POS"
+N_DROP=$(wc -l < "$DROP_POS")
+if [[ "$N_DROP" -gt 0 ]]; then
+    bgzip -f "$DROP_POS"
+    tabix -s1 -b2 -e2 -f "${DROP_POS}.gz"
     QCED_BI="${QCED_PREFIX}.biallelic.bcf"
-    bcftools view -T "^${MULTI_POS}.gz" --threads "$THREADS" -Ob -o "$QCED_BI" "$QCED"
+    bcftools view -T "^${DROP_POS}.gz" --threads "$THREADS" -Ob -o "$QCED_BI" "$QCED"
     bcftools index -f "$QCED_BI"
     QCED="$QCED_BI"
-    echo "[$(date +%T)] [chr${CHR}] dropped ${N_MULTI} positions holding more than one record" \
-         "(${N_MULTI_REC} records: split multi-allelic sites)"
-else
-    echo "[$(date +%T)] [chr${CHR}] no position holds more than one record"
 fi
+echo "[$(date +%T)] [chr${CHR}] dropped ${N_DROP} positions: ${N_MULTI} holding more than one record" \
+     "(${N_MULTI_REC} records: split multi-allelic sites); ${N_FILL_DROP} where a 0/0 fill was contradicted"
 provenance qc "$QCED"
 
-# 4. Per-superpop pre-filter, then soft-union of passing sites.
-#    For each superpop in $SAMPLE_GROUPS with N >= MIN_SUBPOP_N:
-#      a. subset the QC'd BCF to its samples
-#      b. recompute AC, AN on the subset (single-pop tags, no -S quirks)
-#      c. keep sites where AN>0 AND MAF >= LAI_MAF, expressed without
-#         division as `AC>=MAF*AN AND (AN-AC)>=MAF*AN`
-#      d. emit chr/pos/ref/alt of passing sites
-#    Soft-union = sort -u across per-pop TSVs.
+# 4. Per-superpop MAF soft-union. A site is kept if, in ANY group with
+#    >= MIN_SUBPOP_N samples, AN>0 and MAF >= LAI_MAF, written without
+#    division as AC >= MAF*AN and (AN-AC) >= MAF*AN -- the rule this step has
+#    always applied. What changed is HOW: one `+fill-tags -S` pass computes
+#    every group's AC/AN (scripts/softunion-sites.py applies the rule) where
+#    the loop it replaces read the whole panel once per group; with the
+#    unfiltered HGDP+1KG source the panel has ~4.5x the records it had with
+#    filter1. Same result: on a test panel both ways kept the same sites.
 #
-#    NOTE: we deliberately do NOT filter on F_MISSING here. The HGDP+1KG
-#    postoutlier joint call is sparse-encoded -- samples that are homref
-#    at MXB-private sites are emitted as `.|.`, not `0|0`. So F_MISSING in
-#    a non-MXB superpop at a MXB-only site is ~100% even though the WGS
-#    coverage is fine. The AN>0 check in the MAF expression already drops
-#    sites a pop has no information on; SHAPEIT5_phase_common imputes the
-#    residual missing genotypes during phasing.
+#    SOFTUNION_GROUPS -- WHOSE samples define a super-pop's MAF:
+#      superpop       (default) every cohort's samples, pooled by super-pop
+#                     (HGDP1KG_AMR + MXB_AMR + SGDP_AMR -> AMR; Almarri ->
+#                     MEN), from the 3a groups; samples with no super-pop are
+#                     in no group.
+#      sample_groups  the July/November rule: sample_groups.tsv only, i.e.
+#                     HGDP+1KG and MXB. SGDP and Almarri samples are in no
+#                     group, so a variant only they carry can never pass.
+#    With FILL_REF_COHORTS, AN counts the filled 0/0 genotypes too, so a
+#    cohort-unique variant's MAF is its frequency in the whole super-pop, not
+#    in the one cohort that has data there.
 #
-#    Tiny superpops (N < MIN_SUBPOP_N, e.g. OCE/MEN in HGDP+1KG) are
+#    NOTE: no F_MISSING filter here. AN>0 skips sites a group has no calls at,
+#    and SHAPEIT5 imputes residual missing genotypes. The ADMIXTURE marker set
+#    gets its own missingness rule in 5b. Groups below MIN_SUBPOP_N are
 #    skipped -- their MAF estimates are too noisy to constrain the panel.
-echo "[$(date +%T)] [chr${CHR}] per-superpop pre-filter (MAF>=${LAI_MAF}, soft-union)"
-VCF_SAMPLES="${TMPDIR}/vcf_samples.txt"
-bcftools query -l "$QCED" > "$VCF_SAMPLES"
-
+SOFTUNION_GROUPS="${SOFTUNION_GROUPS:-superpop}"
+SU_GROUPS="${TMPDIR}/softunion_groups.chr${CHR}.tsv"
+case "$SOFTUNION_GROUPS" in
+    superpop)
+        awk -F'\t' '{sp = $2; sub(/^[^_]*_/, "", sp); if (sp != "NA") print $1 "\t" sp}' \
+            "$MISS_GROUPS" > "$SU_GROUPS" ;;
+    sample_groups)
+        awk 'NR==FNR {s[$1] = 1; next} ($1 in s) {print $1 "\t" $2}' \
+            "$PANEL_SAMPLES" "$SAMPLE_GROUPS" > "$SU_GROUPS" ;;
+    *)  echo "ERROR: SOFTUNION_GROUPS must be superpop or sample_groups, got '${SOFTUNION_GROUPS}'" >&2
+        exit 1 ;;
+esac
+[[ -s "$SU_GROUPS" ]] || { echo "ERROR: no sample has a soft-union group (${SOFTUNION_GROUPS})" >&2; exit 1; }
+echo "[$(date +%T)] [chr${CHR}] per-superpop soft-union: MAF >= ${LAI_MAF}, groups = ${SOFTUNION_GROUPS}" \
+     "($(wc -l < "$SU_GROUPS") of $(wc -l < "$PANEL_SAMPLES") samples in a group)"
+SU_FMT=$(python3 -I "${REPO_DIR}/scripts/softunion-sites.py" --groups "$SU_GROUPS" \
+             --min-n "$MIN_SUBPOP_N" --print-format)
 SITELIST="${TMPDIR}/softunion_sites.tsv"
-: > "$SITELIST"
-
-# MAF >= m, expressed as: AC>=m*AN AND (AN-AC)>=m*AN, with AN>0 sentinel.
-MAF_EXPR="INFO/AN>0 && INFO/AC>=${LAI_MAF}*INFO/AN && (INFO/AN-INFO/AC)>=${LAI_MAF}*INFO/AN"
-
-for GROUP in $(awk '{print $2}' "$SAMPLE_GROUPS" | sort -u); do
-    GROUP_KEEP="${TMPDIR}/${GROUP}_keep.txt"
-    awk -v g="$GROUP" '$2==g {print $1}' "$SAMPLE_GROUPS" \
-        | grep -xFf "$VCF_SAMPLES" > "$GROUP_KEEP" || true
-    NSAMP=$(wc -l < "$GROUP_KEEP")
-    if (( NSAMP < MIN_SUBPOP_N )); then
-        echo "[$(date +%T)] [chr${CHR}]   skip ${GROUP}: ${NSAMP} samples < MIN_SUBPOP_N=${MIN_SUBPOP_N}"
-        continue
-    fi
-    GROUP_SITES="${TMPDIR}/${GROUP}_sites.tsv"
-    bcftools view "$QCED" -S "$GROUP_KEEP" --force-samples --threads "$THREADS" -Ou \
-      | bcftools +fill-tags --threads "$THREADS" -Ou -- -t 'AC,AN' \
-      | bcftools view -i "$MAF_EXPR" --threads "$THREADS" -Ou \
-      | bcftools query -f '%CHROM\t%POS\n' > "$GROUP_SITES"
-    NSITES=$(wc -l < "$GROUP_SITES")
-    echo "[$(date +%T)] [chr${CHR}]   ${GROUP}: ${NSAMP} samples, ${NSITES} passing sites"
-    cat "$GROUP_SITES" >> "$SITELIST"
-done
+bcftools +fill-tags "$QCED" -Ou -- -S "$SU_GROUPS" -t AC,AN \
+  | bcftools query -f "$SU_FMT" \
+  | python3 -I "${REPO_DIR}/scripts/softunion-sites.py" --groups "$SU_GROUPS" \
+        --min-n "$MIN_SUBPOP_N" --maf "$LAI_MAF" --chrom "chr${CHR}" \
+        --out "$SITELIST" --counts "${PROV_DIR}/chr${CHR}.softunion_groups.tsv"
 
 SITELIST_SORTED="${TMPDIR}/softunion_sites.sorted.tsv"
 sort -k1,1 -k2,2n -u "$SITELIST" > "$SITELIST_SORTED"
@@ -589,7 +728,7 @@ echo "[$(date +%T)] [chr${CHR}] subset full BCF to soft-union sites"
 bcftools view "$QCED" -T "${SITELIST_SORTED}.gz" \
     --threads "$THREADS" -Ob -o "$SOFTUNION"
 bcftools index "$SOFTUNION"
-NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
+NSOFT=$(bcftools view -G -H "$SOFTUNION" | wc -l)
 echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
 
@@ -605,37 +744,25 @@ provenance softunion "$SOFTUNION"
 #     treated the filled-in values as observed, and three of the eight K=8
 #     clusters tracked cohorts instead of ancestry.
 #
-#     Cohort comes from which FILE a sample was merged from (not its ID);
-#     super-pop from sample_groups.tsv / the SGDP manifest (Almarri = MEN,
-#     MXB = AMR). Only the ADMIXTURE marker set uses this list -- the soft-union
-#     itself, and so the phased LAI panel, is unchanged.
-# NOTE ON THE THRESHOLD. In this panel a cohort is either fully called or
-# fully absent at a site -- every SGDP sample lacked exactly 39.55% of chr22's
-# soft-union, every MXB sample 61.9%, every Almarri sample 30.4%, every
-# HGDP/1KG sample 12.68% (sd 0.000) -- because absence comes from a cohort's
-# SOURCE FILE lacking the site. So any per-group threshold between 0 and 1
-# selects the same sites: those every cohort has. 0.15 is set as requested;
-# what recovers sites is allele harmonisation (scripts/site-presence-check.py
-# measures how many absences are swaps/flips) and, for ADMIXTURE, reading the
-# pre-phasing genotypes with their gaps (4a ADMIX_INPUT=softunion).
+#     Groups = the 3a cohort x super-pop groups. Only the ADMIXTURE marker set
+#     uses this list -- the soft-union itself, and so the phased LAI panel, is
+#     unchanged.
+# NOTE ON THE THRESHOLD. In the November panel a cohort was either fully
+# called or fully absent at a site -- every SGDP sample lacked exactly 39.55%
+# of chr22's soft-union, every MXB sample 61.9%, every Almarri sample 30.4%,
+# every HGDP/1KG sample 12.68% (sd 0.000) -- because absence came from a
+# cohort's SOURCE FILE lacking the site, so any per-group threshold between 0
+# and 1 selected the same sites: those every cohort has. With FILL_REF_COHORTS
+# a filled cohort has no such gaps left (absent = 0/0, or the site is dropped
+# by the 3a fill check), and this rule acts on the cohorts that are NOT filled
+# (the GLIMPSE-imputed SGDP release) and on genuinely uncalled genotypes.
 ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.15}"
 ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
 ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
-SGDP_MANIFEST="${SGDP_MANIFEST:-${REPO_DIR}/reference_ids/sgdp_manifest.tsv}"
 ADMIX_SITES="${OUTDIR}/merged_chr${CHR}.admix_sites.bed"
 ADMIX_SUMMARY="${OUTDIR}/merged_chr${CHR}.admix_sites.summary.tsv"
-MISS_GROUPS="${TMPDIR}/miss_groups.chr${CHR}.tsv"
-bcftools query -l "$SOFTUNION" > "${TMPDIR}/softunion_samples.chr${CHR}.txt"
-bcftools query -l "$MXB_LIFTED" > "${TMPDIR}/cohort_mxb.chr${CHR}.txt"
-COHORT_ARGS=(--cohort "MXB=${TMPDIR}/cohort_mxb.chr${CHR}.txt")
-[[ -s "${TMPDIR}/sgdp_kept.txt"    ]] && COHORT_ARGS+=(--cohort "SGDP=${TMPDIR}/sgdp_kept.txt")
-[[ -s "${TMPDIR}/almarri_kept.txt" ]] && COHORT_ARGS+=(--cohort "ALMARRI=${TMPDIR}/almarri_kept.txt")
 echo "[$(date +%T)] [chr${CHR}] ADMIXTURE site list: groups <= ${ADMIX_GROUP_MAXMISS} missing" \
      "(n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}"
-python3 -I "${REPO_DIR}/scripts/build-missingness-groups.py" \
-    --samples "${TMPDIR}/softunion_samples.chr${CHR}.txt" "${COHORT_ARGS[@]}" \
-    --default-cohort HGDP1KG --groups "$SAMPLE_GROUPS" --sgdp-manifest "$SGDP_MANIFEST" \
-    > "$MISS_GROUPS"
 ADMIX_FMT=$(python3 -I "${REPO_DIR}/scripts/admix-site-filter.py" --groups "$MISS_GROUPS" --print-format)
 bcftools +fill-tags "$SOFTUNION" -Ou -- -S "$MISS_GROUPS" -t AN \
   | bcftools query -f "$ADMIX_FMT" \

@@ -4,6 +4,9 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1a_prep_mxb_liftover
 #SBATCH --partition=atkinson,mhgcp
+# Same exclusion as every other stage (reason in 1b_sgdp_liftover_clm.sh):
+# SIGILL on the mhgcp-t* CPUs, exit 132 with an empty log.
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=24:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=8

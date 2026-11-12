@@ -169,7 +169,7 @@ SGDP_MANIFEST="${SGDP_MANIFEST:-${REFS}/sgdp_manifest.tsv}"
 # Keyed on the PANEL sample name, which is appg.meta's long_ID
 # (longranger222_wgs_<n>_APPG<id>_GRCh38_gatk) -- not the pop_ID (UAE19) that
 # the distributed .fam uses. Build it on the cluster:
-#   bash scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv
+#   bash scripts/build-almarri-manifest.sh <almarri_prepped.chrN.bcf> > reference_ids/almarri_manifest.tsv
 ALMARRI_META="${ALMARRI_META:-${REFS}/almarri_manifest.tsv}"
 ALMARRI_COUNTRIES="${ALMARRI_COUNTRIES:-IRAQ JORDAN OMAN SAUDI SYRIA UAE YEMEN}"
 
@@ -777,7 +777,7 @@ fi
 # Almarri; neither does the SGDP manifest. So it needs its own route.
 #
 # Two columns, sample and pop. Build it on the cluster from the ENA metadata:
-#   scripts/build-almarri-manifest.sh > reference_ids/almarri_manifest.tsv
+#   scripts/build-almarri-manifest.sh <almarri_prepped.chrN.bcf> > reference_ids/almarri_manifest.tsv
 # If the file is absent the ID PATTERN is used instead, and that is reported.
 # The panel IDs are appg.meta's long_ID, longranger222_wgs_<n>_APPG<id>_GRCh38_
 # gatk; the <COUNTRY><n> form (UAE19) is the pop_ID of the distributed .fam and
@@ -990,7 +990,7 @@ else:
     print(f"[labels] NOTE: no Almarri manifest at {almarri_meta_f}; resolving "
           f"Almarri samples from the ID pattern <COUNTRY><n> over "
           f"{_countries}. Build the manifest to get exact population labels: "
-          f"scripts/build-almarri-manifest.sh > {almarri_meta_f}",
+          f"scripts/build-almarri-manifest.sh <almarri_prepped.chrN.bcf> > {almarri_meta_f}",
           file=sys.stderr)
 
 def almarri_of(s):
