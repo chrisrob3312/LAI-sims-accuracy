@@ -260,11 +260,29 @@ else
     exit 1
 fi
 
+# 1b. Normalise HGDP+1KG the way MXB, SGDP and Almarri are normalised: split
+#     multi-allelic SNPs and check REF against GRCh38 (+fixref: flip / swap
+#     consistently with the genotypes, drop what cannot be fixed). On today's
+#     biallelic, REF-correct sources this is a pass that changes nothing; on a
+#     raw joint callset it keeps the biallelic parts of multi-allelic sites,
+#     which plink2's --max-alleles 2 below would otherwise drop whole.
+HGDP1KG_NORMALIZE="${HGDP1KG_NORMALIZE:-1}"
+if [[ "$HGDP1KG_NORMALIZE" == "1" ]]; then
+    HG_NORM="${TMPDIR}/hgdp1kg_chr${CHR}.norm.bcf"
+    echo "[$(date +%T)] [chr${CHR}] normalise HGDP+1KG: norm -m -snps -c w + fixref flip -d"
+    bcftools norm -m -snps -f "$REF_FA" -c w --threads "$THREADS" -Ou "$HGDP1KG_CHR" \
+      | bcftools +fixref -Ob -o "$HG_NORM" -- -f "$REF_FA" -m flip -d
+    bcftools index -f "$HG_NORM"
+    echo "[$(date +%T)] [chr${CHR}] HGDP+1KG after normalisation: $(bcftools view -H "$HG_NORM" | wc -l) records (was ${NHGDP1KG})"
+    HGDP1KG_CHR="$HG_NORM"
+fi
+
 # 2. Merge HGDP+1KG (chr$CHR) + lifted MXB (chr$CHR) [+ SGDP if present]
 #    -- column-wise sample join. SGDP contigs are renamed to chr-prefixed
 #    if the prepped BCF came from a bare-numeric source, matching the
 #    HGDP+1KG/MXB convention so the merge and SHAPEIT5 --region line up.
 MERGE_INPUTS=("$HGDP1KG_CHR" "$MXB_LIFTED")
+MERGE_LABELS=(HGDP1KG MXB)
 
 # Running list of sample IDs already in the merge. Each additional cohort is
 # deduplicated against ALL of it, not just against HGDP+1KG: once more than one
@@ -350,6 +368,7 @@ add_cohort () {
     sort -u "$SEEN_IDS" "${TMPDIR}/${lc}_kept.txt" > "${SEEN_IDS}.new"
     mv "${SEEN_IDS}.new" "$SEEN_IDS"
     MERGE_INPUTS+=("$cur")
+    MERGE_LABELS+=("$label")
     return 0
 }
 
@@ -379,6 +398,31 @@ bcftools merge --threads "$THREADS" \
     -Ob -o "$MERGED" \
     "${MERGE_INPUTS[@]}"
 bcftools index "$MERGED"
+
+# SITE PROVENANCE, logged at three stages (raw merge, after plink2 QC, soft-
+# union) BEFORE anything is decided from it: per cohort, how many of its file's
+# records reach the panel, how many are unique to that study, and -- for every
+# panel record it has no call at -- whether its file lacks the position or has
+# it with alleles the merge could not join (swap / flip / other ALT / other
+# REF). TSVs in ${OUTDIR}/provenance/, summary lines in this log.
+PROV_DIR="${OUTDIR}/provenance"
+mkdir -p "$PROV_DIR"
+PROV_ARGS=()
+for _i in "${!MERGE_INPUTS[@]}"; do
+    _lab="${MERGE_LABELS[$_i]}"
+    _st="${TMPDIR}/sites.${_lab}.chr${CHR}.tsv"
+    bcftools query -f '%POS\t%REF\t%ALT\n' "${MERGE_INPUTS[$_i]}" > "$_st"
+    PROV_ARGS+=(--cohort "${_lab}=${_st}")
+done
+provenance () {   # provenance <stage> <bcf>
+    local st="${TMPDIR}/sites.panel_$1.chr${CHR}.tsv"
+    bcftools query -f '%POS\t%REF\t%ALT\n' "$2" > "$st"
+    python3 -I "${REPO_DIR}/scripts/site-provenance.py" --stage "$1" --chrom "chr${CHR}" \
+        "${PROV_ARGS[@]}" --panel "$st" \
+        --out-cohorts "${PROV_DIR}/chr${CHR}.$1.cohorts.tsv" \
+        --out-patterns "${PROV_DIR}/chr${CHR}.$1.patterns.tsv"
+}
+provenance merged "$MERGED"
 
 # 3. plink2 site QC -- biallelic SNPs, ACGT only, dedup, missing-var-ids.
 #    NO --geno here: global call rate is the wrong filter for LAI because RFMix
@@ -414,6 +458,7 @@ if ! grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$_QHDR"; then
     exit 1
 fi
 unset _QHDR
+provenance qc "$QCED"
 
 # 4. Per-superpop pre-filter, then soft-union of passing sites.
 #    For each superpop in $SAMPLE_GROUPS with N >= MIN_SUBPOP_N:
@@ -485,6 +530,8 @@ bcftools index "$SOFTUNION"
 NSOFT=$(bcftools view "$SOFTUNION" -H | wc -l)
 echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 [[ "$NSOFT" -gt 0 ]] || { echo "ERROR: subset produced empty BCF"; exit 1; }
+
+provenance softunion "$SOFTUNION"
 
 # 5b. ADMIXTURE site list -- per cohort x super-pop missingness, then overall.
 #     Measured HERE, on the pre-phasing genotypes, because SHAPEIT5 fills every
