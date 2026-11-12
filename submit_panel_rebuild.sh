@@ -49,6 +49,9 @@
 #                      is REFUSED unless ALLOW_IMPUTED_SGDP=1. none skips SGDP.
 #   CHAIN_PUBLICATION  1 (default): after 4a, submit the publication stages 4-6
 #                      (submit_publication_rerun.sh START_STAGE=4) against it.
+#                      Refused until the previous simulation/RFMix/FLARE outputs
+#                      are set aside (scripts/reset-publication-outputs.sh): those
+#                      stages reuse whatever they find, whatever its age.
 #   HGDP1KG_PATTERN    the HGDP+1KG source; default = the UNFILTERED Koenig et
 #                      al. release (original_data_downloads/phased_haplotypes_v2,
 #                      4,091 samples, SNVs + indels, no MAF cut) so 1c applies
@@ -139,7 +142,7 @@ case "$SOFTUNION_GROUPS" in superpop|sample_groups) ;; *) die "SOFTUNION_GROUPS 
 case "$FIXREF_MODE" in flip|flip-all) ;; *) die "FIXREF_MODE must be flip or flip-all";; esac
 for s in scripts/build-missingness-groups.py scripts/admix-site-filter.py scripts/sbatch-when-ready.sh \
          scripts/fill-contradictions.py scripts/softunion-sites.py scripts/site-provenance.py \
-         scripts/sgdp-raw-sample-map.py submit_publication_rerun.sh; do
+         scripts/sgdp-raw-sample-map.py submit_publication_rerun.sh scripts/reset-publication-outputs.sh; do
     [[ -f "$s" ]] || die "missing $s"
 done
 
@@ -181,6 +184,16 @@ if [[ ! -s reference_ids/almarri_manifest.tsv ]]; then
     echo "[rebuild] WARNING: no reference_ids/almarri_manifest.tsv -- 4a will label Almarri" >&2
     echo "          MEN from the ID pattern, without the country. Build it first:" >&2
     echo "            bash scripts/build-almarri-manifest.sh <almarri_prepped.chrN.bcf> > reference_ids/almarri_manifest.tsv" >&2
+fi
+# The publication stages reuse any output they find, whatever its age (see
+# scripts/reset-publication-outputs.sh). Chained to a rebuilt panel, they must
+# start from trees with nothing older than the rebuild epoch, or the previous
+# pilot's results are skipped over as done and scored as new.
+if [[ "$CHAIN_PUBLICATION" == "1" ]]; then
+    echo "[rebuild] publication outputs:" >&2
+    PROJECT_ROOT="$PROJECT_ROOT" bash scripts/reset-publication-outputs.sh --check >&2 \
+        || die "publication outputs from before the rebuild are still in place (above). Set them aside with" \
+               "'bash scripts/reset-publication-outputs.sh' (moves, never deletes), or CHAIN_PUBLICATION=0."
 fi
 
 # Main chunk array = every index except the heavy ones.

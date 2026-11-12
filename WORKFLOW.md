@@ -121,6 +121,16 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
   6a_transfer_to_mab_clm.sh             verify, then copy panels + cohort to mab
 ```
 
+**Running it** (all from the repo checkout, in the shapeit5 env):
+
+| when | command | writes? |
+|---|---|---|
+| before submitting | `bash scripts/preflight-rebuild.sh` — every tool, input and setting the chain needs; exit = number of FAILs | no |
+| once, before the first chained run | `bash scripts/reset-publication-outputs.sh` — moves the previous `02_simulations` / `03_rfmix` / `03_flare` gen12 trees aside and writes `rebuild_epoch`. The RFMix and FLARE arms reuse any output they find, whatever its age, so without this the old pilot would be skipped over as done and re-scored; the driver refuses to chain them until `--check` passes | moves (never deletes) |
+| plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
+| submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
+| any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel, anchors, no CHMI, results rewritten) | no |
+
 ---
 
 ## 1. Two products from one source
