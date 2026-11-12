@@ -298,42 +298,18 @@ else
 fi
 
 # ---------------------------------------------------------------- STAGE 2
-# Rebuild merged phased panel with:
-#   - the 60 previously-dropped keep-list samples restored
-#   - new SGDP samples merged in
-#
-# PENDING PATCH: 1c_phasing-jointcall_clm.sh currently sources from a
-# hgdp1kg filtered BCF that has already applied the "unrelated only" filter
-# upstream of those samples. To restore them, set HGDP1KG_PATTERN to the
-# u235158 archived source:
-#
-#   /storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/
-#   TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz
-#
-# NOTE THE _rechr SUFFIX -- it is part of the real filename. A pattern
-# without it resolves to nothing and the precheck below rejects it.
-#
-# It restores 60 samples, not 13. One of them, CHMI_CHMI3_WGS2, is a
-# hydatidiform-mole cell line (a complete-hydatidiform-mole genome, so
-# effectively haploid) and must NOT enter an ADMIXTURE panel or a donor
-# pool. Exclude it explicitly when using this source.
+# Rebuild the merged phased panel. The panel rebuild is normally submitted by
+# submit_panel_rebuild.sh, which chains stages 4-6 of this script after its 4a
+# job (START_STAGE=4), so this stage is skipped. HGDP1KG_PATTERN defaults (in
+# 1c and in that driver) to the UNFILTERED Koenig et al. phased_haplotypes_v2
+# release; the u235158 archive's 60 extra samples are Koenig's QC removals and
+# are excluded by name (reference_ids/panel_exclude_ids.txt, incl. CHMI).
 echo
 echo "============ STAGE 2: rebuild merged phased panel ============"
 if [[ -z "${HGDP1KG_PATTERN:-}" ]]; then
-    cat >&2 <<'EOF'
-
-  NOTE: HGDP1KG_PATTERN is unset. Stage 2 uses the DEFAULT upstream BCF, which
-  has already had an "unrelated only" filter applied upstream and is therefore
-  missing 60 keep-list samples. That is a valid run -- the panel is simply the
-  relatedness-filtered set, and the methods should say so. To restore them:
-
-    HGDP1KG_PATTERN=/storage/atkinson/home/u235158/projects/archived/\
-  tgp_hgdp_liftover/TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz
-
-  (the _rechr suffix is part of the real filename), and exclude
-  CHMI_CHMI3_WGS2 -- a hydatidiform-mole cell line, not a population sample.
-
-EOF
+    if want 2; then
+        echo "  HGDP1KG_PATTERN unset: 1c uses its default, the unfiltered Koenig v2 release." >&2
+    fi
 else
     # VALIDATE that the override actually resolves. Checking only that the
     # variable is SET lets a wrong path through: stage 1 then runs the entire
