@@ -113,20 +113,31 @@ else info "not yet (no MXB lift stamp; the re-lift writes it when all 22 chromos
 
 section "3. Almarri (1d_almarri_prep_clm.sh)"
 jobs_of 1d_almarri '1d_almarri_chr<N>_<job>.out/.err'
-NV=0; NR=0
+NV=0; NR=0; NOLD=0
 for c in $(seq 1 22); do
     f="${PANEL_DIR}/almarri_prepped.chr${c}.bcf"
     r=""; [[ -s "${f}.recipe" ]] && r=$(cat "${f}.recipe")
-    if [[ "$r" == "v3 fixref=${FIXREF_MODE}" ]]; then
+    # v4: low-quality calls MISSING (v3 dropped them and filled 0/0 -- about a
+    # quarter of each sample's ALT calls on chr22).
+    if [[ "$r" == "v4 fixref=${FIXREF_MODE} "* ]]; then
         NV=$((NV + 1)); bcftools view -h "$f" > /dev/null && NR=$((NR + 1))
+    elif [[ -n "$r" ]]; then
+        NOLD=$((NOLD + 1))
     fi
 done
-if [[ "$NV" -eq 0 ]]; then info "not yet (no chromosome stamped v3 fixref=${FIXREF_MODE})"
+if [[ "$NV" -eq 0 ]]; then
+    if [[ "$NOLD" -gt 0 ]]; then info "not yet: ${NOLD} chromosome(s) still on an older recipe (v3 turned low-quality calls into 0/0)"
+    else info "not yet (no chromosome stamped v4 fixref=${FIXREF_MODE})"; fi
 else
-    [[ "$NV" -eq 22 ]] && pass "22 of 22 chromosomes at v3 fixref=${FIXREF_MODE}" || info "${NV} of 22 chromosomes done so far"
+    [[ "$NV" -eq 22 ]] && pass "22 of 22 chromosomes at v4 (low-quality calls missing, not 0/0)" || info "${NV} of 22 chromosomes done so far"
+    [[ "$NOLD" -eq 0 ]] || fail "${NOLD} chromosome(s) still on an older recipe -- 1c would merge them as they are"
     [[ "$NR" -eq "$NV" ]] && pass "all ${NR} read back" || fail "$((NV - NR)) stamped chromosome(s) do not read back"
     f="${PANEL_DIR}/almarri_prepped.chr21.bcf"
-    [[ -s "$f" ]] && { [[ "$(nsamples "$f")" -eq 137 ]] && pass "chr21: 137 samples" || fail "chr21: $(nsamples "$f") samples (137 expected)"; }
+    if [[ -s "$f" ]]; then
+        [[ "$(nsamples "$f")" -eq 137 ]] && pass "chr21: 137 samples" || fail "chr21: $(nsamples "$f") samples (137 expected)"
+        info "chr21 stamp (raw): $(cat "${f}.recipe" 2>&1)"
+        info "chr21 per sample, mean (bcftools stats -s): $(bcftools stats -s - "$f" | awk '/^PSC/ {n++; h += $6; m += $14} END {printf "%.0f heterozygous, %.0f missing genotypes (n=%d)", (n ? h / n : 0), (n ? m / n : 0), n}')"
+    fi
 fi
 
 section "4. merge + site selection (1c_phasing-jointcall_clm.sh)"

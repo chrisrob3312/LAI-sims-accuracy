@@ -96,7 +96,7 @@ for t in bcftools bgzip tabix plink2 picard SHAPEIT5_phase_common SHAPEIT5_ligat
 done
 info "$(bcftools --version | awk 'NR == 1')"
 PLUGINS=$(bcftools plugin -l)
-for pl in fill-tags fixref missing2ref setGT; do
+for pl in fill-tags fixref setGT; do
     if grep -qw -- "$pl" <<<"$PLUGINS"; then pass "bcftools plugin ${pl}"; else fail "bcftools plugin ${pl} missing"; fi
 done
 # R exactly as run_accuracy_pilot.sh runs it: with R_LIBS_USER on the shapeit5

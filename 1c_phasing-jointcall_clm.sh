@@ -570,12 +570,12 @@ provenance () {   # provenance <stage> <bcf>
 # ABSENT = HOM-REF, for cohorts whose file is a COMPLETE variant callset.
 # A record missing from such a file means no sample in that cohort carries the
 # ALT, so its samples are 0/0 there -- the assumption Almarri's per-sample
-# merge already makes with missing2ref. Without this, `bcftools merge` leaves
+# merge already makes (1d: merge -0). Without this, `bcftools merge` leaves
 # the whole cohort ./. at every such record and SHAPEIT5 has to guess it.
 #
 # Only for complete callsets: HGDP+1KG v2 (Koenig: every variant passing
 # their site QC, no MAF cut), MXB (GATK joint call, PASS, singletons kept),
-# Almarri (per-sample + missing2ref). NOT the current SGDP release
+# Almarri (per-sample, merge -0). NOT the current SGDP release
 # (GLIMPSE-imputed against 1KG phase 3: a missing site is one 1KG p3 lacks,
 # and the same person is non-ref there 28% of the time) and NOT a
 # MAF-filtered HGDP+1KG source such as filter1 (missing can mean "rare").

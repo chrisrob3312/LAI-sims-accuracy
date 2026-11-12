@@ -38,7 +38,7 @@
 #   2. bcftools merge -0 -m none -r N over all of them: a sample with no
 #      record where another sample has one is 0/0 -- in a variant-only file
 #      no record means no variant call, the same assumption Almarri's 1d
-#      merge makes with missing2ref.
+#      merge makes (merge -0).
 #   3. A variant call with FL below SGDP_MIN_FL becomes ./. (missing), NOT
 #      0/0: the call is unreliable, which is not evidence of hom-ref. Per
 #      sample (`&`, not `&&`, in the expression: `&&` matches across samples).

@@ -24,12 +24,13 @@
 #    an artificially high missingness rate. To resolve this, we used
 #    `bcftools plugin missing2ref` to switch missing alleles to ref."
 # A naive `bcftools merge` therefore produces a panel that looks almost
-# entirely missing. The merge stage MUST apply missing2ref. This script only
-# downloads; it does not merge, precisely so that step is made explicitly.
+# entirely missing. The merge stage MUST fill absent genotypes as 0/0. This
+# script only downloads; 1d_almarri_prep_clm.sh merges.
 #
-# The paper's QC, for the merge stage to mirror:
-#   bcftools view -f PASS ; GQ > 20
-#   bcftools norm -c ws -m -snps -m -indels --fasta-ref <GRCh38>
+# The paper's QC was PASS + GQ > 20, then missing2ref -- which turns every
+# dropped low-quality call into 0/0 (24-28% of each sample's ALT calls on
+# chr22). 1d v4 sets those calls MISSING instead and fills only what is absent
+# (merge -0); see its header.
 #
 # Usage:
 #   scripts/fetch-almarri-vcfs.sh                 # default ~/almarri_vcfs
@@ -137,15 +138,16 @@ echo "[almarri] complete: ${OK}/${tot} VCFs in $DEST/vcfs"
 echo "[almarri] total size: $(du -sh "$DEST/vcfs" | cut -f1)"
 cat <<EOF
 
-NEXT: these are PER-SAMPLE calls. Merging them without missing2ref produces a
-panel that looks almost entirely missing, because hom-ref sites are absent
-from each single-sample file and become ./. on merge. The merge stage must:
+NEXT: these are PER-SAMPLE calls. Merging them without filling absent
+genotypes produces a panel that looks almost entirely missing, because hom-ref
+sites are absent from each single-sample file and become ./. on merge.
+1d_almarri_prep_clm.sh does it:
 
-  1. bcftools view -f PASS, GQ>20          (the paper's QC)
-  2. bcftools norm -c ws -m -snps --fasta-ref <GRCh38>
-  3. bcftools merge all samples
-  4. bcftools plugin missing2ref           <-- the step that cannot be skipped
-  5. hand to 1c_phasing-jointcall for joint re-phasing with the panel
+  1. low-quality calls -> missing (FILTER not PASS, GQ <= 20) -- NOT dropped:
+     a dropped call would be filled as 0/0 in step 3
+  2. bcftools norm -c w -m -snps --fasta-ref <GRCh38>, +fixref
+  3. bcftools merge -0 all samples      <-- absent = 0/0; missing stays missing
+  4. site mask, then hand to 1c for joint re-phasing with the panel
 
 Joint re-phasing in step 5 is required even though these are already phased:
 Long Ranger phased each sample independently, and appending an independently

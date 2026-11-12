@@ -43,10 +43,11 @@ B. COHORT PREP (in parallel; FIXREF_MODE=flip-all in every prep)
     - norm -m- -f hg38 -> +fixref -m flip-all -d -> sort
       -> mxb_lifted.chrN.bcf + mxb_lifted.recipe
   1d_almarri_prep_clm.sh                         Almarri, array 1-22
-    - per sample: PASS + GQ > 20 -> norm -c w -m -snps -> biallelic SNPs
-      -> +fixref -m flip-all -d
-    - merge -m none -> +missing2ref (absent = 0/0) -> GT only
-      -> almarri_prepped.chrN.bcf + .recipe (v3)
+    - per sample: low-quality call -> ./. (FILTER not PASS, GQ <= 20 or
+      missing) -> norm -c w -m -snps -> biallelic SNPs -> +fixref -m flip-all -d
+    - merge -m none -0 (absent = 0/0; a low-quality call stays ./.)
+      -> site mask (more ./. than ALT: all of Almarri ./.) -> GT only
+      -> almarri_prepped.chrN.bcf + .recipe (v4)
 
 C. MERGE + SITE SELECTION   1c_phasing-jointcall_clm.sh (PHASE_MODE=chunked, array 1-22)
     - skip when the published soft-union is newer than every input and stamped
@@ -251,7 +252,7 @@ SGDP — 39.6% of chr22's November soft-union.)
 - *Prep* (array 1–22):
   1. manifest sample → SGDP_ID → Illumina_ID (`sgdp-raw-sample-map.py`)
   2. `bcftools merge -0 -m none -r N` over the per-sample files: a sample with
-     no record where another has one = 0/0 (as Almarri's missing2ref)
+     no record where another has one = 0/0 (as Almarri's merge -0)
   3. variant call with **FL < 1 → `./.`**, not 0/0. FL ≥ 1 is the SGDP
      authors' own: "At 'filter level 1' which we recommend for most
      analyses…", and their ADMIXTURE used "genotypes of at least filter
@@ -268,8 +269,8 @@ SGDP — 39.6% of chr22's November soft-union.)
   checks the stamp: an imputed SGDP is never filled).
 
 **1d — `1d_almarri_prep_clm.sh`** (Almarri — **NEW**; already GRCh38, no liftover)
-1. per sample, per chr: `bcftools view -f PASS -i 'FMT/GQ>20'` → `norm -m -snps
-   --fasta-ref` → biallelic SNPs → REF check
+1. per sample, per chr: low-quality calls → **`./.`** (v4; see below) →
+   `norm -m -snps --fasta-ref` → biallelic SNPs → REF check
    - **November panel (recipe v1):** `norm -c ws` — a mismatched REF is
      *overwritten* from the FASTA while ALT and the genotypes are kept, and
      stderr was discarded, so how often that happened is not in the logs.
@@ -277,14 +278,28 @@ SGDP — 39.6% of chr22's November soft-union.)
      -m ${FIXREF_MODE} -d` (flip-all) — the same check MXB and SGDP get;
      stderr kept; stamp `v3 fixref=<mode>`, per-sample cache tagged
      `v3-<mode>`, so v1/v2 files are not reused.
-2. `bcftools merge -m none` (137 samples) → **`+missing2ref`**: every absent
-   genotype becomes 0/0
-3. strip to GT → `almarri_prepped.chrN.bcf` (393,138 records); asserts ~0
-   missingness
+2. `bcftools merge -m none -0` (137 samples): a genotype ABSENT from a
+   sample's file becomes 0/0; a call set missing in step 1 stays missing
+3. site mask (`ALMARRI_SITE_MASK=1`): where more Almarri genotypes are missing
+   than ALT, all of Almarri is set missing -- as for SGDP
+4. strip to GT → `almarri_prepped.chrN.bcf`; refuses above `MAX_MISSING` 0.30
+   (an unfilled merge of single-sample files is ~99% missing); logs mean hets
+   and missing genotypes per sample (`bcftools stats -s`)
 
-A call removed by `GQ>20`, or a site with no coverage, becomes **hom-ref, not
-missing**: an uncertain het is recorded as 0/0. That can lower Almarri
-heterozygosity relative to cohorts whose uncertain calls stay missing.
+**v4 (12 Nov 2026).** v1–v3 followed the Almarri paper: keep PASS and
+GQ > 20, then `missing2ref`. A dropped call then became a confident 0/0.
+Measured on chr22 for 6 samples: **24–28% of each sample's ALT calls**,
+~97% of them heterozygous, were non-PASS (21–24%) or GQ ≤ 20 (2–4%) -- so
+Almarri's heterozygosity and ALT frequencies were cut by about a quarter, a
+cohort signal (November's Almarri-only cluster) rather than ancestry. v4 makes
+every such call **missing** (SHAPEIT5 fills it from LD, as for any gap):
+FILTER not PASS once `ALMARRI_PASS_FILTERS` are removed (Long Ranger filters
+about the *phase*, not the genotype -- SHAPEIT5 re-phases everyone; only
+filters a file's header defines are removed), or GQ ≤ `MIN_GQ` (20) or
+missing. Two `setGT` passes, because a single expression mixing the site-level
+FILTER with per-sample GQ applies only the GQ part (bcftools 1.19, tested).
+Stamp `v4 fixref=<mode> lowq=missing minGQ=<n> pass=<filters> sitemask=<0|1>`;
+per-sample cache tagged by the same settings.
 
 **1c — `1c_phasing-jointcall_clm.sh` with `PHASE_MODE=chunked`** (merge + site
 selection). In July this step was `1b_phase_prep_clm.sh`: the **same** merge →
@@ -462,7 +477,7 @@ directly, and the unsupervised run only reported proportions.
 | source calling | all four differ | caller, filters, coverage | same person twice (duplicate pairs): genotype discordance, Q difference |
 | liftover (1a, 1b_sgdp) | MXB, SGDP | strand / allele errors | duplicate pairs: 0/0 ↔ 1/1 swaps; MXB is the working control |
 | `+fixref -m flip -d` | July/Nov: MXB, SGDP (not HGDP+1KG, Almarri v1) | every A/T and C/G SNP discarded → whole-cohort absence at palindromic sites | stamps checked by 1c; count A/T + C/G records per cohort file |
-| `GQ>20` + `missing2ref` (1d) | Almarri | uncertain ALT calls → 0/0 | pre-phasing het rate by cohort |
+| `GQ>20` + `missing2ref` (1d v1–v3) | Almarri | uncertain ALT calls → 0/0: 24–28% of ALT calls per sample (chr22) | fixed in v4 (→ missing); 1d logs mean hets per sample |
 | merge without `-0` (1c) | whoever lacks a site | whole-cohort `./.` | pre-phasing missingness; sites with AN = 0 per cohort |
 | SHAPEIT5 imputation | the same | `./.` filled from other cohorts' haplotypes | het / F on the ADMIXTURE input vs pre-phasing |
 | split records (1c) | 604 positions on chr22 | each cohort called on a different record | listing the duplicated positions |

@@ -52,12 +52,28 @@
 #    an artificially high missingness rate. To resolve this, we used
 #    `bcftools plugin missing2ref` to switch missing alleles to ref."
 #
-# So the merge MUST be followed by missing2ref. This script does that, and
-# refuses to emit a BCF whose missingness says it did not happen (see step 4).
+# So absent must become 0/0. This script does that with `bcftools merge -0`,
+# and refuses to emit a BCF whose missingness says it did not happen (step 4).
 #
-# THE PAPER'S QC, which this mirrors:
-#   bcftools view -f PASS ; GQ > 20
+# THE PAPER'S QC, which v1-v3 mirrored and v4 does NOT:
+#   bcftools view -f PASS ; GQ > 20 ; then missing2ref
 #   bcftools norm -c ws -m -snps -m -indels --fasta-ref <GRCh38>
+# Dropping a low-quality call and then filling every gap as 0/0 turns that
+# call into a confident hom-ref. Measured on chr22 (12 Nov 2026, 6 samples):
+# 24-28% of each sample's ALT calls -- ~97% of them heterozygous -- were
+# non-PASS (21-24%) or GQ <= 20 (2-4%), so v3 cut Almarri's heterozygosity
+# and ALT frequencies by about a quarter: a cohort signal, not ancestry.
+#
+# v4: a low-quality call becomes MISSING (./.), never 0/0 -- as SGDP's raw prep
+# does with FL < 1 -- and SHAPEIT5 fills it from LD like any other gap:
+#   * FILTER not PASS (after removing ALMARRI_PASS_FILTERS: Long Ranger filters
+#     about the PHASE, not the genotype, which SHAPEIT5 redoes anyway), or
+#   * GQ <= MIN_GQ, or GQ missing.
+# Then `merge -0` fills only what is ABSENT from a sample's file (no call at
+# all) as 0/0; a missing call stays missing. Site mask, as for SGDP: where
+# more Almarri genotypes are missing than ALT, all of Almarri is set missing
+# there (ALMARRI_SITE_MASK=1). Per-chromosome mean hets and missing per sample
+# are logged from `bcftools stats -s`, so the effect is visible in every run.
 #
 # The files are already GRCh38, so there is no liftover here -- unlike SGDP
 # (1b), which is hg19 and must be lifted first.
@@ -85,11 +101,20 @@ VCF_DIR="${VCF_DIR:-${ALMARRI_DIR}/vcfs}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 MIN_GQ="${MIN_GQ:-20}"
+# Long Ranger FILTER values to treat as passing (space-separated, beyond PASS):
+# filters about the PHASE of a call, not its genotype -- SHAPEIT5 re-phases the
+# whole panel. Everything else non-PASS is set missing.
+ALMARRI_PASS_FILTERS="${ALMARRI_PASS_FILTERS:-}"
+# Site mask: where more Almarri genotypes are missing than ALT, set all of
+# Almarri missing at that site (1 = on, as SGDP_SITE_MASK).
+ALMARRI_SITE_MASK="${ALMARRI_SITE_MASK:-1}"
 # Strand/REF mode of the fixref step, shared with 1a, 1b_sgdp_raw and 1c (see
 # 1a: `-m flip -d` discards every A/T and C/G SNP; flip-all keeps them).
 FIXREF_MODE="${FIXREF_MODE:-flip-all}"
-# Above this, the merge plainly did not get missing2ref applied; see step 4.
-MAX_MISSING="${MAX_MISSING:-0.10}"
+# Above this, absent sites were plainly not filled (an unfilled merge of
+# single-sample files is ~99% missing); see step 4. v4 leaves low-quality calls
+# missing on purpose, so the bar is higher than v3's 0.10.
+MAX_MISSING="${MAX_MISSING:-0.30}"
 
 set -euo pipefail
 
@@ -105,31 +130,27 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 [[ -d "$VCF_DIR" ]] || { echo "ERROR: missing $VCF_DIR (run scripts/fetch-almarri-vcfs.sh)"; exit 1; }
 
 # --------------------------------------------------------------------------
-# PREFLIGHT: the missing2ref plugin, checked BEFORE the expensive loop.
-#
-# Step 2 prepares 137 per-sample BCFs, which is the slow part. If the plugin
-# turns out to be unavailable at step 3, all of that work is thrown away --
-# per chromosome, on every task. bcftools ships plugins as separate .so files
-# and finds them via BCFTOOLS_PLUGINS, which a conda env does not always set,
-# so "is it there" is a real question rather than a formality.
+# PREFLIGHT: the bcftools plugins (setGT, fixref), checked BEFORE the
+# expensive loop. Step 2 prepares 137 per-sample BCFs, which is the slow part;
+# a plugin found missing there throws that work away on every task. bcftools
+# ships plugins as separate .so files and finds them via BCFTOOLS_PLUGINS,
+# which a conda env does not always set.
 # --------------------------------------------------------------------------
 # `bcftools plugin -l | grep -q` has the same SIGPIPE inversion as the contig
 # check below: grep -q exits at the match, bcftools dies, pipefail returns 141
 # and the test reports the plugin MISSING when it is present. Listed once into
 # a variable instead.
 PLUGINS=$(bcftools plugin -l 2>/dev/null || true)
-if ! grep -q 'missing2ref' <<<"$PLUGINS"; then
-    echo "ERROR: the bcftools missing2ref plugin is not available." >&2
-    echo "       It is REQUIRED: these are single-sample VCFs, so every site" >&2
-    echo "       absent from a sample becomes ./. on merge and the panel is" >&2
-    echo "       almost entirely missing without it." >&2
-    echo "       bcftools: $(command -v bcftools)" >&2
-    echo "       BCFTOOLS_PLUGINS=${BCFTOOLS_PLUGINS:-<unset>}" >&2
-    echo "       Try:  export BCFTOOLS_PLUGINS=\$(dirname \$(command -v bcftools))/../libexec/bcftools" >&2
-    echo "       then: bcftools plugin -l | grep missing2ref" >&2
-    exit 4
-fi
-echo "[almarri] missing2ref plugin available"
+for _pl in setGT fixref; do
+    if ! grep -qw -- "$_pl" <<<"$PLUGINS"; then
+        echo "ERROR: the bcftools ${_pl} plugin is not available." >&2
+        echo "       bcftools: $(command -v bcftools)" >&2
+        echo "       BCFTOOLS_PLUGINS=${BCFTOOLS_PLUGINS:-<unset>}" >&2
+        echo "       Try:  export BCFTOOLS_PLUGINS=\$(dirname \$(command -v bcftools))/../libexec/bcftools" >&2
+        exit 4
+    fi
+done
+echo "[almarri] setGT and fixref plugins available"
 
 # --------------------------------------------------------------------------
 # --index : build the .tbi/.csi the array tasks need. Run ONCE, not per chr.
@@ -163,8 +184,10 @@ mkdir -p "$OUTDIR" "$TMP"
 # (norm -c ws, stderr discarded) stand in for a v2 rebuild.
 # v3 = v2 + FIXREF_MODE (v2 used `-m flip -d`, which dropped every A/T and
 # C/G SNP). The stamp carries `fixref=<mode>`; 1c refuses to merge cohorts
-# whose stamps disagree on it.
-OUT_RECIPE="v3 fixref=${FIXREF_MODE}"
+# whose stamps disagree on it. v4 = low-quality calls missing, not 0/0 (see
+# the header); every setting that changes a genotype is in the stamp.
+_PASSF=$(tr ' ' '\n' <<<"$ALMARRI_PASS_FILTERS" | awk 'NF' | sort -u | paste -sd, -)
+OUT_RECIPE="v4 fixref=${FIXREF_MODE} lowq=missing minGQ=${MIN_GQ} pass=PASS${_PASSF:+,${_PASSF}} sitemask=${ALMARRI_SITE_MASK}"
 if [[ -s "$OUT" && -s "${OUT}.csi" ]] \
    && bcftools view -h "$OUT" > /dev/null \
    && [[ "$(cat "${OUT}.recipe" 2>/dev/null)" == "$OUT_RECIPE" ]]; then
@@ -220,8 +243,10 @@ unset HDR
 echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 
 # --------------------------------------------------------------------------
-# 2. Per sample: PASS, GQ > MIN_GQ, split multiallelics, left-align, SNVs only,
-#    then the SAME REF check MXB (1a) and SGDP (1b_sgdp_raw) get:
+# 2. Per sample: low-quality calls set MISSING (FILTER not PASS once the
+#    ALMARRI_PASS_FILTERS are removed; GQ <= MIN_GQ or missing), split
+#    multiallelics, left-align, SNVs only, then the SAME REF check MXB (1a) and
+#    SGDP (1b_sgdp_raw) get:
 #    `bcftools +fixref -- -f <GRCh38> -m ${FIXREF_MODE} -d` (swap REF/ALT
 #    consistently with the genotypes; flip-all also keeps A/T and C/G SNPs,
 #    which `-m flip -d` discarded).
@@ -236,7 +261,26 @@ echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 # The recipe tag is part of the cached per-sample filename, so a BCF built by
 # an older recipe is never reused by a newer one.
 # --------------------------------------------------------------------------
-SUB_RECIPE="v3-${FIXREF_MODE}"   # file-name-safe form of OUT_RECIPE
+# File-name-safe form of the per-sample part of OUT_RECIPE.
+SUB_RECIPE="v4-${FIXREF_MODE}-gq${MIN_GQ}-$(printf '%s' "$_PASSF" | md5sum | cut -c1-6)"
+# Remove the filters that are about phase only, so such a call reads as PASS.
+# Only those this file's header defines: `annotate -x FILTER/X` on a file
+# without X is a hard error (tested, bcftools 1.19), which would kill the task
+# on any sample whose header lacks one of them.
+pass_filters () {   # pass_filters <source vcf>  (stdin -> stdout)
+    local src="$1" defined use
+    if [[ -z "$_PASSF" ]]; then cat; return; fi
+    defined=$(bcftools view -h "$src" | awk -F'[=,]' '/^##FILTER=<ID=/ {print $3}')
+    use=$(tr ',' '\n' <<<"$_PASSF" | grep -Fx -f <(printf '%s\n' "$defined") | sed 's/^/FILTER\//' | paste -sd, -)
+    if [[ -n "$use" ]]; then bcftools annotate -x "$use" -Ou; else cat; fi
+}
+# Two setGT passes, not one: in a single -t q expression that mixes the
+# site-level FILTER with the per-sample GQ, bcftools 1.19 silently applies only
+# the GQ part (tested: three non-PASS calls kept their genotypes).
+mask_low_quality () {
+    bcftools +setGT -Ou -- -t q -n . -i 'FILTER!="PASS" & FILTER!="."' \
+      | bcftools +setGT -Ou -- -t q -n . -i "FMT/GQ<=${MIN_GQ} | FMT/GQ=\".\""
+}
 LIST="${TMP}/merge_list.txt"
 : > "$LIST"
 NS=0; NEMPTY=0
@@ -255,8 +299,10 @@ for f in "$VCF_DIR"/*.vcf.gz; do
         rm -f "$sub" "${sub}.csi"
         # Build beside the target and move, so this loop never leaves a
         # half-written pair for the next run to find.
-        echo "[$(date +%T)] [chr${CHR}] ${base}: PASS + GQ>${MIN_GQ} -> norm -> fixref" >&2
-        bcftools view -r "$REGION" -f PASS -i "FMT/GQ>${MIN_GQ}" -Ou "$f" \
+        echo "[$(date +%T)] [chr${CHR}] ${base}: low-quality -> missing (not PASS${_PASSF:+/${_PASSF}}, GQ<=${MIN_GQ}) -> norm -> fixref" >&2
+        bcftools view -r "$REGION" -Ou "$f" \
+          | pass_filters "$f" \
+          | mask_low_quality \
           | bcftools norm -c w -m -snps --fasta-ref "$REF_FA" -Ou \
           | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.norm.bcf"
         bcftools +fixref "${sub}.norm.bcf" -Ob -o "${sub}.part" \
@@ -284,12 +330,15 @@ echo "[$(date +%T)] [chr${CHR}] prepared ${NS} per-sample BCFs (${NEMPTY} with n
 [[ "$NS" -gt 0 ]] || { echo "ERROR: no per-sample BCFs built"; exit 1; }
 
 # --------------------------------------------------------------------------
-# 3. Merge, then missing2ref -- the step that cannot be skipped.
-# -m none keeps records biallelic; they were split in step 2 and the panel is
-# biallelic SNVs throughout.
+# 3. Merge with -0: a record ABSENT from a sample's file is 0/0 (that sample
+#    has no call there); a call set missing in step 2 stays missing -- which
+#    `+missing2ref` (v1-v3) would have turned into 0/0 as well. Then the site
+#    mask. -m none keeps records biallelic; they were split in step 2 and the
+#    panel is biallelic SNVs throughout.
 # --------------------------------------------------------------------------
-echo "[$(date +%T)] [chr${CHR}] bcftools merge (${NS} samples) + missing2ref + strip to GT"
+echo "[$(date +%T)] [chr${CHR}] bcftools merge -0 (${NS} samples) + strip to GT + site mask"
 MERGED="${TMP}/almarri.merged.bcf"
+M0="${TMP}/almarri.merged.unmasked.bcf"
 # STRIP EVERYTHING BUT GT.
 #
 # Long Ranger writes PL, AD, GQ and barcode fields per genotype. Kept, they
@@ -304,17 +353,29 @@ MERGED="${TMP}/almarri.merged.bcf"
 #
 # INFO is dropped for the same reason: these are per-sample call annotations
 # whose meaning does not survive a merge anyway.
-bcftools merge -m none -l "$LIST" --threads "$THREADS" -Ou \
-  | bcftools +missing2ref -Ou -- \
-  | bcftools annotate -x 'INFO,^FORMAT/GT' --threads "$THREADS" -Ob -o "$MERGED"
-bcftools index "$MERGED"
+bcftools merge -m none -0 -l "$LIST" --threads "$THREADS" -Ou \
+  | bcftools annotate -x 'INFO,^FORMAT/GT' --threads "$THREADS" -Ob -o "$M0"
+bcftools index -f "$M0"
+# Site mask, as SGDP's: where more Almarri genotypes are missing than ALT, the
+# cohort's evidence there is mostly low-quality calls, so all of Almarri is
+# set missing rather than half-trusted.
+N_SITES_MASK=$(bcftools query -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")' -f '%POS\n' "$M0" | wc -l)
+if [[ "$ALMARRI_SITE_MASK" == "1" ]]; then
+    bcftools +setGT "$M0" -Ob -o "$MERGED" -- -t q -n . -i 'N_MISSING>0 && N_MISSING>COUNT(GT="alt")'
+    rm -f "$M0" "${M0}.csi"
+    echo "[$(date +%T)] [chr${CHR}] site mask: all of Almarri set missing at ${N_SITES_MASK} sites (more missing than ALT)"
+else
+    mv "$M0" "$MERGED"; rm -f "${M0}.csi"
+    echo "[$(date +%T)] [chr${CHR}] ALMARRI_SITE_MASK=0: no site mask (${N_SITES_MASK} sites would qualify)"
+fi
+bcftools index -f "$MERGED"
 
 # --------------------------------------------------------------------------
-# 4. Prove missing2ref actually ran.
-# If the plugin were missing, misnamed, or silently a no-op, the merge would
-# still succeed and emit a BCF that is ~99% missing genotypes. That panel
-# would then be phased and carried through every downstream stage looking
-# superficially fine. Measure it instead of trusting it.
+# 4. Prove the absent sites were filled.
+# If they were not, the merge would still succeed and emit a BCF that is ~99%
+# missing genotypes. That panel would then be phased and carried through every
+# downstream stage looking superficially fine. Measure it instead of trusting
+# it. Missing calls left on purpose (low quality, site mask) are a few percent.
 # --------------------------------------------------------------------------
 NSAMP=$(bcftools query -l "$MERGED" | wc -l)
 NREC=$(bcftools view -H "$MERGED" | wc -l)
@@ -322,20 +383,22 @@ NREC=$(bcftools view -H "$MERGED" | wc -l)
 # The producer is wrapped so its SIGPIPE death (head -20000 closes the pipe
 # long before a whole chromosome is written) cannot fail the assignment under
 # pipefail. Sampling the first 20k records is deliberate: the question is
-# whether missing2ref ran at all, and that is visible immediately.
+# whether the absent sites were filled at all, and that is visible immediately.
 FRAC_MISSING=$( { bcftools query -f '[%GT\t]\n' "$MERGED" || true; } | head -20000 \
   | awk '{for(i=1;i<=NF;i++){t++; if($i=="./."||$i==".|."||$i==".") m++}} END{printf "%.4f", (t>0?m/t:1)}')
 echo "[$(date +%T)] [chr${CHR}] merged: ${NSAMP} samples, ${NREC} records, missing GT fraction ${FRAC_MISSING}"
 if awk -v f="$FRAC_MISSING" -v m="$MAX_MISSING" 'BEGIN{exit !(f>m)}'; then
     echo "ERROR: ${FRAC_MISSING} of genotypes are missing, above MAX_MISSING=${MAX_MISSING}." >&2
-    echo "       That is the signature of a merge whose missing2ref did not" >&2
-    echo "       apply: single-sample VCFs carry no hom-ref sites, so every" >&2
-    echo "       site absent from a sample becomes ./. on merge." >&2
-    echo "       Check that the plugin is available:" >&2
-    echo "         bcftools plugin -l | grep missing2ref" >&2
-    echo "       and that BCFTOOLS_PLUGINS points at the plugin directory." >&2
+    echo "       That is the signature of a merge whose absent sites were not" >&2
+    echo "       filled: single-sample VCFs carry no hom-ref sites, so every site" >&2
+    echo "       absent from a sample is ./. unless merge -0 fills it." >&2
     exit 3
 fi
+# Per-sample heterozygous and missing genotypes (bcftools stats PSC: $6 nHets,
+# $14 nMissing), so a cohort-wide shift in either shows in every run's log.
+read -r MEAN_HET MEAN_MISS < <(bcftools stats -s - "$MERGED" \
+    | awk '/^PSC/ {n++; h += $6; m += $14} END {printf "%.0f %.0f\n", (n ? h / n : 0), (n ? m / n : 0)}')
+echo "[$(date +%T)] [chr${CHR}] per sample (mean): ${MEAN_HET} heterozygous, ${MEAN_MISS} missing genotypes"
 
 # Move the index first, then the BCF: $OUT only ever appears once both exist,
 # so a kill here cannot leave a BCF that the resume check accepts as finished.
