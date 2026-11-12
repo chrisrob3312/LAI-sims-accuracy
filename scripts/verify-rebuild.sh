@@ -36,18 +36,28 @@ warn () { NW=$((NW + 1)); printf '  WARN  %s\n' "$*"; }
 fail () { NF=$((NF + 1)); printf '  FAIL  %s\n' "$*"; }
 info () { printf '  info  %s\n' "$*"; }
 section () { printf '\n== %s ==\n' "$*"; }
-# Slurm view of one job name: array elements queued now, and finished ones by state since $SINCE.
+# Slurm view of one job name: array elements queued now, then sacct states of
+# the LATEST submission of that name since $SINCE. Earlier submissions (a
+# cancelled duplicate, a run that was fixed and re-submitted) are listed as
+# superseded and do not count as failures; a failure in the latest one does.
 jobs_of () {
-    local q a
+    local q rows latest cur old
     q=$(squeue -h -u "$U" -n "$1" -r -o '%T' | sort | uniq -c | awk '{printf "%s %s  ", $2, $1}')
-    a=$(sacct -n -X -u "$U" --name "$1" -S "$SINCE" -o State%20 | awk 'NF {print $1}' | sort | uniq -c \
-        | awk '{printf "%s %s  ", $2, $1}')
-    info "jobs '$1': queued [${q:-none}]  finished since ${SINCE} [${a:-none}]  logs: ${LOGDIR}/${2}"
-    if [[ "$a" == *FAILED* || "$a" == *TIMEOUT* || "$a" == *OUT_OF_ME* || "$a" == *NODE_FAIL* ]]; then
-        fail "'$1' has failed tasks since ${SINCE}: read their .out/.err in full (sacct -X --name $1 -S ${SINCE})"
+    rows=$(sacct -n -X -u "$U" --name "$1" -S "$SINCE" -o JobID%30,State%20 \
+           | awk 'NF {split($1, a, "_"); print a[1], $2}')
+    latest=$(awk 'NF {print $1}' <<<"$rows" | sort -n | tail -1)
+    cur=$(awk -v j="$latest" 'NF && $1 == j {print $2}' <<<"$rows" | sort | uniq -c | awk '{printf "%s %s  ", $2, $1}')
+    old=$(awk -v j="$latest" 'NF && $1 != j {print $2}' <<<"$rows" | sort | uniq -c | awk '{printf "%s %s  ", $2, $1}')
+    info "jobs '$1': queued [${q:-none}]  latest ${latest:-none} [${cur:-none}]${old:+  superseded [${old}]}  logs: ${LOGDIR}/${2}"
+    if [[ "$cur" == *FAILED* || "$cur" == *TIMEOUT* || "$cur" == *OUT_OF_ME* || "$cur" == *NODE_FAIL* ]]; then
+        fail "'$1' job ${latest} has failed tasks: read their .out/.err in full (sacct -X -j ${latest})"
     fi
 }
 nsamples () { bcftools query -l "$1" | wc -l; }
+nrecs () { bcftools index -s "$1" | awk '{s += $3} END {print s + 0}'; }   # -n warns on .csi; -s does not
+# Only what this rebuild wrote counts: older files are the November outputs
+# that the running stages will replace.
+is_new () { [[ -s "$1" && -f "$EPOCH" && "$1" -nt "$EPOCH" ]]; }
 palindromic () {   # palindromic <bcf> [region] -> "n_snps pct"
     bcftools query ${2:+-r "$2"} -i 'TYPE="snp"' -f '%REF%ALT\n' "$1" \
       | awk '{n++} $1=="AT"||$1=="TA"||$1=="CG"||$1=="GC" {p++} END {printf "%d %.1f", n, (n ? 100 * p / n : 0)}'
@@ -93,7 +103,8 @@ if [[ -s "${PANEL_DIR}/mxb_lifted.recipe" ]] && grep -q "fixref=${FIXREF_MODE}" 
     [[ "$(nsamples "$f")" -eq 50 ]] && pass "chr21: 50 samples" || fail "chr21: $(nsamples "$f") samples (50 expected)"
     read -r n p <<<"$(palindromic "$f")"
     awk -v p="$p" 'BEGIN {exit !(p > 5)}' && pass "chr21: ${n} SNPs, ${p}% A/T or C/G (kept)" || fail "chr21: ${n} SNPs, only ${p}% A/T or C/G"
-else info "not yet re-lifted with fixref=${FIXREF_MODE} (stamp: '$(cat "${PANEL_DIR}/mxb_lifted.recipe" 2>&1)')"; fi
+elif [[ -s "${PANEL_DIR}/mxb_lifted.recipe" ]]; then info "not yet re-lifted with fixref=${FIXREF_MODE} (stamp: '$(cat "${PANEL_DIR}/mxb_lifted.recipe")')"
+else info "not yet (no MXB lift stamp; the re-lift writes it when all 22 chromosomes are done)"; fi
 
 section "3. Almarri (1d_almarri_prep_clm.sh)"
 jobs_of 1d_almarri '1d_almarri_chr<N>_<job>.out/.err'
@@ -115,24 +126,27 @@ fi
 
 section "4. merge + site selection (1c_phasing-jointcall_clm.sh)"
 jobs_of 1c_phase '1c_phase_chr<N>_<job>.out/.err'
-NS=0; SC=""; printf '  %-5s %-8s %-11s %-11s %-12s %s\n' chr samples softunion admix_sites fill_dropped stamp
+NS=0; NSOLD=0; SC=""
 for c in $(seq 1 22); do
     f="${PANEL_DIR}/merged_chr${c}.softunion.bcf"
     [[ -s "$f" ]] || continue
+    is_new "$f" || { NSOLD=$((NSOLD + 1)); continue; }
+    [[ "$NS" -eq 0 ]] && printf '  %-5s %-8s %-11s %-11s %-12s %s\n' chr samples softunion admix_sites fill_dropped stamp
     NS=$((NS + 1)); s=$(nsamples "$f"); SC+="${s} "
     fc="${PANEL_DIR}/provenance/chr${c}.fill_check.tsv"; fd="-"
     [[ -s "$fc" ]] && fd=$(awk 'NR == 1 {for (i = 1; i <= NF; i++) if ($i ~ /^positions_dropped=/) {sub(/.*=/, "", $i); print $i}}' "$fc")
     ab="${PANEL_DIR}/merged_chr${c}.admix_sites.bed"; na="-"; [[ -s "$ab" ]] && na=$(wc -l < "$ab")
-    printf '  %-5s %-8s %-11s %-11s %-12s %s\n' "$c" "$s" "$(bcftools index -n "$f")" "$na" "${fd:--}" \
+    printf '  %-5s %-8s %-11s %-11s %-12s %s\n' "$c" "$s" "$(nrecs "$f")" "$na" "${fd:--}" \
         "$( [[ -s "${f}.recipe" ]] && echo yes || echo NO)"
 done
-if [[ "$NS" -eq 0 ]]; then info "not yet"
+if [[ "$NS" -eq 0 ]]; then
+    if [[ "$NSOLD" -gt 0 ]]; then info "not yet (${NSOLD} soft-unions on disk are from before the rebuild; 1c replaces them)"; else info "not yet"; fi
 else
     [[ "$NS" -eq 22 ]] && pass "22 of 22 soft-unions published" || info "${NS} of 22 published so far"
     US=$(tr ' ' '\n' <<<"$SC" | awk 'NF' | sort -u | tr '\n' ' ')
     [[ $(wc -w <<<"$US") -eq 1 ]] && pass "same sample count on every chromosome: ${US}" || fail "sample counts differ across chromosomes: ${US}"
     F21="${PANEL_DIR}/merged_chr21.softunion.bcf"
-    if [[ -s "$F21" ]]; then
+    if is_new "$F21"; then
         read -r n p <<<"$(palindromic "$F21")"
         awk -v p="$p" 'BEGIN {exit !(p > 5)}' && pass "chr21 soft-union: ${n} SNPs, ${p}% A/T or C/G" || fail "chr21 soft-union: only ${p}% A/T or C/G"
         bcftools query -l "$F21" | sort > "${TMPDIR:-/tmp}/verify_panel_ids.$$"
@@ -156,10 +170,10 @@ if [[ -s "$CHUNKS_TSV" ]]; then
     while IFS=$'\t' read -r cn cs ci rest; do
         [[ "$cn" == chr_num ]] && continue
         NEXP=$((NEXP + 1)); ch="${PANEL_DIR}/chunks/${cs}_chunk${ci}.phased.bcf"; su="${PANEL_DIR}/merged_${cs}.softunion.bcf"
-        if [[ -s "$ch" && -s "$su" && "$ch" -nt "$su" ]]; then NFRESH=$((NFRESH + 1)); elif [[ -s "$ch" ]]; then NOLD=$((NOLD + 1)); fi
+        if is_new "$su" && [[ -s "$ch" && "$ch" -nt "$su" ]]; then NFRESH=$((NFRESH + 1)); elif [[ -s "$ch" ]]; then NOLD=$((NOLD + 1)); fi
     done < "$CHUNKS_TSV"
-    if [[ "$NFRESH" -eq "$NEXP" ]]; then pass "${NFRESH} of ${NEXP} chunks phased from the current soft-union"
-    else info "${NFRESH} of ${NEXP} chunks phased from the current soft-union (${NOLD} older chunks will be re-phased)"; fi
+    if [[ "$NFRESH" -eq "$NEXP" ]]; then pass "${NFRESH} of ${NEXP} chunks phased from this rebuild's soft-union"
+    else info "${NFRESH} of ${NEXP} chunks phased from this rebuild's soft-union (${NOLD} older chunks on disk will be re-phased)"; fi
 else warn "no ${CHUNKS_TSV}"; fi
 
 section "6. ligate (1b_phase_ligate_clm.sh)"
@@ -167,12 +181,12 @@ jobs_of 1b_ligate '1b_ligate_chr<N>_<job>.out/.err'
 NL=0; NLBAD=0
 for c in $(seq 1 22); do
     ph="${PANEL_DIR}/merged_chr${c}.shapeit5_phased.softunion_maf005.bcf"; rc="${ph%.bcf}.rechr.bcf"; su="${PANEL_DIR}/merged_chr${c}.softunion.bcf"
-    if [[ -s "$ph" && -s "$rc" && -s "$su" && "$ph" -nt "$su" ]]; then
+    if is_new "$su" && [[ -s "$ph" && -s "$rc" && "$ph" -nt "$su" ]]; then
         NL=$((NL + 1))
         [[ "$(nsamples "$ph")" -eq "$(nsamples "$su")" ]] || { NLBAD=$((NLBAD + 1)); warn "chr${c}: phased and soft-union sample counts differ"; }
     fi
 done
-if [[ "$NL" -eq 0 ]]; then info "not yet (no phased chromosome newer than its soft-union)"
+if [[ "$NL" -eq 0 ]]; then info "not yet (no chromosome phased from this rebuild's soft-union)"
 else
     [[ "$NL" -eq 22 ]] && pass "22 of 22 chromosomes ligated from the current soft-union (+ .rechr for RFMix)" || info "${NL} of 22 ligated so far"
     [[ "$NLBAD" -eq 0 ]] && pass "phased sample counts match the soft-union" || fail "${NLBAD} chromosome(s) with a different sample count"
@@ -182,16 +196,16 @@ section "7. KING de-duplication (1e_king_dedup_clm.sh)"
 jobs_of 1e_king_dedup '1e_king_dedup_<job>.out/.err'
 DP="${HOMOG_DIR}/king/duplicate_pairs.tsv"; DROP="${REPO_DIR}/reference_ids/panel_duplicate_drop_ids.txt"
 P22="${PANEL_DIR}/merged_chr22.shapeit5_phased.softunion_maf005.bcf"
-if [[ -s "$DP" && -s "$P22" && "$DP" -nt "$P22" ]]; then
+if is_new "$P22" && [[ -s "$DP" && "$DP" -nt "$P22" ]]; then
     pass "duplicate pairs: $(( $(wc -l < "$DP") - 1 ))"
     if [[ -f "$DROP" && "$DROP" -nt "$P22" ]]; then pass "drop list for 4a: $(awk 'NF' "$DROP" | wc -l) IDs (${DROP})"
     else fail "1e wrote duplicate pairs but no current drop list at ${DROP} (4a reads it)"; fi
-else info "not yet (no duplicate_pairs.tsv newer than the phased panel)"; fi
+else info "not yet (no duplicate list from this rebuild's phased panel)"; fi
 
 section "8. ADMIXTURE K=${K} (4a_build_homogeneity_panel_kN_clm.sh)"
 jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'
 ST="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"; DT="${HOMOG_DIR}/discovery_clusters.k${K}.tsv"
-if [[ -s "$ST" && -s "$P22" && "$ST" -nt "$P22" ]]; then
+if is_new "$P22" && [[ -s "$ST" && "$ST" -nt "$P22" ]]; then
     info "discovery clusters (raw):"; sed 's/^/          /' "$DT"
     shopt -s nullglob; ANCH=(reference_ids/*_anchors.k${K}.txt); shopt -u nullglob
     if [[ ${#ANCH[@]} -gt 0 ]]; then info "anchors per super-pop:"; wc -l "${ANCH[@]}" | sed 's/^/          /'
@@ -207,7 +221,7 @@ if [[ -s "$ST" && -s "$P22" && "$ST" -nt "$P22" ]]; then
         a="reference_ids/${sp}_anchors.k${K}.txt"
         [[ -s "$a" ]] || warn "no anchors for ${sp^^} (${a})"
     done
-else info "not yet (no lai_ref_panel_samples.k${K}.tsv newer than the phased panel)"; fi
+else info "not yet (no lai_ref_panel_samples.k${K}.tsv from this rebuild's phased panel)"; fi
 
 section "9. simulation, RFMix, FLARE, scoring (publication stages 4-6)"
 PROJECT_ROOT="$PROJECT_ROOT" bash scripts/reset-publication-outputs.sh --check | sed 's/^/          /'
