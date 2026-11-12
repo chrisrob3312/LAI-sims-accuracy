@@ -136,6 +136,15 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
 | any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
 
+**Re-chaining after a stage fails.** Dependencies cannot be edited in place on
+this cluster: its job-submit plugin refuses every `scontrol update` that does
+not specify memory (`Memory not specified (--mem or --mem-per-cpu required)`),
+including `Dependency=` (12 Nov 2026, job 3754278). So after a failed stage:
+fix it, `scancel` the jobs still waiting behind it (they sit in
+`DependencyNeverSatisfied`), and re-run `bash submit_panel_rebuild.sh`. Every
+stage that already finished is reused from its stamp in seconds, so only the
+failed stage and what follows it do real work.
+
 ---
 
 ## 1. Two products from one source
