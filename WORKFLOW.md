@@ -323,6 +323,10 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    587, `amr_simulation` 28 of 31, `amr_hgdpmxb_simulation` 53 of 56. With
    relatives kept the lists are whole again. `OUTLIERS=<2-col file>` restores
    a drop; 1c stamps which (`outliers=` in the soft-union's `.recipe`).
+   `python3 -I scripts/related-outliers-breakdown.py` (read-only) shows what
+   that list holds by the gnomAD metadata flags (relatives vs PCA outliers,
+   per population) and, where the metadata records relationships, every pair
+   among the curated lists with the side each member is on.
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
    excluded → **3,921** in November (relatives dropped; more with them kept). Then **every input's remaining
    multi-allelic records are split** (`norm -m -any`): `merge -m none` joins
