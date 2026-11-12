@@ -47,6 +47,14 @@
 #      found adequately called in EVERY cohort x super-pop group and overall
 #      (ADMIX_SITE_FILTER); MAF >= 0.01; LD-prune 500 50 0.1 over all samples.
 #
+#   FIT SET (FIT_UNRELATED=1): the panel keeps relatives, ADMIXTURE assumes
+#      none. Both runs below are FITTED on an unrelated subset (1e's duplicate
+#      copies out, then greedily one of each pair at KING >= FIT_KINSHIP
+#      0.0884) and every relative is PROJECTED onto the fitted allele
+#      frequencies with admixture -P. The merged Q has every sample in .fam
+#      order, so what follows reads it exactly as before; relatives cannot be
+#      anchors. Per-sample record: admixture_fit_set.k${K}.tsv.
+#
 #   STAGE A (unsupervised fit, then DATA-FIRST anchor discovery):
 #     Unsupervised ADMIXTURE at K. For each cluster, rank every eligible
 #     sample by its loading, keep the top ANCHOR_CAP at Q >= ANCHOR_MIN_Q, and
@@ -385,19 +393,185 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. STAGE A -- UNSUPERVISED ADMIXTURE K (runs FIRST; discovery depends on it).
+# 2b. ADMIXTURE FIT SET. The panel keeps relatives (only duplicates are
+#     removed, by 1e), but ADMIXTURE assumes unrelated individuals: a family
+#     enters the likelihood as several draws of what is largely one genome and
+#     pulls the allele frequencies toward it -- and the rebuild puts ~600
+#     HGDP+1KG relatives (mostly 1KG parent-child families) back in the panel.
+#     So both ADMIXTURE runs are FITTED on an unrelated subset and every
+#     relative is PROJECTED onto the fitted allele frequencies (admixture -P):
+#     relatives still get a Q, can still be homogeneous and still enter the
+#     panel, but do not shape the clusters. (Standard for ADMIXTURE and PCA:
+#     fit on unrelated, project the rest.)
+#     Fit set: 1e's duplicate copies out, then greedily the sample with the
+#     most remaining relatives at KING >= FIT_KINSHIP (0.0884, second degree --
+#     gnomAD's "related") until no such pair is left among the fitted.
+#     FIT_UNRELATED=0 fits on every sample (the July/November behaviour).
+#     Per-sample record: admixture_fit_set.k${K}.tsv (fit / projected, why).
 # ---------------------------------------------------------------------------
-if newer_than "${UNSUP_DIR}/lai_ref.${K}.Q" "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam"; then
-    echo "[$(date +%T)] admixture (unsupervised) K=${K} (slow)"
-    rm -f "${UNSUP_DIR}/lai_ref.${K}.Q" "${UNSUP_DIR}/lai_ref.${K}.P"
-    for ext in bed bim fam; do ln -sf "${PRUNED}.${ext}" "${UNSUP_DIR}/lai_ref.${ext}"; done
-    cd "$UNSUP_DIR"
-    admixture -j${THREADS} lai_ref.bed "${K}"
-    cd - >/dev/null
-else
-    echo "[$(date +%T)] unsupervised Q newer than the bed -- reusing ${UNSUP_DIR}/lai_ref.${K}.Q"
+FIT_UNRELATED="${FIT_UNRELATED:-1}"
+FIT_KINSHIP="${FIT_KINSHIP:-0.0884}"
+KING_KIN0="${KING_KIN0:-${HOMOG_DIR}/king/king.kin0}"
+FIT_LIST="${ADM_DIR}/admixture_fit.keep"          # FID IID rows of lai_ref.fam
+PROJ_LIST="${ADM_DIR}/admixture_projected.keep"
+FIT_TABLE="${ADM_DIR}/admixture_fit_set.k${K}.tsv"
+FIT_BED="${ADM_DIR}/lai_ref_fit"; PROJ_BED="${ADM_DIR}/lai_ref_proj"
+if [[ "$FIT_UNRELATED" == "1" ]] && newer_than "$KING_KIN0" "${PHASED_LIST[@]}"; then
+    echo "ERROR: ${KING_KIN0} is missing or older than the phased panel." >&2
+    echo "       4a fits ADMIXTURE on unrelated samples chosen from 1e's KING table:" >&2
+    echo "       run 1e first, or set FIT_UNRELATED=0 to fit on every sample." >&2
+    exit 1
 fi
+echo "[$(date +%T)] ADMIXTURE fit set (FIT_UNRELATED=${FIT_UNRELATED}, KING >= ${FIT_KINSHIP} from ${KING_KIN0})"
+python3 -I - "${PRUNED}.fam" "$KING_KIN0" "$FIT_KINSHIP" "$FIT_UNRELATED" "$DUP_DROP" \
+    "${FIT_LIST}.new" "${PROJ_LIST}.new" "${FIT_TABLE}.new" <<'PYEOF'
+import sys
+from collections import defaultdict
+fam_f, kin_f, thr, fit_on, dup_f, fit_out, proj_out, table_out = sys.argv[1:9]
+thr = float(thr); fit_on = fit_on == "1"
+fam = [l.rstrip("\n") for l in open(fam_f) if l.strip()]
+iid = [l.split()[1] for l in fam]
+inpanel = set(iid)
+def ids(p):
+    try:
+        return {l.split()[0] for l in open(p) if l.strip() and not l.startswith("#")}
+    except FileNotFoundError:
+        return set()
+removed = {}                      # sample -> (reason, related_to, kinship)
+n_pairs = 0
+if fit_on:
+    for s in sorted(ids(dup_f) & inpanel):
+        removed[s] = ("duplicate copy on 1e's drop list", "-", "-")
+    adj = defaultdict(dict)
+    with open(kin_f) as fh:
+        head = fh.readline().lstrip("#").rstrip("\n").split("\t")
+        ix = {n: i for i, n in enumerate(head)}
+        miss = [c for c in ("IID1", "IID2", "KINSHIP") if c not in ix]
+        if miss:
+            sys.exit(f"ERROR: {kin_f} header {head} lacks {miss}")
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            a, b, k = f[ix["IID1"]], f[ix["IID2"]], float(f[ix["KINSHIP"]])
+            if k >= thr and a != b and a in inpanel and b in inpanel:
+                adj[a][b] = adj[b][a] = max(k, adj[a].get(b, k))
+                n_pairs += 1
+    def live(s):
+        return [t for t in adj[s] if t not in removed]
+    # Greedy: drop the sample with the most relatives still in the fit (ties:
+    # the larger ID, so the result is the same on every run) until none left.
+    while True:
+        cand = [(len(live(s)), s) for s in adj if s not in removed and live(s)]
+        if not cand:
+            break
+        deg, s = max(cand)
+        t = max(live(s), key=lambda u: (adj[s][u], u))
+        removed[s] = (f"relative of {deg} sample(s) left in the fit", t, f"{adj[s][t]:.4f}")
+with open(fit_out, "w") as g, open(proj_out, "w") as p, open(table_out, "w") as tb:
+    tb.write("sample\trole\treason\trelated_to\tkinship\n")
+    for line, s in zip(fam, iid):
+        w = line.split()
+        if s in removed:
+            p.write(f"{w[0]}\t{w[1]}\n")
+            tb.write(f"{s}\tprojected\t" + "\t".join(removed[s]) + "\n")
+        else:
+            g.write(f"{w[0]}\t{w[1]}\n")
+            tb.write(f"{s}\tfit\t-\t-\t-\n")
+n_rel = sum(1 for r in removed.values() if r[0].startswith("relative"))
+n_dup = len(removed) - n_rel
+print(f"  pairs at KING >= {thr} within the panel: {n_pairs}; fitted {len(iid) - len(removed)}, "
+      f"projected {len(removed)} ({n_rel} relatives, {n_dup} duplicate copies)", file=sys.stderr)
+PYEOF
+# Replace only on change: these files' timestamps decide what is re-run below.
+for f in "$FIT_LIST" "$PROJ_LIST" "$FIT_TABLE"; do
+    if [[ -f "$f" ]] && cmp -s "${f}.new" "$f"; then rm -f "${f}.new"; else mv "${f}.new" "$f"; fi
+done
+N_FIT=$(awk 'NF' "$FIT_LIST" | wc -l); N_PROJ=$(awk 'NF' "$PROJ_LIST" | wc -l)
+echo "[$(date +%T)] ADMIXTURE: ${N_FIT} samples fitted, ${N_PROJ} projected -> ${FIT_TABLE}"
+
+if newer_than "${FIT_BED}.bed" "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "$FIT_LIST"; then
+    rm -f "${FIT_BED}.bed" "${FIT_BED}.bim" "${FIT_BED}.fam"
+    plink2 --bfile "$PRUNED" --keep "$FIT_LIST" --threads "$THREADS" --make-bed --out "$FIT_BED"
+fi
+[[ $(wc -l < "${FIT_BED}.fam") -eq "$N_FIT" ]] || { echo "ERROR: ${FIT_BED}.fam is not the ${N_FIT}-sample fit set" >&2; exit 1; }
+if [[ "$N_PROJ" -gt 0 ]]; then
+    if newer_than "${PROJ_BED}.bed" "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "$PROJ_LIST"; then
+        rm -f "${PROJ_BED}.bed" "${PROJ_BED}.bim" "${PROJ_BED}.fam"
+        plink2 --bfile "$PRUNED" --keep "$PROJ_LIST" --threads "$THREADS" --make-bed --out "$PROJ_BED"
+    fi
+    [[ $(wc -l < "${PROJ_BED}.fam") -eq "$N_PROJ" ]] || { echo "ERROR: ${PROJ_BED}.fam is not the ${N_PROJ} projected samples" >&2; exit 1; }
+    # Projection needs the SAME markers in the same order as the fit.
+    cmp -s "${FIT_BED}.bim" "${PROJ_BED}.bim" || { echo "ERROR: fit and projection .bim differ" >&2; exit 1; }
+fi
+
+# project <fitted .P> <dir>: the relatives' Q on fixed allele frequencies.
+project () {
+    local P="$1" wd="$2"
+    mkdir -p "$wd"
+    if [[ "$N_PROJ" -eq 0 ]]; then : > "${wd}/lai_ref_proj.${K}.Q"; return 0; fi
+    if newer_than "${wd}/lai_ref_proj.${K}.Q" "$P" "${PROJ_BED}.bed" "${PROJ_BED}.bim" "${PROJ_BED}.fam"; then
+        echo "[$(date +%T)] admixture -P: projecting ${N_PROJ} samples onto ${P}"
+        rm -f "${wd}/lai_ref_proj.${K}.Q" "${wd}/lai_ref_proj.${K}.P"
+        for ext in bed bim fam; do ln -sf "${PROJ_BED}.${ext}" "${wd}/lai_ref_proj.${ext}"; done
+        cp "$P" "${wd}/lai_ref_proj.${K}.P.in"
+        ( cd "$wd" && admixture -j${THREADS} -P lai_ref_proj.bed "${K}" )
+    fi
+    [[ -s "${wd}/lai_ref_proj.${K}.Q" ]] || { echo "ERROR: ADMIXTURE projection failed in ${wd}" >&2; exit 1; }
+}
+# merge_q <fit Q> <projected Q> <out Q>: one row per lai_ref.fam sample, in its
+# order -- what discovery and stage C read, exactly as before.
+merge_q () {
+    python3 -I - "${PRUNED}.fam" "${FIT_BED}.fam" "$1" "${PROJ_BED}.fam" "$2" "$K" "${3}.new" <<'PYEOF'
+import os, sys
+fam, ffam, fq, pfam, pq, K, out = sys.argv[1:8]
+K = int(K)
+def load(fam_f, q_f):
+    if not os.path.exists(q_f) or os.path.getsize(q_f) == 0:
+        return {}
+    ids = [l.split()[1] for l in open(fam_f) if l.strip()]
+    Q = [l.rstrip("\n") for l in open(q_f) if l.strip()]
+    if len(ids) != len(Q):
+        sys.exit(f"ERROR: {fam_f} has {len(ids)} samples but {q_f} has {len(Q)} Q rows")
+    bad = [q for q in Q if len(q.split()) != K]
+    if bad:
+        sys.exit(f"ERROR: {q_f} has rows without K={K} columns")
+    return dict(zip(ids, Q))
+qf, qp = load(ffam, fq), load(pfam, pq)
+if set(qf) & set(qp):
+    sys.exit(f"ERROR: {len(set(qf) & set(qp))} sample(s) both fitted and projected")
+order = [l.split()[1] for l in open(fam) if l.strip()]
+miss = [s for s in order if s not in qf and s not in qp]
+if miss:
+    sys.exit(f"ERROR: {len(miss)} sample(s) have no Q (first: {miss[:3]})")
+with open(out, "w") as g:
+    for s in order:
+        g.write((qf[s] if s in qf else qp[s]) + "\n")
+print(f"  merged Q: {len(qf)} fitted + {len(qp)} projected = {len(order)} rows", file=sys.stderr)
+PYEOF
+    if [[ -f "$3" ]] && cmp -s "${3}.new" "$3"; then rm -f "${3}.new"; else mv "${3}.new" "$3"; fi
+}
+
+# ---------------------------------------------------------------------------
+# 3. STAGE A -- UNSUPERVISED ADMIXTURE K (runs FIRST; discovery depends on it):
+#    fitted on the unrelated set, relatives projected, merged in .fam order.
+# ---------------------------------------------------------------------------
+UFIT="${UNSUP_DIR}/fit"; mkdir -p "$UFIT"
+if newer_than "${UFIT}/lai_ref_fit.${K}.Q" "${FIT_BED}.bed" "${FIT_BED}.bim" "${FIT_BED}.fam"; then
+    echo "[$(date +%T)] admixture (unsupervised) K=${K} on the ${N_FIT} fitted samples (slow)"
+    rm -f "${UFIT}/lai_ref_fit.${K}.Q" "${UFIT}/lai_ref_fit.${K}.P"
+    for ext in bed bim fam; do ln -sf "${FIT_BED}.${ext}" "${UFIT}/lai_ref_fit.${ext}"; done
+    ( cd "$UFIT" && admixture -j${THREADS} lai_ref_fit.bed "${K}" )
+else
+    echo "[$(date +%T)] unsupervised fit newer than its bed -- reusing ${UFIT}/lai_ref_fit.${K}.Q"
+fi
+[[ -s "${UFIT}/lai_ref_fit.${K}.Q" ]] || { echo "ERROR: unsupervised ADMIXTURE failed"; exit 1; }
+project "${UFIT}/lai_ref_fit.${K}.P" "${UNSUP_DIR}/proj"
+merge_q "${UFIT}/lai_ref_fit.${K}.Q" "${UNSUP_DIR}/proj/lai_ref_proj.${K}.Q" "${UNSUP_DIR}/lai_ref.${K}.Q"
 [[ -s "${UNSUP_DIR}/lai_ref.${K}.Q" ]] || { echo "ERROR: unsupervised ADMIXTURE failed"; exit 1; }
+
+# A projected sample cannot be an anchor: anchors label the supervised FIT.
+ANCHOR_INELIG="${ADM_DIR}/anchor_ineligible.txt"
+{ [[ -s "$DUP_DROP" ]] && awk 'NF && $1 !~ /^#/ {print $1}' "$DUP_DROP"
+  awk 'NF {print $2}' "$PROJ_LIST"; } | sort -u > "$ANCHOR_INELIG"
 # ---------------------------------------------------------------------------
 # 4. STAGE A -- data-first anchor discovery from the unsupervised Q.
 #    Per cluster: rank every eligible sample, keep the top ANCHOR_CAP at
@@ -408,7 +582,7 @@ DISCOVERY_TABLE="${HOMOG_DIR}/discovery_clusters.k${K}.tsv"
 echo "[$(date +%T)] data-first discovery from unsupervised K=${K}: per cluster, top ${ANCHOR_CAP} at Q >= ${ANCHOR_MIN_Q}, named by anchor metadata (purity >= ${ANCHOR_NAME_PURITY})"
 python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$ANCHOR_CAP" \
     "${ANCHOR_MIN_Q_STRICT:-}" "$ANCHOR_STRICT_SUPERPOPS" "$ANCHOR_NAME_PURITY" "$ANCHOR_COHORT_WARN" \
-    "$SAMPLE_GROUPS" "$MXB_POPINFO" "$SGDP_MANIFEST" "$ALMARRI_META" "$PANEL_EXCLUDE" "$DUP_DROP" \
+    "$SAMPLE_GROUPS" "$MXB_POPINFO" "$SGDP_MANIFEST" "$ALMARRI_META" "$PANEL_EXCLUDE" "$ANCHOR_INELIG" \
     "$REFS" "$SUPERPOPS" "$OTH_ANCHORS" "$DISCOVERY_TABLE" <<'PYEOF'
 import sys, re, csv
 from collections import Counter
@@ -481,7 +655,8 @@ elig = [i for i, s in enumerate(samples) if s not in excluded]
 SP = [superpop(s) for s in samples]
 CO = [cohort(s) for s in samples]
 print(f"[discover] {len(samples)} samples; {len(samples) - len(elig)} not eligible "
-      f"(named exclusions + 1e duplicate drops); {len(elig)} ranked in every cluster",
+      f"(named exclusions, 1e duplicate drops, relatives projected rather than fitted); "
+      f"{len(elig)} ranked in every cluster",
       file=sys.stderr)
 n_na = sum(1 for i in elig if SP[i] == "NA")
 if n_na:
@@ -740,15 +915,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. STAGE B -- supervised ADMIXTURE K.
+# 6. STAGE B -- supervised ADMIXTURE K, fitted on the unrelated set (its .pop
+#    rows taken from the full .pop in fit order; every anchor is in the fit,
+#    since discovery never picks a projected sample), relatives projected onto
+#    the supervised allele frequencies, merged in .fam order.
 # ---------------------------------------------------------------------------
-if newer_than "${ADM_DIR}/lai_ref.${K}.Q" "$POP_FILE" "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam"; then
-    rm -f "${ADM_DIR}/lai_ref.${K}.Q" "${ADM_DIR}/lai_ref.${K}.P"
-    echo "[$(date +%T)] admixture --supervised K=${K} (slow)"
-    cd "$ADM_DIR"
-    admixture --supervised -j${THREADS} lai_ref.bed "${K}"
-    cd - >/dev/null
+SFIT="${ADM_DIR}/sup_fit"; mkdir -p "$SFIT"
+python3 -I - "${PRUNED}.fam" "$POP_FILE" "${FIT_BED}.fam" "${SFIT}/lai_ref_fit.pop.new" <<'PYEOF'
+import sys
+fam, pop, ffam, out = sys.argv[1:5]
+ids = [l.split()[1] for l in open(fam) if l.strip()]
+lab = [l.strip() for l in open(pop)]
+if len(ids) != len(lab):
+    sys.exit(f"ERROR: {fam} ({len(ids)}) and {pop} ({len(lab)}) differ in length")
+m = dict(zip(ids, lab))
+fit = [l.split()[1] for l in open(ffam) if l.strip()]
+with open(out, "w") as g:
+    for s in fit:
+        g.write(m[s] + "\n")
+n_all = sum(1 for x in lab if x != "-"); n_fit = sum(1 for s in fit if m[s] != "-")
+if n_fit != n_all:
+    sys.exit(f"ERROR: {n_all - n_fit} anchor(s) are not in the ADMIXTURE fit set")
+print(f"  supervised fit .pop: {len(fit)} rows, {n_fit} anchors", file=sys.stderr)
+PYEOF
+if [[ -s "${SFIT}/lai_ref_fit.pop" ]] && cmp -s "${SFIT}/lai_ref_fit.pop.new" "${SFIT}/lai_ref_fit.pop"; then
+    rm -f "${SFIT}/lai_ref_fit.pop.new"
+else
+    mv "${SFIT}/lai_ref_fit.pop.new" "${SFIT}/lai_ref_fit.pop"
 fi
+for ext in bed bim fam; do ln -sf "${FIT_BED}.${ext}" "${SFIT}/lai_ref_fit.${ext}"; done
+if newer_than "${SFIT}/lai_ref_fit.${K}.Q" "${SFIT}/lai_ref_fit.pop" "${FIT_BED}.bed" "${FIT_BED}.bim" "${FIT_BED}.fam"; then
+    rm -f "${SFIT}/lai_ref_fit.${K}.Q" "${SFIT}/lai_ref_fit.${K}.P"
+    echo "[$(date +%T)] admixture --supervised K=${K} on the ${N_FIT} fitted samples (slow)"
+    ( cd "$SFIT" && admixture --supervised -j${THREADS} lai_ref_fit.bed "${K}" )
+fi
+[[ -s "${SFIT}/lai_ref_fit.${K}.Q" ]] || { echo "ERROR: supervised ADMIXTURE failed"; exit 1; }
+project "${SFIT}/lai_ref_fit.${K}.P" "${ADM_DIR}/sup_proj"
+merge_q "${SFIT}/lai_ref_fit.${K}.Q" "${ADM_DIR}/sup_proj/lai_ref_proj.${K}.Q" "${ADM_DIR}/lai_ref.${K}.Q"
 [[ -s "${ADM_DIR}/lai_ref.${K}.Q" ]] || { echo "ERROR: supervised ADMIXTURE failed"; exit 1; }
 
 # ---------------------------------------------------------------------------

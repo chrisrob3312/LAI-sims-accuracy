@@ -297,6 +297,12 @@ if is_new "$P22" && [[ -s "$ST" && "$ST" -nt "$P22" ]]; then
     shopt -s nullglob; ANCH=(reference_ids/*_anchors.k${K}.txt); shopt -u nullglob
     if [[ ${#ANCH[@]} -gt 0 ]]; then info "anchors per super-pop:"; wc -l "${ANCH[@]}" | sed 's/^/          /'
     else fail "4a wrote no reference_ids/*_anchors.k${K}.txt"; fi
+    FST="${HOMOG_DIR}/admixture_k${K}/admixture_fit_set.k${K}.tsv"
+    if [[ -f "$FST" && "$FST" -nt "$P22" ]]; then
+        info "ADMIXTURE fit set (raw counts by role / reason): $(awk -F'\t' 'NR > 1 {split($3, w, " "); n[$2 " (" (w[1] == "-" ? "unrelated" : w[1]) ")"]++} END {for (k in n) printf "%s %d; ", k, n[k]}' "$FST")"
+    else
+        warn "no current ${FST}: this 4a fitted ADMIXTURE on every sample, relatives included"
+    fi
     DRL="${HOMOG_DIR}/admixture_k${K}/donor_relatives.k${K}.tsv"
     if [[ -f "$DRL" && "$DRL" -nt "$P22" ]]; then
         info "4a kept $(( $(wc -l < "$DRL") - 1 )) relative(s) of simulation donors (KING >= ${ROLE_KINSHIP}) out of the homogeneous panel: ${DRL}"

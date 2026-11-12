@@ -238,6 +238,31 @@ fi
 [[ "$START_STAGE" -le "$STOP_STAGE" ]] || die "START_STAGE > STOP_STAGE"
 echo "[precheck] submitting stages ${START_STAGE}..${STOP_STAGE}${AFTER_JOB:+ after job ${AFTER_JOB}}"
 
+# Re-running this while an earlier submission of the SAME stages is still
+# queued would put two copies of each on the same files -- two 4a jobs after
+# one 1e, two 2b arrays writing one simulation tree. Refuse (a dry run only
+# warns). Only the stages this run would submit are checked, so the job named
+# in AFTER_JOB -- e.g. a queued 1e that 4a is to wait on -- is not flagged.
+if command -v squeue > /dev/null; then
+    _names=" "
+    want 2 && _names+="1c_phase "
+    if want 3 && { want 2 || [[ "${RUN_KING:-}" == "1" ]]; }; then _names+="1e_king_dedup "; fi
+    want 3 && _names+="4a_homog_kN "
+    want 4 && _names+="2b_simu "
+    want 5 && _names+="3b_rfmix 3b_homog 3b_chip 3b_chip_homog 3b_flare "
+    want 6 && _names+="finalize_pilot "
+    _queued=$(squeue -h -u "${USER:-$(id -un)}" -o '%A %j %T' | awk -v n="$_names" 'index(n, " " $2 " ")' | sort -u)
+    if [[ -n "$_queued" ]]; then
+        echo "[precheck] stages this run would submit are still queued from an earlier submission:" >&2
+        sed 's/^/            /' <<<"$_queued" >&2
+        if [[ -n "$DRY_RUN" ]]; then
+            echo "[precheck] DRY RUN: a real run REFUSES until they are cancelled" >&2
+        else
+            die "cancel them first (scancel <id> ...), then re-run"
+        fi
+    fi
+fi
+
 # Project paths
 [[ -d "$PROJECT_ROOT" ]] || die "PROJECT_ROOT missing: $PROJECT_ROOT"
 echo "[precheck] project root OK"

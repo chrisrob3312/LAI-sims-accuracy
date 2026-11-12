@@ -88,6 +88,8 @@ E. DE-DUPLICATION + ANCESTRY PANEL
       HGDP > 1KG > SGDP -> panel_duplicate_drop_ids.txt
   4a_build_homogeneity_panel_kN_clm.sh       K=8
     - concat -> ADMIXTURE site list -> --maf 0.01 --indep-pairwise 500 50 0.1
+    - fit set: unrelated (1e duplicate copies out, then one of each pair at
+      KING >= 0.0884); relatives projected (admixture -P) in both runs below
     - unsupervised ADMIXTURE K=8
     - data-first discovery: per cluster the top 50 at Q >= 0.93, cluster named
       by its anchors' metadata super-pop
@@ -427,13 +429,28 @@ of sites. `KING_INPUT=softunion` reads the pre-phasing genotypes instead.
    `plink2 --maf 0.01 --indep-pairwise 500 50 0.1` over all samples at once
    (same as July) → `--max-alleles 2 --snps-only just-acgt --make-bed` →
    `admixture_k8/lai_ref` (528,876 SNPs in November, without the site list)
-3. unsupervised ADMIXTURE K=8 → `admixture_k8/unsup/lai_ref.8.Q` (~10 h;
-   reused on a rerun unless deleted)
+3. **fit set** (from 12 Nov 2026, with relatives kept in the panel):
+   ADMIXTURE assumes unrelated individuals, so both runs are fitted on an
+   unrelated subset -- 1e's duplicate copies out, then greedily the sample
+   with the most relatives at KING ≥ `FIT_KINSHIP` (0.0884, second degree)
+   until no such pair is left -- and every relative is **projected** onto the
+   fitted allele frequencies (`admixture -P`). Relatives still get a Q, can
+   still be homogeneous and enter the panel, but do not shape the clusters,
+   and cannot be anchors. The merged Q keeps every sample in `.fam` order, so
+   discovery and stage C read it as before. Record:
+   `admixture_k8/admixture_fit_set.k8.tsv` (sample, fit / projected, why,
+   related_to, kinship). `FIT_UNRELATED=0` fits on everyone (July/November).
+   Then unsupervised ADMIXTURE K=8 on the fit set
+   (`admixture_k8/unsup/fit/`), relatives projected (`unsup/proj/`), merged
+   → `admixture_k8/unsup/lai_ref.8.Q` (~10 h; reused while its inputs are
+   unchanged)
 4. **NEW — data-first discovery:** per cluster, rank every eligible sample,
    keep the top 50 at Q ≥ 0.93, and name the cluster from those anchors'
    metadata (see §3, 4a)
-5. supervised ADMIXTURE K=8 on those anchors → labels → tiered homogeneity →
-   `lai_ref_panel_samples.k8.tsv`
+5. supervised ADMIXTURE K=8 on those anchors, fitted on the same set
+   (`sup_fit/`), relatives projected onto its allele frequencies
+   (`sup_proj/`), merged → `admixture_k8/lai_ref.8.Q` → labels → tiered
+   homogeneity → `lai_ref_panel_samples.k8.tsv`
 
 July had no step 4: the curated `*_rfmix.txt` lists were the supervised labels
 directly, and the unsupervised run only reported proportions.
