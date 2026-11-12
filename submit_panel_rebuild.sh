@@ -36,8 +36,13 @@
 #                      (phased_data2021 -- it no-ops on chromosomes already
 #                      prepped). Set to the per-sample prep once it exists.
 #                      SGDP_PREP=none skips the stage.
-#   HGDP1KG_PATTERN    the HGDP+1KG source; default = the u235158 archive the
-#                      November run used (3,458 samples incl. the 60 restored).
+#   HGDP1KG_PATTERN    the HGDP+1KG source; default = phased_haplotypes_v2_filter1,
+#                      the source July used (4,091 samples). The u235158 archive
+#                      November used adds 60 samples that are Koenig et al.'s QC
+#                      removals; they are now in panel_exclude_ids.txt either way.
+#   FILL_REF_COHORTS   cohorts whose file is a complete variant callset, so a
+#                      site absent from it is 0/0 for them (see 1c). Default
+#                      empty; "MXB ALMARRI" for the current sources.
 #   ADMIX_GROUP_MAXMISS / ADMIX_TOTAL_MAXMISS / ADMIX_MISS_MIN_N
 #                      the ADMIXTURE site rule (default 0.15 / 0.07 / 5).
 #   ADMIX_INPUT / KING_INPUT   phased (default) or softunion: what 4a / 1e read.
@@ -58,7 +63,8 @@ cd "$REPO_DIR"
 DRY_RUN="${DRY_RUN:-}"
 RERUN_MXB="${RERUN_MXB:-0}"
 SGDP_PREP="${SGDP_PREP:-1b_sgdp_liftover_clm.sh}"
-HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz}"
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/phased_haplotypes_v2_filter1/hgdp1kgp_chr__CHR__.shapeit5_phased.filter1_SNP_maf005.vcf.gz}"
+FILL_REF_COHORTS="${FILL_REF_COHORTS:-}"
 ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.15}"
 ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
 ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
@@ -115,6 +121,7 @@ submit () {   # submit <label> <sbatch args...> <script>
 echo "[rebuild] chunks: ${N_CHUNKS} (main ${MAIN_SPEC}; heavy ${HEAVY_CHUNKS})" >&2
 echo "[rebuild] HGDP+1KG source: ${HGDP1KG_PATTERN}" >&2
 echo "[rebuild] SGDP prep: ${SGDP_PREP}; MXB liftover rerun: ${RERUN_MXB}" >&2
+echo "[rebuild] absent-as-0/0 cohorts: ${FILL_REF_COHORTS:-(none)}" >&2
 echo "[rebuild] ADMIXTURE site rule: groups <= ${ADMIX_GROUP_MAXMISS} (n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}" >&2
 echo "[rebuild] 4a reads: ${ADMIX_INPUT:-phased} (site filter ${ADMIX_SITE_FILTER:-1}); 1e reads: ${KING_INPUT:-phased} (site filter ${KING_SITE_FILTER:-1})" >&2
 
@@ -134,7 +141,8 @@ DEP_1C=$(IFS=:; echo "${PREP_DEPS[*]}")
 # arrive as REQUIRE_COHORTS=SGDP. The $( ) is a subshell, so nothing leaks into
 # the other stages' submissions.
 J_1C=$(export PHASE_MODE=chunked REQUIRE_COHORTS="SGDP ALMARRI" \
-           HGDP1KG_PATTERN ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS ADMIX_MISS_MIN_N
+           HGDP1KG_PATTERN ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS ADMIX_MISS_MIN_N \
+           FILL_REF_COHORTS
        submit 1c_merge --array=1-22%${THROTTLE} --dependency=afterok:${DEP_1C} \
            1c_phasing-jointcall_clm.sh)
 J_CH=$(submit chunks --array=${MAIN_SPEC}%${CHUNK_THROTTLE} --dependency=afterok:${J_1C} \

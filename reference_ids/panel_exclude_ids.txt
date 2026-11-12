@@ -16,3 +16,80 @@
 #                    filtered HGDP+1KG source and returns only when
 #                    HGDP1KG_PATTERN points at the unfiltered u235158 archive.
 CHMI_CHMI3_WGS2
+#
+# ---------------------------------------------------------------------------
+# Koenig et al. 2024 (Genome Res 34:796, doi 10.1101/gr.278378.123) QC
+# removals. These 59 (+ CHMI above) are the 60 samples that are in the u235158
+# archive (4,151 samples) and NOT in phased_haplotypes_v2_filter1 (4,091).
+# None is in related_outliers.txt; their gnomAD metadata (gnomad_meta_updated
+# .tsv, checked 2026-11-12) gives the reason. Excluded here as well, so the
+# exclusion holds whichever HGDP+1KG source 1c is pointed at.
+#
+# sample_filters.hard_filters = sex_aneuploidy (24). Sex-chromosome flags; the
+# autosomes are not implicated, so these are the ones to revisit if the panel
+# ever needs them back.
+HGDP01157
+HGDP01208
+HGDP01368
+LP6005441-DNA_G09
+HG00154
+HG00361
+HG01366
+HG01683
+HG02869
+HG03019
+HG03250
+HG03456
+HG03511
+HG04202
+NA07348
+NA10854
+NA19054
+NA19176
+NA19226
+NA19332
+NA19395
+NA20506
+NA20530
+NA20533
+# sample_filters.hard_filters = ambiguous_sex (6)
+HG01053
+NA12865
+NA18864
+NA18978
+NA20832
+HG01137
+# sample_filters.hard_filters = bad_qc_metrics (1). Pre-phasing heterozygosity
+# 0.022 against an EAS mean of 0.158 in the November panel.
+HGDP01219
+# no gnomAD hard filter: Koenig's ancestry outliers (23) and the duplicate /
+# MZ drop from each pair (5). HGDP00452, HGDP00758 and HGDP01279 are the
+# dropped copies of the three HGDP~HGDP duplicate pairs KING found in November.
+HGDP00013
+HGDP00029
+HGDP00057
+HGDP00130
+HGDP00150
+HGDP00175
+HGDP00452
+HGDP00472
+HGDP00621
+HGDP00758
+HGDP01270
+HGDP01271
+HGDP01279
+HGDP01298
+HGDP01300
+HGDP01303
+LP6005441-DNA_G02
+LP6005443-DNA_B02
+HG01628
+HG01629
+HG01630
+HG01694
+HG01696
+HG01880
+HG01881
+NA20274
+NA20299
+NA20314

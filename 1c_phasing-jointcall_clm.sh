@@ -393,18 +393,13 @@ add_cohort ALMARRI "$ALMARRI_PREPPED" || exit 1
 
 echo "[$(date +%T)] [chr${CHR}] panel after all cohorts: $(wc -l < "$SEEN_IDS") samples"
 
-echo "[$(date +%T)] [chr${CHR}] bcftools merge (${#MERGE_INPUTS[@]} inputs)"
-bcftools merge --threads "$THREADS" \
-    -Ob -o "$MERGED" \
-    "${MERGE_INPUTS[@]}"
-bcftools index "$MERGED"
-
-# SITE PROVENANCE, logged at three stages (raw merge, after plink2 QC, soft-
-# union) BEFORE anything is decided from it: per cohort, how many of its file's
+# SITE PROVENANCE, logged at three stages (raw merge, after QC, soft-union)
+# BEFORE anything is decided from it: per cohort, how many of its file's
 # records reach the panel, how many are unique to that study, and -- for every
 # panel record it has no call at -- whether its file lacks the position or has
 # it with alleles the merge could not join (swap / flip / other ALT / other
-# REF). TSVs in ${OUTDIR}/provenance/, summary lines in this log.
+# REF). TSVs in ${OUTDIR}/provenance/, summary lines in this log. The cohort
+# site lists are taken from the ORIGINAL files, before any 0/0 fill below.
 PROV_DIR="${OUTDIR}/provenance"
 mkdir -p "$PROV_DIR"
 PROV_ARGS=()
@@ -422,6 +417,50 @@ provenance () {   # provenance <stage> <bcf>
         --out-cohorts "${PROV_DIR}/chr${CHR}.$1.cohorts.tsv" \
         --out-patterns "${PROV_DIR}/chr${CHR}.$1.patterns.tsv"
 }
+
+# ABSENT = HOM-REF, for cohorts whose file is a COMPLETE variant callset.
+# A site missing from such a file means no sample in that cohort carries the
+# ALT, so its samples are 0/0 there -- the assumption Almarri's per-sample
+# merge already makes with missing2ref. Without this, `bcftools merge` leaves
+# the whole cohort ./. at every such site and SHAPEIT5 has to guess it.
+#
+# Only for complete callsets. MXB is a GATK joint call (GenotypeGVCFs, PASS,
+# singletons kept); Almarri is per-sample + missing2ref. NOT the current SGDP
+# release (GLIMPSE-imputed against 1KG phase 3: a missing site is one 1KG p3
+# lacks, and the same person is non-ref there 28% of the time) and NOT a
+# MAF-filtered HGDP+1KG source (missing can mean "rare", not "absent").
+#
+# How: a sites-only union of every input is merged with the cohort's file
+# using -0, which fills ONLY sites the file lacks; ./. calls inside the file
+# stay missing. Off unless FILL_REF_COHORTS names the cohorts, e.g.
+#   FILL_REF_COHORTS="MXB ALMARRI"
+FILL_REF_COHORTS="${FILL_REF_COHORTS:-}"
+if [[ -n "$FILL_REF_COHORTS" ]]; then
+    UNION_SITES="${TMPDIR}/union_sites.chr${CHR}.bcf"
+    echo "[$(date +%T)] [chr${CHR}] sites-only union of ${#MERGE_INPUTS[@]} inputs (for the 0/0 fill)"
+    bcftools merge -m none --threads "$THREADS" -Ou "${MERGE_INPUTS[@]}" \
+      | bcftools view -G -Ob -o "$UNION_SITES"
+    bcftools index -f "$UNION_SITES"
+    for _i in "${!MERGE_INPUTS[@]}"; do
+        _lab="${MERGE_LABELS[$_i]}"
+        [[ " ${FILL_REF_COHORTS} " == *" ${_lab} "* ]] || continue
+        _out="${TMPDIR}/${_lab}.absent_as_ref.chr${CHR}.bcf"
+        _before=$(bcftools view -H "${MERGE_INPUTS[$_i]}" | wc -l)
+        bcftools merge -m none -0 --threads "$THREADS" -Ob -o "$_out" "$UNION_SITES" "${MERGE_INPUTS[$_i]}"
+        bcftools index -f "$_out"
+        echo "[$(date +%T)] [chr${CHR}] ${_lab}: ${_before} records in its file;" \
+             "$(bcftools view -H "$_out" | wc -l) after filling absent sites as 0/0"
+        MERGE_INPUTS[$_i]="$_out"
+    done
+fi
+
+# -m none: never build multi-allelic records. Two cohorts that saw different
+# ALTs at one position stay two records, which step 3b then removes together.
+echo "[$(date +%T)] [chr${CHR}] bcftools merge -m none (${#MERGE_INPUTS[@]} inputs)"
+bcftools merge -m none --threads "$THREADS" \
+    -Ob -o "$MERGED" \
+    "${MERGE_INPUTS[@]}"
+bcftools index "$MERGED"
 provenance merged "$MERGED"
 
 # 3. plink2 site QC -- biallelic SNPs, ACGT only, dedup, missing-var-ids.
@@ -458,6 +497,29 @@ if ! grep -q "^##contig=<ID=chr${CHR}[,>]" <<<"$_QHDR"; then
     exit 1
 fi
 unset _QHDR
+
+# 3b. Drop every position that still holds more than one SNP record: a split
+#     multi-allelic site, either because two cohorts saw different ALTs at it
+#     or because a cohort's own multi-allelic record was split by norm -m. The
+#     panel is biallelic by design, and at such a position each cohort is
+#     called on one record and missing on the other.
+MULTI_POS="${TMPDIR}/multirecord_positions.chr${CHR}.tsv"
+bcftools query -f '%CHROM\t%POS\n' "$QCED" | uniq -d > "$MULTI_POS"
+N_MULTI=$(wc -l < "$MULTI_POS")
+if [[ "$N_MULTI" -gt 0 ]]; then
+    N_MULTI_REC=$(bcftools query -f '%CHROM\t%POS\n' "$QCED" \
+                  | awk 'NR==FNR {d[$1"\t"$2]=1; next} ($1"\t"$2) in d' "$MULTI_POS" - | wc -l)
+    bgzip -f "$MULTI_POS"
+    tabix -s1 -b2 -e2 -f "${MULTI_POS}.gz"
+    QCED_BI="${QCED_PREFIX}.biallelic.bcf"
+    bcftools view -T "^${MULTI_POS}.gz" --threads "$THREADS" -Ob -o "$QCED_BI" "$QCED"
+    bcftools index -f "$QCED_BI"
+    QCED="$QCED_BI"
+    echo "[$(date +%T)] [chr${CHR}] dropped ${N_MULTI} positions holding more than one record" \
+         "(${N_MULTI_REC} records: split multi-allelic sites)"
+else
+    echo "[$(date +%T)] [chr${CHR}] no position holds more than one record"
+fi
 provenance qc "$QCED"
 
 # 4. Per-superpop pre-filter, then soft-union of passing sites.

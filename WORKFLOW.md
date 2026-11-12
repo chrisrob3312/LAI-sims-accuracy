@@ -73,9 +73,9 @@ NAT accuracy run did not have. Numbers are chr22 from the November run
 
 | cohort | n | source | how it was called |
 |---|---|---|---|
-| HGDP+1KG | 3,458 | `phased_haplotypes_v2_filter1/hgdp1kgp_chrN…filter1_SNP_maf005.vcf.gz` | gnomAD joint call, GRCh38, MAF ≥ 0.005 already applied (264,074 records); hom-ref at sites private to another cohort is absent, not 0/0 |
-| MXB | 50 | `mexican_50_autosomes.vcf.gz` | MXB calls, hg19 → lifted by 1a |
-| SGDP | 276 | Reich lab `phased_data2021/chr.sgdp.pub.N.bcf` | SGDP pipeline, **already phased**, hg19 → lifted by 1b_sgdp — **NEW** |
+| HGDP+1KG | 3,398 (July) | `phased_haplotypes_v2_filter1/hgdp1kgp_chrN…filter1_SNP_maf005.vcf.gz` (4,091 samples) | Koenig et al. 2024 joint call (`phased_haplotypes_v2`) + lab filter: SNPs, global MAF ≥ 0.005 (chr21: 201,577 records). **The default again.** November used the u235158 archive instead (4,151 samples, 262,522 chr21 records); its 60 extra samples are Koenig's QC removals and are now excluded by name. The unfiltered `phased_haplotypes_v2` is in `original_data_downloads/` |
+| MXB | 50 | `mexican_50_autosomes.vcf.gz` | GATK HaplotypeCaller → GenotypeGVCFs **joint call**, PASS, singletons kept; hg19 → lifted by 1a. A site it lacks = no MXB carrier |
+| SGDP | 276 | Reich lab `phased_data2021/chr.sgdp.pub.N.bcf` | **GLIMPSE-imputed against 1KG phase 3** from mpileup (README: "GT: Phased and imputed genotypes"), so only 1KG-p3 sites; hg19 → lifted by 1b_sgdp — **NEW**; to be replaced by a raw SGDP release |
 | Almarri | 137 | Long Ranger per-sample phased VCFs | 10x linked reads, per-sample GATK, GRCh38 — **NEW** |
 
 **1a — `1a_prep-mxb-liftover_clm.sh`** (MXB; unchanged since July)
@@ -133,10 +133,16 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    stops instead, and 4a / the benchmark exclude CHMI by name.
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
    excluded → **3,921**
-3. `bcftools merge` of the four files, **without `-0`**: a site absent from a
-   cohort's file is `./.` for that whole cohort. 1,153,425 records.
+3. `bcftools merge -m none` of the four files (1,153,425 records in
+   November). Without `-0`, a site absent from a cohort's file is `./.` for
+   that whole cohort. `FILL_REF_COHORTS` (off by default; "MXB ALMARRI" for
+   the current sources) makes it 0/0 for cohorts whose file is a complete
+   variant callset: a sites-only union is merged into each such file with
+   `-0`, which fills only sites the file lacks. Site provenance is logged here.
 4. plink2 site QC: `--max-alleles 2 --snps-only just-acgt --rm-dup exclude-all
-   --set-missing-var-ids @:#[b38]`
+   --set-missing-var-ids @:#[b38]`, then **every position still holding more
+   than one record is dropped** (split multi-allelic sites: cohorts saw
+   different ALTs). Logged with counts; provenance logged again.
 5. **Soft-union site gate.** Groups come from `sample_groups.tsv` = gnomAD
    HGDP+1KG metadata + MXB only; **SGDP and Almarri are in no group** (groups
    sum to 3,507 of 3,921; the one missing is CHMI). Per group with ≥ 10
