@@ -129,7 +129,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | once, before the first chained run | `bash scripts/reset-publication-outputs.sh` — moves the previous `02_simulations` / `03_rfmix` / `03_flare` gen12 trees aside and writes `rebuild_epoch`. The RFMix and FLARE arms reuse any output they find, whatever its age, so without this the old pilot would be skipped over as done and re-scored; the driver refuses to chain them until `--check` passes | moves (never deletes) |
 | plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
-| any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel, anchors, no CHMI, results rewritten) | no |
+| any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
 
 ---
 
@@ -298,6 +298,20 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    CHMI by name. Then `norm -m -any -c w` + `+fixref -m ${FIXREF_MODE} -d` (flip-all): every
    multi-allelic record split (was `-m -snps`, which left SNP+indel records
    whole), REF checked against GRCh38.
+   *The reference and donor lists name 28 of the dropped IDs* (checked
+   against the November panel, 12 Nov 2026: every one is in v2 and on
+   `related_outliers.txt`). No stage complains: 2b and 3b select samples
+   with `plink2 --keep` and FLARE with `bcftools view --force-samples`, which
+   skip absent IDs. So July and November ran with fewer samples than the
+   lists hold: `amr_rfmix` 20 of 31 (Maya 11, Pima 3, Karitiana 2, Surui 2,
+   Colombian 2), `amr_hgdpmxb_rfmix` 45 of 56, `afr_rfmix` 48 of 50,
+   `eur_rfmix` 49 of 50, `pel_rfmix` 84 of 86, `pel_eas_rfmix` 576 of 587,
+   `amr_simulation` 28 of 31, `amr_hgdpmxb_simulation` 53 of 56. All 62 HGDP
+   Indigenous American genomes are on one of the two AMR lists, so there
+   are no unused ones to replace them with. `verify-rebuild.sh` attributes
+   each list's missing IDs to this drop, and (section 7) checks KING's
+   table for any donor with a relative at 3rd degree or closer in a
+   reference list. 2b's donor/reference check compares IDs only.
 2. add SGDP, then Almarri: chr-prefix contigs, drop IDs already present or
    excluded → **3,921** in November. Then **every input's remaining
    multi-allelic records are split** (`norm -m -any`): `merge -m none` joins

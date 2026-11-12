@@ -25,6 +25,11 @@ SGDP_RAW_DIR="${SGDP_RAW_DIR:-${PROJECT_ROOT}/00_sgdp_raw/vcf_variants}"
 CHUNKS_TSV="${CHUNKS_TSV:-${REPO_DIR}/resources/b38_chunks.tsv}"
 FIXREF_MODE="${FIXREF_MODE:-flip-all}"
 ADMIX_POP="${ADMIX_POP:-Brasa}"; GEN="${GEN:-12}"; K="${K:-8}"
+# 1c's HGDP+1KG drop list (related_outliers.txt): same default as 1c.
+OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
+# Simulation donors and the reference lists the RFMix / FLARE arms read.
+DONOR_LISTS="amr_simulation amr_hgdpmxb_simulation eur_simulation afr_simulation mxb_simulation"
+REF_LISTS="amr_rfmix amr_hgdpmxb_rfmix amr_homog_rfmix eur_rfmix afr_rfmix pel_rfmix pel_eas_rfmix mxb_rfmix eas_rfmix sas_rfmix"
 EPOCH="${PROJECT_ROOT}/rebuild_epoch"
 U="${USER:-$(id -un)}"
 if [[ -f "$EPOCH" ]]; then SINCE=$(date -r "$EPOCH" +%Y-%m-%d); else SINCE=$(date -d '-7 days' +%Y-%m-%d); fi
@@ -149,13 +154,26 @@ else
     if is_new "$F21"; then
         read -r n p <<<"$(palindromic "$F21")"
         awk -v p="$p" 'BEGIN {exit !(p > 5)}' && pass "chr21 soft-union: ${n} SNPs, ${p}% A/T or C/G" || fail "chr21 soft-union: only ${p}% A/T or C/G"
-        bcftools query -l "$F21" | sort > "${TMPDIR:-/tmp}/verify_panel_ids.$$"
+        # A listed ID that is not in the panel is skipped without an error:
+        # 2b and 3b select samples with plink2 --keep, FLARE with
+        # bcftools view --force-samples. Say how many of the missing IDs
+        # 1c drops on purpose (related_outliers.txt).
+        PIDS="${TMPDIR:-/tmp}/verify_panel_ids.$$"; RIDS="${TMPDIR:-/tmp}/verify_ro_ids.$$"
+        bcftools query -l "$F21" | sort > "$PIDS"
+        if [[ -s "$OUTLIERS" ]]; then awk 'NF {print $2}' "$OUTLIERS" | sort -u > "$RIDS"; else : > "$RIDS"; fi
         for l in amr_rfmix afr_rfmix eur_rfmix pel_rfmix pel_eas_rfmix amr_hgdpmxb_rfmix mxb_rfmix mxb_simulation \
                  amr_simulation amr_hgdpmxb_simulation afr_simulation eur_simulation; do
-            m=$(awk 'NF {print $1}' "reference_ids/${l}.txt" | sort -u | comm -23 - "${TMPDIR:-/tmp}/verify_panel_ids.$$" | wc -l)
-            [[ "$m" -eq 0 ]] || warn "reference_ids/${l}.txt: ${m} IDs not in the panel (RFMix/simulation would lose them)"
+            miss=$(awk 'NF {print $1}' "reference_ids/${l}.txt" | sort -u | comm -23 - "$PIDS")
+            m=$(awk 'NF' <<<"$miss" | wc -l)
+            [[ "$m" -eq 0 ]] && continue
+            if [[ -s "$OUTLIERS" ]]; then
+                ro=$(awk 'NF' <<<"$miss" | comm -12 - "$RIDS" | wc -l)
+                warn "reference_ids/${l}.txt: ${m} IDs not in the panel, ${ro} of them on 1c's related/outlier drop list (the arms run without them)"
+            else
+                warn "reference_ids/${l}.txt: ${m} IDs not in the panel (the arms run without them; ${OUTLIERS} unreadable, so not attributed)"
+            fi
         done
-        rm -f "${TMPDIR:-/tmp}/verify_panel_ids.$$"
+        rm -f "$PIDS" "$RIDS"
         if [[ -s "${PANEL_DIR}/provenance/chr21.qc.cohorts.tsv" ]]; then
             info "chr21 per-cohort provenance after QC (raw):"; sed 's/^/          /' "${PANEL_DIR}/provenance/chr21.qc.cohorts.tsv"
         fi
@@ -201,6 +219,53 @@ if is_new "$P22" && [[ -s "$DP" && "$DP" -nt "$P22" ]]; then
     if [[ -f "$DROP" && "$DROP" -nt "$P22" ]]; then pass "drop list for 4a: $(awk 'NF' "$DROP" | wc -l) IDs (${DROP})"
     else fail "1e wrote duplicate pairs but no current drop list at ${DROP} (4a reads it)"; fi
 else info "not yet (no duplicate list from this rebuild's phased panel)"; fi
+# Donor/reference RELATIVES. 2b refuses an ID that is both a simulation donor
+# and a reference sample, but it compares IDs only. A donor's close relative in
+# a reference list leaks the same way at a smaller dose -- RFMix is handed long
+# stretches of that donor's haplotypes -- and no ID check can see it. 1c's
+# related_outliers.txt drop covers close HGDP+1KG pairs; this covers every
+# cohort, from the KING table 1e writes (every pair at kinship >= 0.0442).
+KIN="${HOMOG_DIR}/king/king.kin0"
+if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
+    KH=$(head -1 "$KIN")
+    info "king.kin0: $(( $(wc -l < "$KIN") - 1 )) pairs at kinship >= 0.0442; header (raw): ${KH}"
+    if ! awk '{sub(/^#/, ""); for (i = 1; i <= NF; i++) s[$i] = 1}
+              END {exit !(("IID1" in s) && ("IID2" in s) && ("KINSHIP" in s))}' <<<"$KH"; then
+        fail "king.kin0 header has no IID1/IID2/KINSHIP columns: donor/reference relatives NOT checked"
+    else
+        DR="${TMPDIR:-/tmp}/verify_donor_ref.$$"
+        {
+            for l in $DONOR_LISTS; do
+                [[ -s "reference_ids/${l}.txt" ]] && awk -v l="$l" 'NF {print "D", $1, l}' "reference_ids/${l}.txt"
+            done
+            for l in $REF_LISTS; do
+                f="reference_ids/${l}.txt"; [[ -s "$f" ]] || continue
+                # 4a rewrites the homog list later in this rebuild; until then it is November's.
+                [[ "$l" == *homog* ]] && ! is_new "$f" && continue
+                awk -v l="$l" 'NF {print "R", $1, l}' "$f"
+            done
+        } > "$DR"
+        awk -v OFS='\t' '
+            FNR == NR { if ($1 == "D") { x = ($2 in d) ? d[$2] "," $3 : $3; d[$2] = x }
+                        else           { x = ($2 in r) ? r[$2] "," $3 : $3; r[$2] = x }
+                        next }
+            FNR == 1  { sub(/^#/, ""); for (i = 1; i <= NF; i++) h[$i] = i; next }
+            { a = $h["IID1"]; b = $h["IID2"]; ks = $h["KINSHIP"]; k = ks + 0
+              if (!((a in d && b in r) || (b in d && a in r))) next
+              if (!(a in d)) { t = a; a = b; b = t }
+              print a, d[a], b, r[b], ks, (k > 0.354 ? "duplicate" : k > 0.177 ? "1st" : k > 0.0884 ? "2nd" : "3rd") }' \
+            "$DR" "$KIN" | sort -t$'\t' -k5,5gr > "${DR}.hits"
+        NCL=$(awk -F'\t' '$6 != "3rd"' "${DR}.hits" | wc -l); N3=$(awk -F'\t' '$6 == "3rd"' "${DR}.hits" | wc -l)
+        if [[ "$NCL" -eq 0 ]]; then pass "no simulation donor has a 2nd-degree or closer relative in a reference list"
+        else fail "${NCL} donor/reference pair(s) at 2nd degree or closer: hold 2b_simu and fix the lists before it starts"; fi
+        [[ "$N3" -eq 0 ]] || warn "${N3} donor/reference pair(s) at 3rd degree (kinship 0.0442-0.0884)"
+        if [[ -s "${DR}.hits" ]]; then
+            info "donor  donor_lists  reference  reference_lists  kinship  degree (raw):"
+            sed 's/^/          /' "${DR}.hits"
+        fi
+        rm -f "$DR" "${DR}.hits"
+    fi
+else info "donor/reference relatives: not yet (needs king/king.kin0 from this rebuild's phased panel)"; fi
 
 section "8. ADMIXTURE K=${K} (4a_build_homogeneity_panel_kN_clm.sh)"
 jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'
