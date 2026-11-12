@@ -275,7 +275,8 @@ echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 # an older recipe is never reused by a newer one.
 # --------------------------------------------------------------------------
 # File-name-safe form of the per-sample part of OUT_RECIPE.
-SUB_RECIPE="v4-${FIXREF_MODE}-gq${MIN_GQ}-$(printf '%s' "$_PASSF" | md5sum | cut -c1-6)"
+# (v4s: stripped to GT before norm -- see step 2; no v4 per-sample file is reused.)
+SUB_RECIPE="v4s-${FIXREF_MODE}-gq${MIN_GQ}-$(printf '%s' "$_PASSF" | md5sum | cut -c1-6)"
 # Remove the filters that are about phase only, so such a call reads as PASS.
 # Only those this file's header defines: `annotate -x FILTER/X` on a file
 # without X is a hard error (tested, bcftools 1.19), which would kill the task
@@ -313,9 +314,17 @@ for f in "$VCF_DIR"/*.vcf.gz; do
         # Build beside the target and move, so this loop never leaves a
         # half-written pair for the next run to find.
         echo "[$(date +%T)] [chr${CHR}] ${base}: low-quality -> missing (not PASS${_PASSF:+/${_PASSF}}, GQ<=${MIN_GQ}) -> norm -> fixref" >&2
+        # Strip to GT once GQ has been used, BEFORE norm: norm checks every
+        # Number=A/R/G field while splitting multi-allelics, and some non-PASS
+        # Long Ranger records carry a malformed one -- "wrong number of fields
+        # in INFO/AC at chr22:12705798, expected 2, found 1" stopped every v4
+        # task on its first sample (job 3754264). v3 never met those records
+        # because it dropped non-PASS calls first. Nothing downstream reads
+        # INFO or any FORMAT field but GT (the merge stripped them anyway).
         bcftools view -r "$REGION" -Ou "$f" \
           | pass_filters "$f" \
           | mask_low_quality \
+          | bcftools annotate -x 'INFO,^FORMAT/GT' -Ou \
           | bcftools norm -c w -m -snps --fasta-ref "$REF_FA" -Ou \
           | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.norm.bcf"
         bcftools +fixref "${sub}.norm.bcf" -Ob -o "${sub}.part" \
