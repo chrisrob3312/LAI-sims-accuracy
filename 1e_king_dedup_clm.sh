@@ -101,13 +101,18 @@ PRUNE_R2="${PRUNE_R2:-0.2}"
 
 # Which copy of a duplicate pair to KEEP, highest priority first.
 #
-# Non-1000G sources are preferred because a 1000 Genomes sample can never be a
-# simulation donor (the imputation servers' panels contain 1000 Genomes), so
-# keeping the non-1000G copy preserves the sample's eligibility for both
-# roles. MXB and Almarri come first because they are the scarcest and the
-# hardest to replace. Ties fall back to lexicographic sample ID, so the
-# outcome is deterministic without a seed.
-SOURCE_PRIORITY="${SOURCE_PRIORITY:-MXB ALMARRI SGDP HGDP 1KG}"
+# The duplicates in this panel are SGDP genomes whose individual is also in
+# HGDP or 1KG. The HGDP/1KG copy is kept: it was joint-called with the rest of
+# the panel at higher completeness, while the SGDP copy comes from the
+# phased_data2021 release, which lacks ~40% of the panel's sites (at those, the
+# HGDP/1KG copy of the same person is non-ref 28% of the time). SGDP is
+# therefore last. MXB and Almarri have no duplicates here; they stay first in
+# case one appears. HGDP before 1KG for the rare HGDP~1KG pair. Ties fall back
+# to lexicographic sample ID, so the outcome is deterministic without a seed.
+#
+# (The previous order put SGDP before HGDP/1KG to keep a non-1000G copy
+# donor-eligible; data quality now takes precedence.)
+SOURCE_PRIORITY="${SOURCE_PRIORITY:-MXB ALMARRI HGDP 1KG SGDP}"
 
 DROP_LIST="${DROP_LIST:-${REFS}/panel_duplicate_drop_ids.txt}"
 THREADS=${SLURM_CPUS_PER_TASK:-16}
@@ -120,6 +125,15 @@ THREADS=${SLURM_CPUS_PER_TASK:-16}
 # agree 99.7%. Restricting KING to the sites every cohort x super-pop group
 # actually called (1c's ADMIXTURE site list) measures identity on real data.
 KING_SITE_FILTER="${KING_SITE_FILTER:-1}"
+# KING_INPUT=softunion reads the pre-phasing genotypes instead: real calls,
+# gaps left missing, which KING-robust skips pair by pair -- so two copies of
+# one person are compared only where both were called.
+KING_INPUT="${KING_INPUT:-phased}"
+case "$KING_INPUT" in
+    phased)    : ;;
+    softunion) PANEL_TPL="${PHASED_DIR}/merged_chr%s.softunion.bcf" ;;
+    *)         echo "ERROR: KING_INPUT must be phased or softunion, got '${KING_INPUT}'" >&2; exit 1 ;;
+esac
 SITES_TPL="${SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
 # Pairs the metadata says are ONE person (SGDP alias -> HGDP/1KG ID) are
 # duplicates whatever KING says; they are added to the KING pairs, marked.
@@ -162,7 +176,8 @@ newer_than () {
     return 1
 }
 PANEL_FILES=(); for c in $(seq 1 22); do PANEL_FILES+=("$(printf "$PANEL_TPL" "$c")"); done
-CONCAT="${OUTDIR}/all_chr.bcf"
+CONCAT="${OUTDIR}/all_chr.${KING_INPUT}.bcf"
+echo "[$(date +%T)] KING input: ${KING_INPUT} ($PANEL_TPL)"
 if newer_than "${CONCAT}.csi" "${PANEL_FILES[@]}"; then
     echo "[$(date +%T)] concatenating 22 chromosomes"
     LIST="${OUTDIR}/concat_list.txt"; : > "$LIST"

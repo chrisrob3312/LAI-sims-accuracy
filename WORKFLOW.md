@@ -190,7 +190,9 @@ Pairs in `known_duplicate_pairs.tsv` (an SGDP sample whose alias is in the
 panel) are duplicates whatever KING says. November, on all sites: 48 KING
 duplicates, but 26 known same-person pairs scored only 0.30–0.35 because
 SGDP's filled-in genotypes blurred identity — those people were in the
-panel twice.
+panel twice. **The HGDP/1KG copy is kept** (keep-priority MXB > ALMARRI >
+HGDP > 1KG > SGDP): it is joint-called and complete, the SGDP copy lacks ~40%
+of sites. `KING_INPUT=softunion` reads the pre-phasing genotypes instead.
 
 **4a — `4a_build_homogeneity_panel_kN_clm.sh`** (**K=8 now, K=5 in July**)
 1. concat the 22 phased chromosomes → `admixture_k8/all_chr.phased.bcf`
@@ -259,8 +261,23 @@ reason it was or was not named. Two checks print in the log:
 > Ranking everyone within the cluster is the method July settled on; in July's
 > K=5 Q it gives SAS 279 samples at ≥ 0.93 (top 50 = 1KG ITU/STU/BEB).
 
-**Markers.** The ADMIXTURE markers are restricted to 1c's site list before the
-MAF filter and pruning. In November, without it, every SGDP sample had no call
+**Markers.** Two switches decide what ADMIXTURE reads:
+
+| switch | values | effect |
+|---|---|---|
+| `ADMIX_SITE_FILTER` | **1** / 0 | restrict to 1c's per-cohort × super-pop missingness site list |
+| `ADMIX_INPUT` | **phased** / softunion | phased panel (gaps filled by SHAPEIT5) or the pre-phasing soft-union (gaps stay missing; ADMIXTURE skips missing genotypes) |
+
+Within a cohort, missingness is all-or-nothing per site (it comes from the
+cohort's source file lacking the site: every SGDP sample misses exactly 39.55%
+of chr22, every MXB sample 61.9%), so **any per-group threshold selects the same
+sites — those every cohort has, i.e. the intersection**, which drops the
+MXB-specific variants. `ADMIX_INPUT=softunion ADMIX_SITE_FILTER=0` keeps every
+site without using a single imputed genotype. `scripts/site-presence-check.py`
+measures how many "absent" sites are really allele mismatches (REF/ALT swapped,
+strand flipped, different ALT) that harmonisation would recover.
+
+The site list itself: In November, without it, every SGDP sample had no call
 at 38% of chr22's ADMIXTURE markers and every MXB sample at 62%; SHAPEIT5 had
 filled those in, and three of the eight clusters tracked cohorts (c0 ≈ 0.4 in
 every 1KG/HGDP sample, c4 Almarri-only, c7 SGDP-only).

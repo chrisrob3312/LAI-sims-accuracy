@@ -39,7 +39,10 @@
 #   HGDP1KG_PATTERN    the HGDP+1KG source; default = the u235158 archive the
 #                      November run used (3,458 samples incl. the 60 restored).
 #   ADMIX_GROUP_MAXMISS / ADMIX_TOTAL_MAXMISS / ADMIX_MISS_MIN_N
-#                      the ADMIXTURE site rule (default 0.10 / 0.07 / 5).
+#                      the ADMIXTURE site rule (default 0.15 / 0.07 / 5).
+#   ADMIX_INPUT / KING_INPUT   phased (default) or softunion: what 4a / 1e read.
+#                      softunion = pre-phasing genotypes, gaps left missing.
+#   ADMIX_SITE_FILTER / KING_SITE_FILTER   1 (default) restricts to the site list.
 #   HEAVY_CHUNKS       chunk indices given their own array (default 209,302:
 #                      the MHC and the chr9 pericentromere, which ran out of
 #                      time at the main array's limit in November).
@@ -56,7 +59,7 @@ DRY_RUN="${DRY_RUN:-}"
 RERUN_MXB="${RERUN_MXB:-0}"
 SGDP_PREP="${SGDP_PREP:-1b_sgdp_liftover_clm.sh}"
 HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/home/u235158/projects/archived/tgp_hgdp_liftover/TGP_HGDP_QC_phased_hg38_chr__CHR___rechr.vcf.gz}"
-ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.10}"
+ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.15}"
 ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
 ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
 HEAVY_CHUNKS="${HEAVY_CHUNKS:-209,302}"
@@ -113,6 +116,7 @@ echo "[rebuild] chunks: ${N_CHUNKS} (main ${MAIN_SPEC}; heavy ${HEAVY_CHUNKS})" 
 echo "[rebuild] HGDP+1KG source: ${HGDP1KG_PATTERN}" >&2
 echo "[rebuild] SGDP prep: ${SGDP_PREP}; MXB liftover rerun: ${RERUN_MXB}" >&2
 echo "[rebuild] ADMIXTURE site rule: groups <= ${ADMIX_GROUP_MAXMISS} (n >= ${ADMIX_MISS_MIN_N}), overall <= ${ADMIX_TOTAL_MAXMISS}" >&2
+echo "[rebuild] 4a reads: ${ADMIX_INPUT:-phased} (site filter ${ADMIX_SITE_FILTER:-1}); 1e reads: ${KING_INPUT:-phased} (site filter ${KING_SITE_FILTER:-1})" >&2
 
 PREP_DEPS=()
 if [[ "$RERUN_MXB" == "1" ]]; then

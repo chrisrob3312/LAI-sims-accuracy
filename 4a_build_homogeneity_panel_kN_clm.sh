@@ -224,6 +224,22 @@ DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 # RFMix and simulation donors keeps the full soft-union (and with it the
 # population-specific variants the soft-union exists to keep).
 ADMIX_SITE_FILTER="${ADMIX_SITE_FILTER:-1}"
+
+# ADMIX_INPUT -- which genotypes ADMIXTURE reads.
+#   phased     the phased panel. SHAPEIT5 has filled every gap, so a site a
+#              cohort's file lacked carries imputed genotypes for that cohort.
+#   softunion  the pre-phasing soft-union 1c publishes: real calls only, and a
+#              site a cohort's file lacked stays MISSING for that cohort.
+#              ADMIXTURE handles missing genotypes natively (they do not enter
+#              its likelihood), so no site is dropped and none is invented --
+#              the MXB-specific variants the soft-union keeps stay usable.
+#              Combine with ADMIX_SITE_FILTER=0 to keep every site.
+ADMIX_INPUT="${ADMIX_INPUT:-phased}"
+case "$ADMIX_INPUT" in
+    phased)    ADMIX_TPL="${PHASED_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.bcf" ;;
+    softunion) ADMIX_TPL="${PHASED_DIR}/merged_chr%s.softunion.bcf" ;;
+    *)         echo "ERROR: ADMIX_INPUT must be phased or softunion, got '${ADMIX_INPUT}'" >&2; exit 1 ;;
+esac
 ADMIX_SITES_TPL="${ADMIX_SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
 SUPERPOPS="EUR AFR AMR EAS SAS OCE MEN"
 
@@ -268,6 +284,10 @@ for CHR in {1..22}; do
     F="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
     [[ -s "$F" && -s "${F}.csi" ]] || { echo "ERROR: missing $F (phasing not done)"; exit 1; }
 done
+for CHR in {1..22}; do
+    F="$(printf "$ADMIX_TPL" "$CHR")"
+    [[ -s "$F" ]] || { echo "ERROR: missing ADMIXTURE input $F (ADMIX_INPUT=${ADMIX_INPUT})" >&2; exit 1; }
+done
 if [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
     for CHR in {1..22}; do
         F="$(printf "$ADMIX_SITES_TPL" "$CHR")"
@@ -303,11 +323,12 @@ newer_than () {
 #    into place, so a killed task cannot leave a truncated concat that is
 #    newer than its inputs.
 # ---------------------------------------------------------------------------
-CONCAT="${ADM_DIR}/all_chr.phased.bcf"
+CONCAT="${ADM_DIR}/all_chr.${ADMIX_INPUT}.bcf"
 PHASED_LIST=()
 for CHR in {1..22}; do
-    PHASED_LIST+=("${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf")
+    PHASED_LIST+=("$(printf "$ADMIX_TPL" "$CHR")")
 done
+echo "[$(date +%T)] ADMIXTURE input: ${ADMIX_INPUT} (${ADMIX_TPL})"
 if newer_than "$CONCAT" "${PHASED_LIST[@]}"; then
     echo "[$(date +%T)] concat 22 chrs"
     printf '%s\n' "${PHASED_LIST[@]}" > "${ADM_DIR}/concat_list.txt"

@@ -500,7 +500,16 @@ echo "[$(date +%T)] [chr${CHR}] soft-union BCF: ${NSOFT} records"
 #     super-pop from sample_groups.tsv / the SGDP manifest (Almarri = MEN,
 #     MXB = AMR). Only the ADMIXTURE marker set uses this list -- the soft-union
 #     itself, and so the phased LAI panel, is unchanged.
-ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.10}"
+# NOTE ON THE THRESHOLD. In this panel a cohort is either fully called or
+# fully absent at a site -- every SGDP sample lacked exactly 39.55% of chr22's
+# soft-union, every MXB sample 61.9%, every Almarri sample 30.4%, every
+# HGDP/1KG sample 12.68% (sd 0.000) -- because absence comes from a cohort's
+# SOURCE FILE lacking the site. So any per-group threshold between 0 and 1
+# selects the same sites: those every cohort has. 0.15 is set as requested;
+# what recovers sites is allele harmonisation (scripts/site-presence-check.py
+# measures how many absences are swaps/flips) and, for ADMIXTURE, reading the
+# pre-phasing genotypes with their gaps (4a ADMIX_INPUT=softunion).
+ADMIX_GROUP_MAXMISS="${ADMIX_GROUP_MAXMISS:-0.15}"
 ADMIX_TOTAL_MAXMISS="${ADMIX_TOTAL_MAXMISS:-0.07}"
 ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
 SGDP_MANIFEST="${SGDP_MANIFEST:-${REPO_DIR}/reference_ids/sgdp_manifest.tsv}"
