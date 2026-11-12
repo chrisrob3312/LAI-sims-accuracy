@@ -181,6 +181,50 @@ PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
 RECHR="${OUTDIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.rechr.bcf"
 FULL_PHASED="${OUTDIR}/merged_chr${CHR}.shapeit5_full_phased.bcf"
 
+# ----------------------------------------------------------------------------
+# IDEMPOTENT RE-RUN (PHASE_MODE=chunked). The published soft-union is reused
+# when (a) it is newer than every input file and (b) its stamp records the same
+# settings AND the same code (this script plus the helpers it runs, hashed).
+# Re-submitting the rebuild after a success -- or after a LATER stage failed --
+# then costs seconds here instead of a full merge, which would also leave the
+# soft-union newer than every phased chunk and so re-phase all of them.
+# FORCE_1C=1 rebuilds regardless. The stamp is written AFTER the soft-union is
+# in place and deleted when a rebuild starts, so a stamp never vouches for a
+# file it did not see finished.
+# ----------------------------------------------------------------------------
+PUB="${OUTDIR}/merged_chr${CHR}.softunion.bcf"
+_code_md5=$(cat "${BASH_SOURCE[0]}" "${REPO_DIR}/scripts/fill-contradictions.py" \
+               "${REPO_DIR}/scripts/softunion-sites.py" "${REPO_DIR}/scripts/build-missingness-groups.py" \
+               "${REPO_DIR}/scripts/admix-site-filter.py" "${REPO_DIR}/scripts/site-provenance.py" \
+            | md5sum | cut -c1-12)
+_excl_md5=$(md5sum < "$EXCLUDE_IDS" | cut -c1-12)
+PUB_RECIPE="1c code=${_code_md5} excl=${_excl_md5} src=${HGDP1KG_PATTERN}"
+for _v in FILL_REF_COHORTS FILL_GUARD FILL_GUARD_MIN_N FILL_GUARD_MIN_AC FILL_GUARD_MAX_P \
+          SOFTUNION_GROUPS FIXREF_MODE HGDP1KG_NORMALIZE ADMIX_GROUP_MAXMISS ADMIX_TOTAL_MAXMISS \
+          ADMIX_MISS_MIN_N REQUIRE_COHORTS; do
+    PUB_RECIPE+=" ${_v}=${!_v-<default>}"
+done
+PUB_RECIPE+=" LAI_MAF=${LAI_MAF} MIN_SUBPOP_N=${MIN_SUBPOP_N}"
+if [[ "${PHASE_MODE:-whole}" == "chunked" && "${FORCE_1C:-0}" != "1" \
+      && -s "$PUB" && -s "${PUB}.recipe" && -s "${OUTDIR}/merged_chr${CHR}.admix_sites.bed" ]] \
+   && [[ "$(cat "${PUB}.recipe")" == "$PUB_RECIPE" ]] && bcftools view -h "$PUB" > /dev/null; then
+    _stale=""
+    for _in in "${HGDP1KG_PATTERN//__CHR__/$CHR}" "$MXB_LIFTED" "$SGDP_PREPPED" "$ALMARRI_PREPPED" \
+               "$EXCLUDE_IDS" "$SAMPLE_GROUPS" "$OUTLIERS" "${REPO_DIR}/reference_ids/sgdp_manifest.tsv"; do
+        if [[ -e "$_in" && "$_in" -nt "$PUB" ]]; then _stale+=" $(basename "$_in")"; fi
+    done
+    if [[ -z "$_stale" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] ${PUB} is newer than every input and was made by this code" \
+             "with these settings -- nothing to do (FORCE_1C=1 to rebuild)"
+        exit 0
+    fi
+    echo "[$(date +%T)] [chr${CHR}] rebuilding: newer input(s):${_stale}"
+elif [[ -s "$PUB" ]]; then
+    echo "[$(date +%T)] [chr${CHR}] rebuilding ${PUB}: settings/code differ from its stamp, or no stamp" \
+         "(stamp: '$(cat "${PUB}.recipe" 2>/dev/null || echo none)')"
+fi
+rm -f "${PUB}.recipe"
+
 # 1. Resolve per-chrom HGDP+1KG file, drop kinship outliers, normalize contig
 #    naming to chr-prefixed (to match the lifted MXB BCF from step 1a).
 #
@@ -275,12 +319,19 @@ fi
 #     could not join another cohort's biallelic SNP record) and check REF
 #     against GRCh38 (+fixref: flip / swap consistently with the genotypes,
 #     drop what cannot be fixed). plink2 below removes the indel halves.
+#     FIXREF_MODE (shared with 1a, 1b_sgdp_raw, 1d): `-m flip -d` treats A/T
+#     and C/G SNPs as strand-ambiguous and discards them even when REF matches
+#     (fixref.c, "skip ambiguous pairs"); these are forward-strand WGS calls,
+#     so flip-all keeps them. Every cohort must use the same mode, or one
+#     cohort is absent at every palindromic site -- checked below by stamp.
 HGDP1KG_NORMALIZE="${HGDP1KG_NORMALIZE:-1}"
+FIXREF_MODE="${FIXREF_MODE:-flip-all}"
+case "$FIXREF_MODE" in flip|flip-all) ;; *) echo "ERROR: FIXREF_MODE must be flip or flip-all" >&2; exit 1 ;; esac
 if [[ "$HGDP1KG_NORMALIZE" == "1" ]]; then
     HG_NORM="${TMPDIR}/hgdp1kg_chr${CHR}.norm.bcf"
-    echo "[$(date +%T)] [chr${CHR}] normalise HGDP+1KG: norm -m -any -c w + fixref flip -d"
+    echo "[$(date +%T)] [chr${CHR}] normalise HGDP+1KG: norm -m -any -c w + fixref -m ${FIXREF_MODE} -d"
     bcftools norm -m -any -f "$REF_FA" -c w --threads "$THREADS" -Ou "$HGDP1KG_CHR" \
-      | bcftools +fixref -Ob -o "$HG_NORM" -- -f "$REF_FA" -m flip -d
+      | bcftools +fixref -Ob -o "$HG_NORM" -- -f "$REF_FA" -m "$FIXREF_MODE" -d
     bcftools index -f "$HG_NORM"
     echo "[$(date +%T)] [chr${CHR}] HGDP+1KG after normalisation: $(bcftools view -G -H "$HG_NORM" | wc -l) records (was ${NHGDP1KG})"
     HGDP1KG_CHR="$HG_NORM"
@@ -402,6 +453,39 @@ add_cohort ALMARRI "$ALMARRI_PREPPED" || exit 1
 
 echo "[$(date +%T)] [chr${CHR}] panel after all cohorts: $(wc -l < "$SEEN_IDS") samples"
 
+# Every prepped cohort must have been through the same fixref mode as the
+# HGDP+1KG step above, read from the stamp its prep wrote. A file built before
+# the stamps existed was built with `-m flip -d` (no palindromic SNPs). A
+# mismatch is fatal: that cohort would be absent at every A/T and C/G site --
+# a whole-cohort gap of exactly the kind that made the November batch clusters.
+stamp_fixref () {   # stamp_fixref <stamp file> -> mode, or "flip (no stamp)"
+    if [[ -s "$1" ]]; then
+        awk '{for (i = 1; i <= NF; i++) if ($i ~ /^fixref=/) {sub(/^fixref=/, "", $i); print $i; f = 1; exit}}
+             END {if (!f) print "flip (stamp without fixref=)"}' "$1"
+    else
+        echo "flip (no stamp)"
+    fi
+}
+_fx_bad=0
+for _lab in "${MERGE_LABELS[@]}"; do
+    case "$_lab" in
+        HGDP1KG) continue ;;
+        MXB)     _stamp="${OUTDIR}/mxb_lifted.recipe" ;;
+        SGDP)    _stamp="${SGDP_PREPPED}.recipe" ;;
+        ALMARRI) _stamp="${ALMARRI_PREPPED}.recipe" ;;
+        *)       continue ;;
+    esac
+    _m=$(stamp_fixref "$_stamp")
+    echo "[$(date +%T)] [chr${CHR}] ${_lab}: fixref ${_m} (${_stamp})"
+    if [[ "$_m" != "$FIXREF_MODE" ]]; then _fx_bad=1; fi
+done
+if [[ "$_fx_bad" == "1" && "${FIXREF_MIXED_OK:-0}" != "1" ]]; then
+    echo "ERROR: a cohort was prepped with a different fixref mode than FIXREF_MODE=${FIXREF_MODE}." >&2
+    echo "       Re-run its prep with the same FIXREF_MODE (MXB: 1a, i.e. RERUN_MXB=1 in the" >&2
+    echo "       rebuild driver; SGDP: 1b_sgdp_raw_prep; Almarri: 1d), or FIXREF_MIXED_OK=1." >&2
+    exit 1
+fi
+
 # 2b. Split every multi-allelic record still in an input (norm -m -any), so
 #     each ALT allele is its own biallelic record in every cohort. bcftools
 #     merge -m none joins records only when REF and ALT match exactly, so a
@@ -489,6 +573,14 @@ if [[ -n "$FILL_REF_COHORTS" ]]; then
             echo "[$(date +%T)] [chr${CHR}] FILL_REF_COHORTS names ${_c}, which is not in this run -- nothing to fill"
         fi
     done
+    # SGDP is a complete callset only when it comes from the raw per-sample
+    # calls (1b_sgdp_raw_prep, stamp "sgdp_raw..."); the imputed phased_data2021
+    # release lacks every site 1KG phase 3 lacks, so filling it would invent 0/0s.
+    if [[ " ${FILL_REF_COHORTS} " == *" SGDP "* && " ${MERGE_LABELS[*]} " == *" SGDP "* ]]; then
+        _sg=$(cat "${SGDP_PREPPED}.recipe" 2>/dev/null || echo "none")
+        [[ "$_sg" == sgdp_raw* ]] || { echo "ERROR: FILL_REF_COHORTS includes SGDP but ${SGDP_PREPPED}" \
+            "was not built by 1b_sgdp_raw_prep_clm.sh (recipe stamp: '${_sg}')" >&2; exit 1; }
+    fi
     FILL_PH="__fill_placeholder__"
     _usites=()
     for _i in "${!MERGE_INPUTS[@]}"; do
@@ -807,6 +899,9 @@ if [[ "$PHASE_MODE" == "chunked" ]]; then
     # not appear before its index exists.
     mv "${PUB}.partial.csi" "${PUB}.csi"
     mv "${PUB}.partial" "$PUB"
+    # Stamp AFTER the file is in place (see IDEMPOTENT RE-RUN above).
+    echo "$PUB_RECIPE" > "${PUB}.recipe.partial"
+    mv "${PUB}.recipe.partial" "${PUB}.recipe"
     echo "[$(date +%T)] [chr${CHR}] -> ${PUB} ($(bcftools index -n "$PUB") sites, "\
          "$(bcftools query -l "$PUB" | wc -l) samples)"
     echo "[$(date +%T)] [chr${CHR}] phasing is now 1b_phase_chunks + 1b_phase_ligate."

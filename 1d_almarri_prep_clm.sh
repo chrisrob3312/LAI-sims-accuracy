@@ -85,6 +85,9 @@ VCF_DIR="${VCF_DIR:-${ALMARRI_DIR}/vcfs}"
 REF_FA="${REF_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/b38/Homo_sapiens_assembly38.fasta}"
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 MIN_GQ="${MIN_GQ:-20}"
+# Strand/REF mode of the fixref step, shared with 1a, 1b_sgdp_raw and 1c (see
+# 1a: `-m flip -d` discards every A/T and C/G SNP; flip-all keeps them).
+FIXREF_MODE="${FIXREF_MODE:-flip-all}"
 # Above this, the merge plainly did not get missing2ref applied; see step 4.
 MAX_MISSING="${MAX_MISSING:-0.10}"
 
@@ -158,7 +161,10 @@ mkdir -p "$OUTDIR" "$TMP"
 # index" let a file through that bcftools could no longer read -- chr22 was
 # found at 0 bytes beside its Nov-5 index -- and would let a v1-recipe file
 # (norm -c ws, stderr discarded) stand in for a v2 rebuild.
-OUT_RECIPE="v2"
+# v3 = v2 + FIXREF_MODE (v2 used `-m flip -d`, which dropped every A/T and
+# C/G SNP). The stamp carries `fixref=<mode>`; 1c refuses to merge cohorts
+# whose stamps disagree on it.
+OUT_RECIPE="v3 fixref=${FIXREF_MODE}"
 if [[ -s "$OUT" && -s "${OUT}.csi" ]] \
    && bcftools view -h "$OUT" > /dev/null \
    && [[ "$(cat "${OUT}.recipe" 2>/dev/null)" == "$OUT_RECIPE" ]]; then
@@ -215,9 +221,10 @@ echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 
 # --------------------------------------------------------------------------
 # 2. Per sample: PASS, GQ > MIN_GQ, split multiallelics, left-align, SNVs only,
-#    then the SAME REF check MXB (1a) and SGDP (1b_sgdp) get:
-#    `bcftools +fixref -- -f <GRCh38> -m flip -d` (flip strand / swap REF-ALT
-#    consistently with the genotypes, drop what cannot be fixed).
+#    then the SAME REF check MXB (1a) and SGDP (1b_sgdp_raw) get:
+#    `bcftools +fixref -- -f <GRCh38> -m ${FIXREF_MODE} -d` (swap REF/ALT
+#    consistently with the genotypes; flip-all also keeps A/T and C/G SNPs,
+#    which `-m flip -d` discarded).
 #
 # Recipe v1 used `norm -c ws`, which SETS a mismatched REF from the FASTA and
 # leaves ALT and the genotypes as they were -- for a swapped site that writes a
@@ -229,7 +236,7 @@ echo "[$(date +%T)] [chr${CHR}] source region name: ${REGION}"
 # The recipe tag is part of the cached per-sample filename, so a BCF built by
 # an older recipe is never reused by a newer one.
 # --------------------------------------------------------------------------
-SUB_RECIPE="$OUT_RECIPE"
+SUB_RECIPE="v3-${FIXREF_MODE}"   # file-name-safe form of OUT_RECIPE
 LIST="${TMP}/merge_list.txt"
 : > "$LIST"
 NS=0; NEMPTY=0
@@ -253,7 +260,7 @@ for f in "$VCF_DIR"/*.vcf.gz; do
           | bcftools norm -c w -m -snps --fasta-ref "$REF_FA" -Ou \
           | bcftools view --types snps --max-alleles 2 -Ob -o "${sub}.norm.bcf"
         bcftools +fixref "${sub}.norm.bcf" -Ob -o "${sub}.part" \
-            -- -f "$REF_FA" -m flip -d
+            -- -f "$REF_FA" -m "$FIXREF_MODE" -d
         rm -f "${sub}.norm.bcf"
         bcftools index "${sub}.part"
         mv "${sub}.part.csi" "${sub}.csi"
