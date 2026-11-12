@@ -177,6 +177,8 @@ S_Miao-1.DG
 S_Miao-2.DG
 S_Mixe-2.DG
 S_Mixe-3.DG
+S_Mixtec-1.DG
+S_Mixtec-2.DG
 S_Mongola-1.DG
 S_Mongola-2.DG
 S_Mozabite-1.DG

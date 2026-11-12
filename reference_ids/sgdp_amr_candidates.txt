@@ -7,6 +7,8 @@ S_Mayan-1.DG
 S_Mayan-2.DG
 S_Mixe-2.DG
 S_Mixe-3.DG
+S_Mixtec-1.DG
+S_Mixtec-2.DG
 S_Piapoco-1.DG
 S_Piapoco-2.DG
 S_Pima-1.DG

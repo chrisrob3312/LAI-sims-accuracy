@@ -99,6 +99,8 @@ AMR	S_Mayan-2.DG	S_Mayan-2	HGDP00857	Mayan	America	Mexico	F	19.0	-91.0	FullyPubl
 AMR	B_Mixe-1.DG	B_Mixe-1	mixe0007	Mixe	America	Mexico	F	16.95	-96.58	FullyPublic
 AMR	S_Mixe-2.DG	S_Mixe-2	mixe0002	Mixe	America	Mexico	F	16.95	-96.58	FullyPublic
 AMR	S_Mixe-3.DG	S_Mixe-3	mixe0042	Mixe	America	Mexico	F	16.95	-96.58	FullyPublic
+AMR	S_Mixtec-1.DG	S_Mixtec-1	mixa0099	Mixtec	America	Mexico	M	17.0	-97.0	FullyPublic
+AMR	S_Mixtec-2.DG	S_Mixtec-2	mixa0105	Mixtec	America	Mexico	F	17.0	-97.0	FullyPublic
 AMR	S_Piapoco-1.DG	S_Piapoco-1	HGDP00702	Piapoco	America	Colombia	F	3.0	-68.0	FullyPublic
 AMR	S_Piapoco-2.DG	S_Piapoco-2	HGDP00706	Piapoco	America	Colombia	F	3.0	-68.0	FullyPublic
 AMR	S_Pima-1.DG	S_Pima-1	HGDP01047	Pima	America	Mexico	M	29.0	-108.0	FullyPublic
