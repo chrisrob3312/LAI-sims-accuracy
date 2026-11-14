@@ -17,9 +17,14 @@ import sys
 from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime, timedelta
 
-ORDER = ["sgdp_fetch", "1b_sgdp_raw", "1a_prep_mxb_liftover", "1d_almarri", "1c_phase", "1b_chunk",
-         "1b_ligate", "1e_king_dedup", "4a_homog_kN", "2b_simu", "3b_rfmix", "3b_homog", "3b_chip",
-         "3b_chip_homog", "3b_flare", "finalize_pilot", "site_report"]
+# Every job name the repo's stage scripts set (#SBATCH --job-name), in run
+# order. Any other name in sacct (an interactive `srun --pty bash` is "bash")
+# is reported as "not a pipeline job".
+ORDER = ["sgdp_fetch", "1b_sgdp_raw", "1b_sgdp_liftover", "strip_almarri", "1a_prep_mxb_liftover",
+         "1d_almarri", "1c_phase", "1b_prep", "1b_chunk", "1b_ligate", "1e_king_dedup", "4a_homog",
+         "4a_homog_kN", "2b_simu", "3b_rfmix", "3b_homog", "3b_chip", "3b_chip_homog", "3b_flare",
+         "finalize_pilot", "5a_lift19", "6b_simset", "6c_real", "6d_cells", "6e_kinship", "site_report"]
+NOT_PIPELINE = "(not a pipeline job)"
 OK = {"COMPLETED", "RUNNING", "PENDING", "REQUEUED", "RESIZING", "SUSPENDED"}
 # Submissions of one name made within this window of its latest one are the
 # same run (the chunk stage is two arrays, main + heavy, submitted together).
@@ -40,8 +45,27 @@ def task_key(jobid):
 
 
 def idx_sort(i):
-    m = re.match(r"\d+", i or "")
+    m = re.match(r"\d+", (i or "").lstrip("["))
     return (int(m.group(0)) if m else -1, i)
+
+
+def n_tasks(idx):
+    """Tasks one sacct row stands for. A pending array range is ONE row,
+    '3754839_[212-594%40]' -> 383; a single task or a plain job -> 1."""
+    m = re.match(r"^\[(.*)\]$", idx or "")
+    if not m:
+        return 1
+    n = 0
+    for part in m.group(1).split("%")[0].split(","):
+        rng, _, step = part.partition(":")
+        lo, _, hi = rng.partition("-")
+        try:
+            lo, hi, step = int(lo), int(hi or lo), int(step or 1)
+        except ValueError:
+            return 1
+        if hi >= lo and step > 0:
+            n += (hi - lo) // step + 1
+    return max(n, 1)
 
 
 def main():
@@ -89,6 +113,7 @@ def main():
     names = [n for n in ORDER if n in by_name] + sorted(n for n in by_name if n not in ORDER)
     failures = []
     emit("\n== 1. task states per stage (current run = latest submission of each name; earlier ones listed as superseded) ==")
+    emit("  (a pending array range is one sacct row; it is counted here as the tasks it holds)")
     for n in names:
         subs = by_name[n]
         latest = max(subs)
@@ -96,16 +121,22 @@ def main():
         current = [b for b in subs if b == latest or (t_latest and any(
             r["submit"] and abs(r["submit"] - t_latest) <= SAME_RUN for r in subs[b]))]
         old = sorted(b for b in subs if b not in current)
-        cnt = Counter(r["state"] for b in current for r in subs[b])
+        cnt = Counter()
+        for b in current:
+            for r in subs[b]:
+                cnt[r["state"]] += n_tasks(r["idx"])
         states = "  ".join(f"{s} {c}" for s, c in sorted(cnt.items()))
         emit(f"  {n:16s} {'+'.join(str(b) for b in sorted(current)):24s} {states}"
-             + (f"   (superseded: {' '.join(str(b) for b in old)})" if old else ""))
+             + (f"   (superseded: {' '.join(str(b) for b in old)})" if old else "")
+             + ("" if n in ORDER else f"   {NOT_PIPELINE}"))
         for b in sorted(current):
             for r in sorted(subs[b], key=lambda r: idx_sort(r["idx"])):
                 if r["state"] not in OK:
                     failures.append(r)
 
-    emit(f"\n== 2. tasks that did not complete in the current run: {len(failures)} ==")
+    n_other = sum(1 for r in failures if r["name"] not in ORDER)
+    emit(f"\n== 2. tasks that did not complete in the current run: {len(failures)}"
+         f" ({len(failures) - n_other} pipeline, {n_other} {NOT_PIPELINE.strip('()')}) ==")
     if not failures:
         emit("  none")
     logs = {}
@@ -116,7 +147,8 @@ def main():
             found[ext] = hits[0] if hits else ""
         logs[r["jobid"]] = found
         emit(f"  {r['jobid']:18s} {r['name']:14s} {r['state_full']:20s} exit {r['ec']:6s} "
-             f"ran {r['el']} of {r['tl']}  RSS {r['maxrss'] or '-'} of {r['reqmem']}  node {r['node']}")
+             f"ran {r['el']} of {r['tl']}  RSS {r['maxrss'] or '-'} of {r['reqmem']}  node {r['node']}"
+             + ("" if r["name"] in ORDER else f"  {NOT_PIPELINE}"))
         emit(f"  {'':18s} .err {found['err'] or '(no *_' + r['raw'] + '.err in ' + a.logdir + ')'}")
         emit(f"  {'':18s} .out {found['out'] or '(no *_' + r['raw'] + '.out)'}")
 

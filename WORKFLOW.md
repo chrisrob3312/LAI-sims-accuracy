@@ -134,7 +134,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
-| after any failure | `bash scripts/failure-report.sh` — per stage the current run's task states; every task that did not complete (state, exit code, run time vs limit, MaxRSS vs memory asked, node, log paths); failures grouped by stage/state/exit code with their nodes; the full `.err`/`.out` of the first failure of each kind; what is still queued and why. Whole report, logs uncut, in `logs/failure_report_<date>.txt` | report file only |
+| after any failure | `bash scripts/failure-report.sh` — per stage the current run's task states (a pending array range counted as its tasks; any job name no stage script sets, e.g. an interactive `bash`, marked "not a pipeline job"); every task that did not complete (state, exit code, run time vs limit, MaxRSS vs memory asked, node, log paths); failures grouped by stage/state/exit code with their nodes; the full `.err`/`.out` of the first failure of each kind; what is still queued and why. Whole report, logs uncut, in `logs/failure_report_<date>.txt` | report file only |
 | any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
 
 **Re-chaining after a stage fails.** Dependencies cannot be edited in place on
@@ -347,7 +347,8 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    as soon as 1e has run, before 4a and 2b.
 
    *July and November dropped `related_outliers.txt` here* (693 IDs,
-   relatives and outliers; 3,398 HGDP+1KG kept). The reference and donor
+   relatives and outliers; 3,398 HGDP+1KG kept in July; November's u235158
+   source still held Koenig's 60 QC removals). The reference and donor
    lists name 28 of them; no stage complained, because 2b and 3b select
    samples with `plink2 --keep` and FLARE with `bcftools view
    --force-samples`, which skip absent IDs. So those runs used fewer samples
@@ -355,8 +356,21 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    Surui 2, Colombian 2), `amr_hgdpmxb_rfmix` 45 of 56, `afr_rfmix` 48 of
    50, `eur_rfmix` 49 of 50, `pel_rfmix` 84 of 86, `pel_eas_rfmix` 576 of
    587, `amr_simulation` 28 of 31, `amr_hgdpmxb_simulation` 53 of 56. With
-   relatives kept the lists are whole again. `OUTLIERS=<2-col file>` restores
+   relatives kept those 28 are back. `OUTLIERS=<2-col file>` restores
    a drop; 1c stamps which (`outliers=` in the soft-union's `.recipe`).
+
+   *Five list IDs are Koenig QC removals*, absent from `phased_haplotypes_v2`
+   and `_v2_filter1` and named in `panel_exclude_ids.txt`: HGDP00621 and
+   HGDP01270 in `afr_rfmix`, HGDP00029 and HGDP00150 in `sas_rfmix` (the
+   file's "no gnomAD hard filter" group: Koenig's ancestry outliers and
+   duplicate drops), and NA18864 (YRI) in `afr_simulation`
+   (`ambiguous_sex`). November's panel had all five. July's did not
+   (`afr_rfmix` 46 of 50 with its two related outliers, `afr_simulation` 29
+   of 30, `sas_rfmix` 48 of 50), and neither does this rebuild's (48 of 50,
+   29 of 30, 48 of 50) until the lists are trimmed or the IDs replaced.
+   `verify-rebuild.sh` section 4 names each missing ID's reason. 2b and 3b
+   run without them; no arm reads `sas_rfmix` (4a loads it and no longer
+   uses it).
    `python3 -I scripts/related-outliers-breakdown.py` (read-only) shows what
    that list holds by the gnomAD metadata flags (relatives vs PCA outliers,
    per population) and, where the metadata records relationships, every pair

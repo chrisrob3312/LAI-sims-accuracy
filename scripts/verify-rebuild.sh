@@ -167,31 +167,50 @@ else
         awk -v p="$p" 'BEGIN {exit !(p > 5)}' && pass "chr21 soft-union: ${n} SNPs, ${p}% A/T or C/G" || fail "chr21 soft-union: only ${p}% A/T or C/G"
         # A listed ID that is not in the panel is skipped without an error:
         # 2b and 3b select samples with plink2 --keep, FLARE with
-        # bcftools view --force-samples. Say how many of the missing IDs
-        # 1c drops on purpose (related_outliers.txt).
-        PIDS="${TMPDIR:-/tmp}/verify_panel_ids.$$"; RIDS="${TMPDIR:-/tmp}/verify_ro_ids.$$"
+        # bcftools view --force-samples. Say why each missing ID is missing:
+        # excluded by name (panel_exclude_ids.txt: Koenig's QC removals, not
+        # in the v2 source at all), dropped by 1c for relatedness
+        # (related_outliers.txt, unless the stamp says outliers=none), or
+        # neither -- the one to look at.
+        PIDS="${TMPDIR:-/tmp}/verify_panel_ids.$$"; RIDS="${TMPDIR:-/tmp}/verify_ro_ids.$$"; EIDS="${TMPDIR:-/tmp}/verify_ex_ids.$$"
         bcftools query -l "$F21" | sort > "$PIDS"
         if [[ -s "$OUTLIERS" ]]; then awk 'NF {print $2}' "$OUTLIERS" | sort -u > "$RIDS"; else : > "$RIDS"; fi
+        if [[ -s reference_ids/panel_exclude_ids.txt ]]; then
+            awk 'NF && $1 !~ /^#/ {print $1}' reference_ids/panel_exclude_ids.txt | sort -u > "$EIDS"
+        else : > "$EIDS"; fi
         # What 1c dropped for relatedness, from its stamp (outliers=none: nobody).
         SO=""
         if [[ -s "${F21}.recipe" ]]; then SO=$(grep -o 'outliers=[^ ]*' "${F21}.recipe" | head -1); SO="${SO#outliers=}"; fi
         info "1c relatedness drop (stamp): outliers=${SO:-<not recorded: built before the setting existed>}"
-        for l in amr_rfmix afr_rfmix eur_rfmix pel_rfmix pel_eas_rfmix amr_hgdpmxb_rfmix mxb_rfmix mxb_simulation \
-                 amr_simulation amr_hgdpmxb_simulation afr_simulation eur_simulation; do
-            miss=$(awk 'NF {print $1}' "reference_ids/${l}.txt" | sort -u | comm -23 - "$PIDS")
+        for l in $REF_LISTS $DONOR_LISTS; do
+            f="reference_ids/${l}.txt"; [[ -s "$f" ]] || continue
+            # 4a rewrites the homog list later in this rebuild; until then it is November's.
+            [[ "$l" == *homog* ]] && ! is_new "$f" && continue
+            nl=$(awk 'NF {print $1}' "$f" | sort -u | wc -l)
+            miss=$(awk 'NF {print $1}' "$f" | sort -u | comm -23 - "$PIDS")
             m=$(awk 'NF' <<<"$miss" | wc -l)
             [[ "$m" -eq 0 ]] && continue
-            if [[ "$SO" == none ]]; then
-                warn "reference_ids/${l}.txt: ${m} IDs not in the panel, and 1c dropped nobody for relatedness -- check the list:" \
-                     "$(awk 'NF' <<<"$miss" | head -5 | tr '\n' ' ')"
-            elif [[ -s "$OUTLIERS" ]]; then
-                ro=$(awk 'NF' <<<"$miss" | comm -12 - "$RIDS" | wc -l)
-                warn "reference_ids/${l}.txt: ${m} IDs not in the panel, ${ro} of them on 1c's related/outlier drop list (the arms run without them)"
-            else
-                warn "reference_ids/${l}.txt: ${m} IDs not in the panel (the arms run without them; ${OUTLIERS} unreadable, so not attributed)"
+            ex=$(awk 'NF' <<<"$miss" | comm -12 - "$EIDS")
+            rest=$(awk 'NF' <<<"$miss" | comm -23 - "$EIDS")
+            ro=""
+            if [[ "$SO" != none && -s "$OUTLIERS" ]]; then
+                ro=$(awk 'NF' <<<"$rest" | comm -12 - "$RIDS")
+                rest=$(awk 'NF' <<<"$rest" | comm -23 - "$RIDS")
             fi
+            nex=$(awk 'NF' <<<"$ex" | wc -l); nro=$(awk 'NF' <<<"$ro" | wc -l); nrest=$(awk 'NF' <<<"$rest" | wc -l)
+            msg="reference_ids/${l}.txt: ${m} of ${nl} IDs not in the panel (the arms run without them):"
+            [[ "$nex" -gt 0 ]] && msg+=" ${nex} excluded by name in panel_exclude_ids.txt [$(awk 'NF' <<<"$ex" | head -8 | tr '\n' ' ' | sed 's/ $//')];"
+            [[ "$nro" -gt 0 ]] && msg+=" ${nro} on 1c's related/outlier drop list;"
+            if [[ "$nrest" -gt 0 ]]; then
+                if [[ "$SO" != none && ! -s "$OUTLIERS" ]]; then
+                    msg+=" ${nrest} not attributed (${OUTLIERS} unreadable);"
+                else
+                    msg+=" ${nrest} with no known reason -- check the list [$(awk 'NF' <<<"$rest" | head -8 | tr '\n' ' ' | sed 's/ $//')];"
+                fi
+            fi
+            warn "${msg%;}"
         done
-        rm -f "$PIDS" "$RIDS"
+        rm -f "$PIDS" "$RIDS" "$EIDS"
         if [[ -s "${PANEL_DIR}/provenance/chr21.qc.cohorts.tsv" ]]; then
             info "chr21 per-cohort provenance after QC (raw):"; sed 's/^/          /' "${PANEL_DIR}/provenance/chr21.qc.cohorts.tsv"
         fi
