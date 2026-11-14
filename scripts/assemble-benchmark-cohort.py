@@ -1,0 +1,828 @@
+#!/usr/bin/env python3
+"""
+assemble-benchmark-cohort.py -- build steps 7 and 8 of BENCHMARK_COHORT_PLAN.md
+
+Step 7: decide which real genomes join the cohort as TEST samples, and label
+        each one real_homogeneous or real_admixed.
+Step 8: deal every individual -- real and simulated -- into the six
+        chip x build cells, balanced within 1.
+
+This needs only the K=8 supervised Q table from 4a and the donor/reference
+split. It does NOT need the simulator, so it runs the moment stage 3 lands,
+which is the point: BENCHMARK_COHORT_PLAN.md section 5 says the SAS and OCE
+decisions are "decided when stage 3 prints the counts", and this is what
+prints them.
+
+WHO IS ELIGIBLE AS A TEST SAMPLE, AND WHY EACH EXCLUSION IS THERE.
+A real genome may be a test sample only if no method under evaluation has
+already seen its haplotypes. Four separate ways that can happen, so four
+exclusions:
+
+  donor        its haplotypes were used to simulate admixed individuals
+  reference    it is in the LAI / imputation reference panel
+  1000 Genomes the imputation servers' own panels contain 1KG
+  server panel SGDP re-sequenced individuals who ARE in 1KG under other ids,
+               so a cohort column reading "SGDP" does not establish absence
+               from a server panel. That is the donor-leak class that
+               sgdp_server_panel_ids.txt exists to close, and it applies to
+               test samples for exactly the same reason it applies to donors.
+
+Dropping any one of the four silently inflates accuracy.
+
+THE HOMOGENEITY THRESHOLD IS TIERED BY DEFAULT.
+BENCHMARK_COHORT_PLAN.md section 3 writes a flat 0.93. The homogeneity panel
+that 4a builds uses 0.95 for EUR/EAS/AFR and 0.93 for AMR/OCE/MEN/SAS, because
+the deeply sampled super-pops can meet a stricter bar and the others cannot.
+Classifying test genomes on a flat bar while the panel uses a tiered one would
+put samples in real_homogeneous that the panel itself rejects as insufficiently
+homogeneous. So the tiered thresholds are the default here; --flat-threshold
+reproduces the plan document's literal reading.
+
+Usage:
+  python3 -I scripts/assemble-benchmark-cohort.py \\
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\
+      --refs  reference_ids --suffix b2 \\
+      --out   results/benchmark_cohort
+"""
+import argparse
+import os
+import sys
+from collections import Counter, defaultdict, OrderedDict
+
+# Document 19, Table 1 (contract v2). Kept identical to the roster in
+# cohort-composition-report.py: the two scripts must not disagree about what
+# is being built.
+MODELS = [
+    # name,    components,            proportions,        gen, n,   priority
+    ("LAT3",   ("NAT", "EUR", "AFR"), (0.50, 0.45, 0.05),  16, 600, "primary"),
+    ("CAR3",   ("NAT", "EUR", "AFR"), (0.10, 0.50, 0.40),  16, 200, "secondary"),
+    ("AFAM2",  ("AFR", "EUR"),        (0.80, 0.20),         7, 200, "secondary"),
+    ("MENA3",  ("EUR", "MEN", "AFR"), (0.30, 0.50, 0.20),  30, 200, "secondary"),
+    ("MENEUR", ("MEN", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
+    ("EASEUR", ("EAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
+    ("SASEUR", ("SAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
+    ("NAT1",   ("NAT",),              (1.0,),               0,  60, "control"),
+    ("EUR1",   ("EUR",),              (1.0,),               0,  60, "control"),
+    ("AFR1",   ("AFR",),              (1.0,),               0,  60, "control"),
+    ("EAS1",   ("EAS",),              (1.0,),               0,  60, "control"),
+    ("SAS1",   ("SAS",),              (1.0,),               0,  60, "control"),
+    ("MEN1",   ("MEN",),              (1.0,),               0,  60, "control"),
+]
+
+COMPONENT_POOL = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR",
+                  "MEN": "MEN", "EAS": "EAS", "SAS": "SAS", "OCE": "OCE"}
+
+CHIPS = ("snp6", "affy500k", "gsa")
+BUILDS = ("hg19", "hg38")
+CELLS = [(c, b) for c in CHIPS for b in BUILDS]   # six, fixed order
+
+# THREE DESIGNS, AND WHY THE DEFAULT PAIRS BUILDS.
+#
+# The two readings a harmonization benchmark wants are not symmetric.
+#
+#   The BUILD effect is "did the pipeline's liftover change THIS person's
+#   answer?". That is a within-individual question: comparing hg19 in one
+#   group of people against hg38 in a different group makes the liftover
+#   effect compete with between-person variance, which is far larger. So
+#   every individual should be on BOTH builds.
+#
+#   The CHIP effect is marker density, a property of the array rather than an
+#   interaction with the person, so an ancestry-balanced between-individual
+#   comparison is adequate. Splitting individuals across chips is what keeps
+#   the imputation cost at 2x rather than 6x -- and imputation runs on TOPMed,
+#   All of Us and Michigan are the binding constraint, not disk.
+#
+# "one-cell"      each individual on exactly one chip and one build.
+#                 1x imputation; both effects between-individual.
+# "paired-builds" each individual on one chip, BOTH builds. 2x imputation;
+#                 build effect paired. THE DEFAULT.
+# "full"          each individual on every chip and both builds. 6x
+#                 imputation; both effects paired.
+DESIGNS = ("paired-builds", "one-cell", "full")
+
+THRESH_STRICT = 0.95
+STRICT_SUPERPOPS = ("EUR", "EAS", "AFR")
+THRESH_RELAXED = 0.93
+
+
+def read_tsv(path):
+    """Header-keyed rows. Columns are resolved by NAME, never by offset: the
+    panel table's width changes with K, so an offset that is right at K=5 is
+    wrong at K=8 and fails silently by reading a neighbouring column."""
+    if not os.path.exists(path):
+        sys.exit(f"FATAL: missing {path}")
+    with open(path) as f:
+        head = f.readline().rstrip("\n").split("\t")
+        idx = {c: i for i, c in enumerate(head)}
+        rows = []
+        for ln in f:
+            ln = ln.rstrip("\n")
+            if not ln:
+                continue
+            p = ln.split("\t")
+            if len(p) < len(head):
+                p += [""] * (len(head) - len(p))
+            rows.append(p)
+    return idx, rows
+
+
+def read_list(path):
+    if not path or not os.path.exists(path):
+        return set()
+    out = set()
+    with open(path) as f:
+        for ln in f:
+            s = ln.split("#", 1)[0].strip()
+            if s:
+                out.add(s.split()[0])
+    return out
+
+
+def role_list(refs_dir, sp, role, suffix):
+    """Read <sp>_<role>_<suffix>.txt, trying both letter cases.
+
+    split-homog-donors-reference.py lowercases the super-pop in the filename
+    (eur_reference_bench.txt). Looking only for the upper-case spelling finds
+    nothing, every panel sample then looks test-eligible, and the cohort would
+    be built with donors in the test set. Try both rather than depend on which
+    convention the splitter happens to use.
+    """
+    for name in (f"{sp.lower()}_{role}_{suffix}.txt",
+                 f"{sp}_{role}_{suffix}.txt",
+                 f"{sp.upper()}_{role}_{suffix}.txt"):
+        p = os.path.join(refs_dir, name)
+        if os.path.exists(p):
+            return read_list(p)
+    return set()
+
+
+def threshold_for(sp, flat):
+    if flat is not None:
+        return flat
+    return THRESH_STRICT if sp in STRICT_SUPERPOPS else THRESH_RELAXED
+
+
+def axis_for(design):
+    """The units individuals are dealt ACROSS, and what each unit implies.
+
+    -> (list of units, chips_for_unit, builds_for_unit)
+    """
+    if design == "one-cell":
+        return (list(CELLS),
+                lambda u: [u[0]],
+                lambda u: [u[1]])
+    if design == "paired-builds":
+        return (list(CHIPS),
+                lambda u: [u],
+                lambda u: list(BUILDS))
+    if design == "full":
+        return (["all"],
+                lambda u: list(CHIPS),
+                lambda u: list(BUILDS))
+    raise ValueError(design)
+
+
+def deal(groups, units):
+    """Deal each group round-robin across `units`, rotating the start per group.
+
+    Rotating matters. A fixed start would send every group's remainder to the
+    same unit, so with 13 models and many real groups unit 0 would end up
+    systematically larger -- and a cell-size imbalance is indistinguishable
+    from a chip effect in the results. Rotating spreads the remainders, which
+    keeps each group balanced within 1 AND the unit totals balanced within 1.
+    """
+    out = {}
+    for gi, (gname, members) in enumerate(sorted(groups.items())):
+        off = gi % len(units)
+        for i, m in enumerate(sorted(members)):
+            out[m] = units[(i + off) % len(units)]
+    return out
+
+
+def deal_counts(n, offset, n_units):
+    """Split a simulated model's n across n_units, balanced within 1."""
+    base, rem = divmod(n, n_units)
+    counts = [base] * n_units
+    for r in range(rem):
+        counts[(r + offset) % n_units] += 1
+    return counts
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--panel", required=True,
+                    help="lai_ref_panel_samples.k<K>.tsv from 4a")
+    ap.add_argument("--refs", default="reference_ids",
+                    help="directory holding <sp>_reference_<suffix>.txt and "
+                         "<sp>_simulation_<suffix>.txt from the splitter")
+    ap.add_argument("--suffix", default="b2")
+    ap.add_argument("--server-panel-ids",
+                    default="reference_ids/sgdp_server_panel_ids.txt",
+                    help="ids inside an imputation server's reference panel; "
+                         "these cannot be test samples either")
+    ap.add_argument("--kg-cohort", default="1KG")
+    ap.add_argument("--panel-exclude", default="reference_ids/panel_exclude_ids.txt",
+                    help="named exclusions (e.g. the CHMI hydatidiform-mole "
+                         "cell line); not test-eligible")
+    ap.add_argument("--dup-drop", default="reference_ids/panel_duplicate_drop_ids.txt",
+                    help="KING duplicate drops from 1e; not test-eligible")
+    ap.add_argument("--thin-reference", type=int, default=25,
+                    help="a super-pop whose benchmark reference list is "
+                         "smaller than this is marked reference_support=thin")
+    ap.add_argument("--flat-threshold", type=float, default=None,
+                    help="use one homogeneity threshold for every super-pop "
+                         "(the plan document's literal 0.93) instead of the "
+                         "tiered thresholds 4a applies")
+    ap.add_argument("--models", default="reference_ids/models.tsv",
+                    help="the model table (Doc 20's models.tsv). Model sizes "
+                         "live HERE, not in this file's MODELS list, because "
+                         "they are an experimental-design decision that gets "
+                         "revisited -- LAT3 is 300 rather than the contract "
+                         "table's 600 because NAT N_eff saturates on the DONOR "
+                         "pool, so the extra 400 individuals cost 19% of the "
+                         "imputation budget for about 8 effective genomes. "
+                         "Falls back to the built-in table when absent.")
+    ap.add_argument("--design", choices=DESIGNS, default="paired-builds",
+                    help="paired-builds (default): one chip per individual, "
+                         "BOTH builds -- the liftover comparison is then "
+                         "within-individual, at 2x imputation cost. "
+                         "one-cell: exactly one chip and one build per "
+                         "individual, 1x cost, both effects "
+                         "between-individual. full: every chip and both "
+                         "builds for everyone, 6x cost, both effects paired.")
+    ap.add_argument("--out", default="results/benchmark_cohort",
+                    help="output prefix; three files are written")
+    a = ap.parse_args()
+
+    idx, rows = read_tsv(a.panel)
+    need = ["sample", "cohort", "pop", "super_pop", "assigned",
+            "max_Q_sup", "argmax_pop_sup", "included"]
+    missing = [c for c in need if c not in idx]
+    if missing:
+        sys.exit(f"FATAL: {a.panel} lacks column(s) {missing}. Columns "
+                 f"present: {sorted(idx)}")
+
+    # LABEL-VOCABULARY CHECK. Three different lookups below are keyed on a
+    # super-pop name -- the tiered threshold, the reference-panel size, and
+    # the argmax/label comparison -- and every one of them FAILS SILENTLY on an
+    # unrecognised label: the threshold quietly falls back to the relaxed
+    # 0.93, the reference size reads 0 so support becomes "none", and the
+    # comparison is never equal so the sample is called admixed. A cohort
+    # whose metadata super-pop is not harmonised to this vocabulary (a
+    # geographic region instead of AMR, say) would therefore be misclassified
+    # wholesale with nothing in the output to show it.
+    #
+    # 4a harmonises on the way in -- MXB -> AMR, SGDP via its own map,
+    # CSA -> SAS, MID -> MEN -- and aborts if its two vocabularies do not
+    # overlap. This re-checks rather than trusting that, because the failure
+    # is silent here and a new cohort is exactly the thing that would add an
+    # unmapped label.
+    CANON = {"AFR", "AMR", "EUR", "EAS", "SAS", "MEN", "OCE", "OTH"}
+    seen_sp = Counter(r[idx["super_pop"]].strip() for r in rows)
+    seen_ap = Counter(r[idx["argmax_pop_sup"]].strip() for r in rows)
+    bad_sp = {k: v for k, v in seen_sp.items()
+              if k and k not in CANON and k != "NA"}
+    bad_ap = {k: v for k, v in seen_ap.items() if k and k not in CANON}
+    print("[labels] super_pop census    : "
+          + ", ".join(f"{k}={v}" for k, v in sorted(seen_sp.items())))
+    print("[labels] argmax census       : "
+          + ", ".join(f"{k}={v}" for k, v in sorted(seen_ap.items())))
+    if bad_sp or bad_ap:
+        sys.exit(
+            f"FATAL: super-pop labels outside the canonical vocabulary.\n"
+            f"  canonical      : {sorted(CANON)}\n"
+            f"  bad super_pop  : {bad_sp}\n"
+            f"  bad argmax     : {bad_ap}\n"
+            f"These would silently take the relaxed threshold, read a\n"
+            f"reference size of 0, and never match the argmax -- every\n"
+            f"affected sample would be called real_admixed with no\n"
+            f"indication why. Harmonise them in 4a's super_pop_of() (where\n"
+            f"MXB -> AMR, CSA -> SAS and MID -> MEN already live) and re-run\n"
+            f"4a; do not work around it here.")
+    if not (set(seen_ap) & CANON):
+        sys.exit("FATAL: no argmax label is canonical -- the cluster-to-name "
+                 "assignment in 4a did not produce usable names.")
+
+    # ---- the four exclusions -------------------------------------------
+    donors, refs = set(), set()
+    sps = set(r[idx["super_pop"]] for r in rows) | set(COMPONENT_POOL.values())
+    for sp in sorted(x for x in sps if x and x != "NA"):
+        donors |= role_list(a.refs, sp, "simulation", a.suffix)
+        refs   |= role_list(a.refs, sp, "reference",  a.suffix)
+    server = read_list(a.server_panel_ids)
+
+    if not donors and not refs:
+        sys.exit(f"FATAL: no donor or reference lists found under {a.refs} "
+                 f"with suffix '{a.suffix}'. Run split-homog-donors-reference.py "
+                 f"first -- without it every panel sample looks test-eligible, "
+                 f"which would put donors in the test set.")
+
+    overlap = donors & refs
+    if overlap:
+        sys.exit(f"FATAL: {len(overlap)} sample(s) are BOTH donor and "
+                 f"reference, e.g. {sorted(overlap)[:5]}. The split is broken; "
+                 f"refusing to build a cohort on it.")
+
+    # ---- step 7: classify the real test genomes ------------------------
+    #
+    # WHY `included` IS NOT THE ELIGIBILITY TEST.
+    # 4a sets included=1 only when max_Q >= the homogeneity threshold AND the
+    # supervised argmax matches the assigned super-pop. Gating on it therefore
+    # admits ONLY homogeneous samples, which makes real_admixed empty by
+    # construction -- and real_admixed is the category that contributes real
+    # admixture with the ancestry/genotype correlation structure a simulation
+    # idealises away. It also drops every OTH sample, since 4a excludes the
+    # leftover cluster from the homogeneous panel on purpose.
+    #
+    # Those are exactly the people a harmonization pipeline has to handle: the
+    # multiracial individuals who fit no single reference ancestry, and the
+    # thinly represented groups that cannot be pooled into a stratified
+    # analysis. Excluding them would test the pipeline only on the cases it
+    # finds easy.
+    #
+    # But included=0 is overloaded -- it also marks donors, super_pop=NA, and
+    # (via 4a's exclusion set) named exclusions and KING duplicate drops, and
+    # the TSV does not record which branch fired. So eligibility is decided
+    # from the role lists directly, and `included` is carried as a reported
+    # column rather than used as a filter.
+    panel_excl = read_list(a.panel_exclude)
+    dup_drop = read_list(a.dup_drop)
+    ref_sizes = {}
+    for sp in sorted(x for x in sps if x and x != "NA"):
+        ref_sizes[sp] = len(role_list(a.refs, sp, "reference", a.suffix))
+
+    def support_for(sp):
+        n = ref_sizes.get(sp, 0)
+        if n == 0:
+            return "none"
+        return "thin" if n < a.thin_reference else "full"
+
+    test, excl = [], defaultdict(list)
+    for r in rows:
+        s = r[idx["sample"]]
+        if s in donors:
+            excl["donor"].append(s); continue
+        if s in refs:
+            excl["reference panel"].append(s); continue
+        if r[idx["cohort"]].strip() == a.kg_cohort:
+            excl["1000 Genomes (in server panels)"].append(s); continue
+        if s in server:
+            excl["inside a server reference panel"].append(s); continue
+        if s in panel_excl:
+            excl["named panel exclusion"].append(s); continue
+        if s in dup_drop:
+            excl["KING duplicate drop"].append(s); continue
+        # ANCHORS ARE NOT EXCLUDED. An earlier revision barred them from the
+        # test set on circularity grounds, which was wrong: the supervised
+        # ADMIXTURE run is not a method under evaluation here. It is the
+        # upstream classifier that identifies the pools -- who clears the
+        # homogeneity bar, who is admixed -- and its Q is never an OUTCOME of
+        # the benchmark. What the benchmark scores is imputation against WGS
+        # truth, and local ancestry on the SIMULATED individuals against their
+        # .hanc tracts; real genomes are never scored for local ancestry at
+        # all. So an anchor is not a sample the benchmark was trained on, and
+        # it stays eligible for any role the other rules allow.
+        anc = r[idx["assigned"]].strip()
+        is_anchor = bool(anc) and anc not in ("-", "NA", "", ".")
+        sp = r[idx["super_pop"]]
+        if sp in ("", "NA"):
+            excl["super_pop unresolved"].append(s); continue
+        # WHICH Q IS A MEASUREMENT FOR THIS SAMPLE.
+        #
+        # For an ordinary sample the supervised Q is the estimate. For an
+        # ANCHOR it is ~1.0 by construction, because that sample IS the
+        # prior -- so reading homogeneity off it would report the assumption
+        # back rather than a property of the genome.
+        #
+        # The unsupervised Q is the honest reading there, and it is also the
+        # one that selected the anchor in the first place: 4a's stage A takes
+        # the top-N by UNSUPERVISED Q within each super-pop. So an anchor's
+        # homogeneity is an empirical finding from stage A, not an assertion
+        # -- it just has to be read from the column that measured it.
+        q_source = "supervised"
+        q_col, ap_col = "max_Q_sup", "argmax_pop_sup"
+        if is_anchor and "max_Q_unsup" in idx and "argmax_pop_unsup" in idx:
+            q_col, ap_col = "max_Q_unsup", "argmax_pop_unsup"
+            q_source = "unsupervised (anchor)"
+        try:
+            q = float(r[idx[q_col]])
+        except ValueError:
+            excl[f"unparseable {q_col}"].append(s); continue
+        ap = r[idx[ap_col]].strip()
+        # THE THRESHOLD IS KEYED ON THE ARGMAX, NOT THE METADATA LABEL.
+        # The question "is this genome homogeneous?" is about the ancestry
+        # ADMIXTURE actually found, so a sample at Q=0.97 on EUR is measured
+        # against EUR's 0.95 whatever its label says. Keying on the label
+        # would apply the wrong tier to every label/ancestry mismatch, and
+        # would apply the relaxed tier to all of them if a cohort's labels
+        # were ever unharmonised.
+        thr = threshold_for(ap if ap in CANON else sp, a.flat_threshold)
+        # OTH is the empirical leftover cluster at K=8. It is not a reference
+        # ancestry, so an OTH sample is neither homogeneous (there is no
+        # ancestry for it to be homogeneous FOR) nor admixed between named
+        # components. It gets its own label.
+        if sp == "OTH" or ap == "OTH":
+            stype = "real_unassigned"
+            # Support is "none" by definition, not whatever the sample's
+            # metadata label happens to have. An OTH sample's assigned
+            # super-pop is a label the supervised Q contradicts, so reading
+            # support off it would report a reference panel that does not
+            # cover this person.
+            support = "none"
+        elif q >= thr:
+            # HOMOGENEITY IS DECIDED ON Q ALONE. A sample at Q=0.97 is
+            # homogeneous whether or not its metadata label agrees about WHICH
+            # ancestry; disagreement is recorded in label_concordant instead.
+            # Folding the label comparison into the type would call a
+            # perfectly homogeneous genome "admixed" purely because a cohort's
+            # labels use another vocabulary -- turning a metadata problem into
+            # a false biological claim.
+            stype = "real_homogeneous"
+            support = support_for(ap if ap in CANON else sp)
+        else:
+            stype = "real_admixed"
+            support = support_for(ap if ap in CANON else sp)
+        test.append({
+            "sample": s,
+            "cohort": r[idx["cohort"]],
+            "pop": r[idx["pop"]],
+            "super_pop": sp,
+            "argmax_pop_sup": ap,
+            "max_Q_sup": q,
+            "threshold": thr,
+            "sample_type": stype,
+            # The person's ancestry and whether a matching reference panel
+            # exists are different facts, and conflating them would make it
+            # impossible to ask "how does imputation do when the reference is
+            # thin?" separately from "how does it do on people no reference
+            # fits?". So support is its own column.
+            "reference_support": support,
+            # 1 when the supervised argmax agrees with the metadata
+            # super-pop. A high discordant count is a HARMONISATION signal,
+            # not a biological one.
+            "label_concordant": 1 if ap == sp else 0,
+            "is_anchor": 1 if is_anchor else 0,
+            "q_source": q_source,
+            "panel_included": r[idx["included"]].strip(),
+        })
+
+    # ---- step 8: deal into the six chip x build cells ------------------
+    # Load the model table from file when present; the built-in MODELS list is
+    # the fallback so the script still runs standalone.
+    global MODELS
+    if a.models and os.path.exists(a.models):
+        loaded, bad = [], []
+        with open(a.models) as fh:
+            for ln in fh:
+                ln = ln.split("#", 1)[0].rstrip("\n")
+                if not ln.strip():
+                    continue
+                f = ln.split("\t")
+                if len(f) < 7 or f[0].strip() == "model":
+                    continue
+                try:
+                    comp = tuple(x.strip() for x in f[1].split(","))
+                    prop = tuple(float(x) for x in f[2].split(","))
+                    gen, nn = int(f[3]), int(f[4])
+                except (ValueError, IndexError):
+                    bad.append(f[0]); continue
+                if len(comp) != len(prop):
+                    bad.append(f[0]); continue
+                if abs(sum(prop) - 1.0) > 1e-6:
+                    bad.append(f"{f[0]} (proportions sum to {sum(prop):g})")
+                    continue
+                loaded.append((f[0].strip(), comp, prop, gen, nn, f[6].strip()))
+        if bad:
+            sys.exit(f"FATAL: unusable row(s) in {a.models}: {bad}. "
+                     f"components and proportions must be comma lists of the "
+                     f"same length, and proportions must sum to 1.")
+        if loaded:
+            MODELS = loaded
+            tot = sum(m[4] for m in MODELS)
+            print(f"[models] {a.models}: {len(MODELS)} models, {tot} simulated "
+                  f"individuals")
+    else:
+        print(f"[models] {a.models} not found -- using the built-in table "
+              f"({sum(m[4] for m in MODELS)} individuals)")
+
+    units, chips_of, builds_of = axis_for(a.design)
+    groups = defaultdict(list)
+    for t in test:
+        groups[f"{t['sample_type']}|{t['argmax_pop_sup']}"].append(t["sample"])
+    assign = deal(groups, units)
+    for t in test:
+        u = assign[t["sample"]]
+        t["chips"] = ",".join(chips_of(u))
+        t["builds"] = ",".join(builds_of(u))
+
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+
+    man = f"{a.out}_manifest.tsv"
+    with open(man, "w") as g:
+        cols = ["sample", "cohort", "pop", "super_pop", "argmax_pop_sup",
+                "max_Q_sup", "threshold", "sample_type", "reference_support",
+                "label_concordant", "is_anchor", "q_source",
+                "panel_included", "chips", "builds"]
+        g.write("\t".join(cols) + "\n")
+        for t in sorted(test, key=lambda x: x["sample"]):
+            g.write("\t".join(str(t[c]) for c in cols) + "\n")
+
+    ros = f"{a.out}_simset_roster.tsv"
+    with open(ros, "w") as g:
+        g.write("model\tcomponents\tproportions\tgenerations\tpriority"
+                "\tchips\tbuilds\tn\n")
+        for mi, (name, comp, prop, gen, n, pri) in enumerate(MODELS):
+            counts = deal_counts(n, mi, len(units))
+            for u, k in zip(units, counts):
+                g.write(f"{name}\t{','.join(comp)}"
+                        f"\t{','.join(f'{p:g}' for p in prop)}"
+                        f"\t{gen}\t{pri}\t{','.join(chips_of(u))}"
+                        f"\t{','.join(builds_of(u))}\t{k}\n")
+
+    # Per-individual rows, not just counts. Step 6 simulates a genome per
+    # model and step 10 masks it to a chip x build cell, so the two steps must
+    # agree about which simulated individual is in which cell. Counts alone
+    # cannot express that, and letting each step deal independently would put
+    # the same id in different cells in the two steps.
+    ind = f"{a.out}_simset_individuals.tsv"
+    with open(ind, "w") as g:
+        g.write("sim_id\tmodel\tcomponents\tproportions\tgenerations"
+                "\tpriority\tchips\tbuilds\n")
+        for mi, (name, comp, prop, gen, n, pri) in enumerate(MODELS):
+            k = 0
+            for u, c in zip(units, deal_counts(n, mi, len(units))):
+                for _ in range(c):
+                    k += 1
+                    g.write(f"{name}_{k:04d}\t{name}\t{','.join(comp)}"
+                            f"\t{','.join(f'{p:g}' for p in prop)}"
+                            f"\t{gen}\t{pri}\t{','.join(chips_of(u))}"
+                            f"\t{','.join(builds_of(u))}\n")
+
+    # ---- the counts, and the two decisions section 5 defers ------------
+    rep = f"{a.out}_counts.txt"
+    L = []
+    w = L.append
+    w("=" * 72)
+    w(" BENCHMARK COHORT -- composition after ADMIXTURE K=8")
+    w("=" * 72)
+    w(f" panel       {a.panel}")
+    w(f" split       {a.refs} (suffix {a.suffix})")
+    w(f" threshold   " + ("flat %.2f" % a.flat_threshold if a.flat_threshold
+                          else "tiered: %.2f for %s, %.2f otherwise"
+                               % (THRESH_STRICT, "/".join(STRICT_SUPERPOPS),
+                                  THRESH_RELAXED)))
+    w("")
+    w(" REAL TEST GENOMES")
+    w("-" * 72)
+    by = defaultdict(lambda: defaultdict(int))
+    for t in test:
+        by[t["argmax_pop_sup"]][t["sample_type"]] += 1
+    sup_of = {}
+    for t in test:
+        sup_of[t["argmax_pop_sup"]] = t["reference_support"]
+    w(f" {'component':<12}{'homog':>8}{'admixed':>9}{'unassigned':>12}"
+      f"{'total':>8}{'ref':>7}")
+    for c in sorted(by):
+        h = by[c]["real_homogeneous"]
+        m = by[c]["real_admixed"]
+        u = by[c]["real_unassigned"]
+        w(f" {c:<12}{h:>8}{m:>9}{u:>12}{h+m+u:>8}{sup_of.get(c, '?'):>7}")
+    th = sum(1 for t in test if t["sample_type"] == "real_homogeneous")
+    tm = sum(1 for t in test if t["sample_type"] == "real_admixed")
+    tu = sum(1 for t in test if t["sample_type"] == "real_unassigned")
+    w(f" {'TOTAL':<12}{th:>8}{tm:>9}{tu:>12}{len(test):>8}")
+    w("")
+    w(" real_homogeneous  top Q >= threshold and argmax == assigned super-pop")
+    w(" real_admixed      naturally admixed, or argmax disagrees with the label")
+    w(" real_unassigned   OTH, the empirical leftover cluster at K=8 -- no")
+    w("                   reference ancestry fits, so it is neither homogeneous")
+    w("                   nor admixed between named components. These are the")
+    w("                   multiracial-like individuals a real diverse cohort")
+    w("                   carries, and every one not in a reference panel is")
+    w("                   included here on purpose.")
+    w("")
+    w(" ref column: full / thin (< %d reference samples) / none. A thin or"
+      % a.thin_reference)
+    w(" absent reference panel is a property of the PANEL, not of the person,")
+    w(" which is why it is separate from sample_type: it lets 'imputation with")
+    w(" a thin reference' be asked apart from 'imputation on someone no")
+    w(" reference fits'. OCE and OTH are the groups that cannot be pooled into")
+    w(" a stratified analysis, and they are in the cohort for that reason.")
+    w("")
+    w(" SUPERVISED ANCHORS")
+    w("-" * 72)
+    w(" Anchors are ONLY the mechanism that identifies the pools. The")
+    w(" supervised ADMIXTURE run is not a method under evaluation: its Q is")
+    w(" never an outcome of the benchmark, which scores imputation against")
+    w(" WGS truth and local ancestry on the SIMULATED individuals against")
+    w(" their .hanc tracts. So anchors are NOT excluded from anything -- they")
+    w(" are eligible for donor, reference or real test sample, subject to the")
+    w(" same rules as everyone else (no 1KG donor, no 1KG real test genome).")
+    w("")
+    w(" Their homogeneity is read from the UNSUPERVISED Q, because the")
+    w(" supervised value is ~1.0 by construction for an anchor -- that sample")
+    w(" IS the prior. The unsupervised Q is both the honest reading and the")
+    w(" one that selected them: 4a's stage A takes the top-N by unsupervised")
+    w(" Q per super-pop, so anchor homogeneity is an empirical finding, just")
+    w(" one recorded in a different column. See q_source in the manifest.")
+    w("")
+    anchors_by_sp = defaultdict(int)
+    anchor_ids = set()
+    for r in rows:
+        v = r[idx["assigned"]].strip()
+        if v and v not in ("-", "NA", "", "."):
+            anchors_by_sp[v] += 1
+            anchor_ids.add(r[idx["sample"]])
+    if not anchor_ids:
+        w(" none found -- the `assigned` column is empty. Either 4a ran")
+        w(" unsupervised, or the .pop prior was not written. Check 4a's")
+        w(" stage-A anchor discovery before trusting any Q in this table.")
+    else:
+        w(f" {'super-pop':<12}{'anchors':>9}{'also donor':>12}"
+          f"{'also reference':>16}")
+        for sp in sorted(anchors_by_sp):
+            ids = {r[idx["sample"]] for r in rows
+                   if r[idx["assigned"]].strip() == sp}
+            w(f" {sp:<12}{anchors_by_sp[sp]:>9}{len(ids & donors):>12}"
+              f"{len(ids & refs):>16}")
+        w(f" {'TOTAL':<12}{len(anchor_ids):>9}{len(anchor_ids & donors):>12}"
+          f"{len(anchor_ids & refs):>16}")
+        n_od = len(anchor_ids & donors)
+        n_or = len(anchor_ids & refs)
+        n_test = sum(1 for t in test if t["is_anchor"])
+        n_un = len(anchor_ids - donors - refs)
+        w("")
+        w(f" {n_od} donor, {n_or} reference, {n_test} real test sample, "
+          f"{n_un} unallocated.")
+        w(" All four are fine. Anchors being the purest samples makes them")
+        w(" good donors and good reference members, and an anchor that is a")
+        w(" real test genome is a genuinely homogeneous genome by the")
+        w(" unsupervised reading.")
+        n_kg_anchor_donor = 0
+        if "cohort" in idx:
+            kgset = {r[idx["sample"]] for r in rows
+                     if r[idx["cohort"]].strip() == a.kg_cohort}
+            n_kg_anchor_donor = len(anchor_ids & donors & kgset)
+        if n_kg_anchor_donor:
+            w("")
+            w(f" *** {n_kg_anchor_donor} anchor(s) are 1000 Genomes AND donors.")
+            w(" Anchor status does not exempt a sample from the no-1KG-donor")
+            w(" rule: the external servers contain 1KG, so such a donor would")
+            w(" be imputed against its own haplotypes. Re-run the split with")
+            w(" --mode benchmark.")
+    w("")
+    w(" LABEL vs ARGMAX CONCORDANCE")
+    w("-" * 72)
+    w(" The supervised argmax and the metadata super-pop are two independently")
+    w(" built vocabularies. Homogeneity is decided on Q alone, so a mismatch")
+    w(" does NOT change sample_type -- but a super-pop that is mostly")
+    w(" discordant is a HARMONISATION problem, not a biological finding: it")
+    w(" means that cohort's labels are not mapped to this vocabulary (4a's")
+    w(" super_pop_of() is where MXB -> AMR, CSA -> SAS and MID -> MEN live).")
+    w("")
+    conc = defaultdict(lambda: [0, 0])
+    for t in test:
+        conc[t["super_pop"]][0 if t["label_concordant"] else 1] += 1
+    w(f" {'label':<10}{'concordant':>12}{'discordant':>12}{'pct disc':>10}")
+    harm = []
+    for k in sorted(conc):
+        c, d = conc[k]
+        pct = 100.0 * d / (c + d) if (c + d) else 0.0
+        flag = ""
+        # A label that disagrees with the argmax for most of its samples is
+        # the signature of an unmapped vocabulary. Half is already far more
+        # than genuine ancestry/label mismatch explains.
+        if (c + d) >= 10 and pct >= 50.0:
+            flag = "  <<< check harmonisation"
+            harm.append((k, c + d, pct))
+        w(f" {k:<10}{c:>12}{d:>12}{pct:>9.0f}%{flag}")
+    tot_d = sum(v[1] for v in conc.values())
+    w(f" {'TOTAL':<10}{len(test) - tot_d:>12}{tot_d:>12}"
+      f"{100.0 * tot_d / len(test) if test else 0:>9.0f}%")
+    if harm:
+        w("")
+        w(" *** these labels disagree with the argmax for most of their")
+        w(" samples, which points at an unharmonised cohort rather than at")
+        w(" real ancestry/label mismatch:")
+        for k, n, pct in harm:
+            w(f"      {k}: {pct:.0f}% of {n} samples discordant")
+        w(" Fix the mapping in 4a's super_pop_of() and re-run 4a.")
+    w("")
+    w(" Real genomes have no recorded tracts, so they are NEVER scored for")
+    w(" local-ancestry accuracy. They are used for:")
+    w("   1. imputation accuracy, calibration and retention")
+    w("   2. power and GWAS simulations -- TOGETHER WITH the simulated")
+    w("      individuals, since a few hundred real genomes alone is too")
+    w("      few. Use N_eff from cohort-power-summary.py, not the roster")
+    w("      count: donor reuse makes simulated individuals relatives.")
+    w(" The second is why the real half cannot be replaced by more simulated")
+    w(" individuals: power depends on the LD structure, allele-frequency")
+    w(" spectrum and relatedness the genotypes actually carry, and simulated")
+    w(" genomes from a finite donor pool have compressed haplotype diversity")
+    w(" plus donor-reuse cryptic relatedness, which makes power estimated on")
+    w(" them optimistic and uncorrectable after the fact.")
+    w("")
+    w(" EXCLUDED FROM THE TEST SET")
+    w("-" * 72)
+    for k in sorted(excl):
+        w(f" {k:<38}{len(excl[k]):>6}")
+    w("")
+    w(" CHIP x BUILD CELLS")
+    w("-" * 72)
+    w(f" design: {a.design}")
+    if a.design == "paired-builds":
+        w(" Every individual is on ONE chip and BOTH builds, so the liftover")
+        w(" comparison is within-individual. Each person is imputed twice.")
+    elif a.design == "one-cell":
+        w(" Every individual is on exactly one chip and one build. Cheapest,")
+        w(" but the liftover effect competes with between-person variance.")
+    else:
+        w(" Every individual is on every chip and both builds. Both effects")
+        w(" are paired; each person is imputed six times.")
+    w("")
+    cc = defaultdict(int)
+    for t in test:
+        for ch in t["chips"].split(","):
+            for bu in t["builds"].split(","):
+                cc[(ch, bu)] += 1
+    sim_cc = defaultdict(int)
+    for mi, (name, _c, _p, _g, n, _pr) in enumerate(MODELS):
+        for u, k in zip(units, deal_counts(n, mi, len(units))):
+            for ch in chips_of(u):
+                for bu in builds_of(u):
+                    sim_cc[(ch, bu)] += k
+    w(f" {'cell':<18}{'simulated':>11}{'real':>7}{'total':>8}")
+    for cell in CELLS:
+        w(f" {cell[0] + '/' + cell[1]:<18}{sim_cc[cell]:>11}"
+          f"{cc[cell]:>7}{sim_cc[cell] + cc[cell]:>8}")
+    w(f" {'TOTAL':<18}{sum(sim_cc.values()):>11}"
+      f"{sum(cc.values()):>7}{sum(sim_cc.values()) + sum(cc.values()):>8}")
+    spread = max(cc.values()) - min(cc.values()) if cc else 0
+    w("")
+    w(f" real-sample spread across cells: {spread} "
+      f"({'balanced' if spread <= 1 else 'NOT BALANCED -- investigate'})")
+    w("")
+    w(" THE TWO DECISIONS SECTION 5 DEFERS TO THESE COUNTS")
+    w("-" * 72)
+    dn = defaultdict(int)
+    for sp in sorted(set(COMPONENT_POOL.values())):
+        dn[sp] = len(role_list(a.refs, sp, "simulation", a.suffix))
+    need_by_comp = defaultdict(int)
+    for name, comp, _p, _g, n, _pr in MODELS:
+        for c in comp:
+            need_by_comp[c] += n
+    w(f" {'component':<10}{'donors':>8}{'haps':>7}{'indiv needing it':>18}"
+      f"{'haps/indiv':>12}")
+    for c in sorted(need_by_comp):
+        pool = COMPONENT_POOL.get(c, c)
+        d = dn.get(pool, 0)
+        ratio = (2.0 * d / need_by_comp[c]) if need_by_comp[c] else 0.0
+        w(f" {c:<10}{d:>8}{2 * d:>7}{need_by_comp[c]:>18}{ratio:>12.3f}")
+    w("")
+    sas_d = dn.get("SAS", 0)
+    w(f" SAS: {sas_d} donors -> {2 * sas_d} haplotypes for 200 SASEUR + 60 SAS1.")
+    w("      Options, in the plan's preference order: reduce SASEUR's n;")
+    w("      accept the reuse and report the kinship distribution; or drop")
+    w("      SASEUR to control-only and rely on real admixed SAS for the")
+    w("      imputation readings. NOT DEFAULTED -- decide and record it.")
+    w("")
+    oce_h = by.get("OCE", {}).get("real_homogeneous", 0)
+    oce_m = by.get("OCE", {}).get("real_admixed", 0)
+    w(f" OCE: {dn.get('OCE', 0)} donors; no model in Table 1 uses OCE.")
+    w(f"      {oce_h} real_homogeneous + {oce_m} real_admixed OCE test samples")
+    w("      carry the OCE reading instead. Confirm OCE stays unsimulated.")
+    w("")
+    # Donors allocated for a component no model draws on are doing nothing,
+    # and in a thin super-pop those are exactly the samples that would be
+    # worth more as test genomes.
+    unused = []
+    for sp in sorted(dn):
+        comp = [c for c, p in COMPONENT_POOL.items() if p == sp]
+        if dn[sp] > 0 and not any(need_by_comp.get(c, 0) > 0 for c in comp):
+            unused.append((sp, dn[sp]))
+    if unused:
+        w(" DONORS ALLOCATED BUT UNUSED BY ANY MODEL")
+        for sp, n_u in unused:
+            w(f"      {sp}: {n_u} donors withheld, no model draws on them.")
+        w("      Nothing simulates from these, so they are withheld for no")
+        w("      benefit while being exactly the samples a thin group needs as")
+        w("      test genomes. Re-run the split with")
+        w("        --no-donor-superpops " + ",".join(sp for sp, _ in unused))
+        w("      to return them to the test pool.")
+        w("")
+    w("=" * 72)
+    w(" NEXT: step 6  6b_simulate_benchmark_cohort_clm.sh  (the 2,160)")
+    w("       step 7  6c_extract_real_test_genomes_clm.sh (the real half)")
+    w("       transfer 6a_transfer_to_mab_clm.sh benchmark")
+    w("       step 10 6d_write_chip_cells_clm.sh           (chip x build cells)")
+    w(" NOT BUILT: step 11 (tables, checksums, provenance).")
+    w("=" * 72)
+
+    with open(rep, "w") as g:
+        g.write("\n".join(L) + "\n")
+    print("\n".join(L))
+    print(f"\nwrote {man}\n      {ros}\n      {ind}\n      {rep}")
+
+
+if __name__ == "__main__":
+    main()

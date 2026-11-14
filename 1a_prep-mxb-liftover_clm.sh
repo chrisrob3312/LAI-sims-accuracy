@@ -4,6 +4,9 @@
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=1a_prep_mxb_liftover
 #SBATCH --partition=atkinson,mhgcp
+# Same exclusion as every other stage (reason in 1b_sgdp_liftover_clm.sh):
+# SIGILL on the mhgcp-t* CPUs, exit 132 with an empty log.
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #SBATCH --time=24:00:00
 #SBATCH --mem=48G
 #SBATCH --cpus-per-task=8
@@ -15,15 +18,22 @@
 # ============================================================================
 # DESCRIPTION
 # ============================================================================
-# One-shot prep step before 1b_phasing-jointcall_clm.sh:
+# One-shot prep step before 1c_phasing-jointcall_clm.sh:
 #   1. Optionally rename MXB contigs 1..22 -> chr1..chr22 (UCSC chain expects chr-prefixed)
 #   2. Picard LiftoverVcf hg19 -> hg38 with RECOVER_SWAPPED_REF_ALT=true
 #      (handles strand flips AND ref/alt swaps that CrossMap silently mis-encodes)
 #   3. bcftools norm -m- -f hg38.fa  (split multiallelics, left-align)
-#   4. bcftools +fixref --check-ref ws -- -m flip -d  (catch any remaining mismatches)
-#   5. bcftools sort, index, split per-chrom
+#   4. bcftools +fixref -- -m ${FIXREF_MODE} -d  (catch any remaining mismatches)
+#   5. bcftools sort, index, split per-chrom; stamp mxb_lifted.recipe
 #
-# Output: $OUTDIR/mxb_lifted.chr{1..22}.bcf{,.csi}
+# FIXREF_MODE (default flip-all; the same knob in 1b_sgdp_raw, 1c and 1d):
+# `-m flip` treats A/T and C/G SNPs as strand-ambiguous and, with -d,
+# DISCARDS them even when REF matches GRCh38 (fixref.c: "skip ambiguous
+# pairs") -- the array-data recipe. This is WGS on the reference's forward
+# strand, so flip-all keeps them (REF match -> unchanged; ALT match -> REF/ALT
+# and GT swapped). Until this knob, MXB had no palindromic SNP at all.
+#
+# Output: $OUTDIR/mxb_lifted.chr{1..22}.bcf{,.csi} + $OUTDIR/mxb_lifted.recipe
 # Reject log: $OUTDIR/mxb_lifted.rejected.vcf.gz
 # ============================================================================
 
@@ -48,6 +58,8 @@ TMPDIR="${TMPDIR:-${OUTDIR}/tmp/mxb_prep}"
 
 # Picard heap size (Xmx). Bump if liftover OOMs on chr1.
 PICARD_XMX="${PICARD_XMX:-40g}"
+FIXREF_MODE="${FIXREF_MODE:-flip-all}"
+case "$FIXREF_MODE" in flip|flip-all) ;; *) echo "ERROR: FIXREF_MODE must be flip or flip-all" >&2; exit 1 ;; esac
 
 set -euo pipefail
 
@@ -57,7 +69,13 @@ mkdir -p "$OUTDIR" "$TMPDIR" "$LOGDIR"
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # 1. Detect contig naming; rename to chr-prefixed if needed
 first_contig=$(bcftools view -h "$MXB_HG19" | awk '/^##contig=<ID=/ {sub(/^##contig=<ID=/,""); sub(/[,>].*$/,""); print; exit}')
@@ -95,12 +113,12 @@ bcftools norm -f "$REF_FA" -m- --threads "$THREADS" \
     "${TMPDIR}/mxb.hg38.lifted.vcf.gz"
 bcftools index --threads "$THREADS" "${TMPDIR}/mxb.hg38.norm.bcf"
 
-# 4. fixref: catch any remaining REF/ALT mismatches (flip palindromic, drop unfixable)
-echo "[$(date +%T)] bcftools +fixref"
+# 4. fixref: catch any remaining REF/ALT mismatches (mode: see FIXREF_MODE above)
+echo "[$(date +%T)] bcftools +fixref -m ${FIXREF_MODE} -d"
 bcftools +fixref "${TMPDIR}/mxb.hg38.norm.bcf" \
     --threads "$THREADS" -Ob \
     -o "${TMPDIR}/mxb.hg38.fixref.bcf" \
-    -- -f "$REF_FA" -m flip -d
+    -- -f "$REF_FA" -m "$FIXREF_MODE" -d
 bcftools index --threads "$THREADS" "${TMPDIR}/mxb.hg38.fixref.bcf"
 
 # 5. sort + per-chrom split
@@ -110,11 +128,15 @@ bcftools sort -m 16G -T "${TMPDIR}/sort" \
     "${TMPDIR}/mxb.hg38.fixref.bcf"
 bcftools index --threads "$THREADS" "${TMPDIR}/mxb.hg38.sorted.bcf"
 
+# The stamp goes before the per-chrom files are rewritten and comes back only
+# after all 22 are done, so a half-rewritten set never carries a stamp.
+rm -f "${OUTDIR}/mxb_lifted.recipe"
 for CHR in {1..22}; do
     bcftools view -r "chr${CHR}" --threads "$THREADS" \
         -Ob -o "${OUTDIR}/mxb_lifted.chr${CHR}.bcf" \
         "${TMPDIR}/mxb.hg38.sorted.bcf"
-    bcftools index --threads "$THREADS" "${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
+    bcftools index -f --threads "$THREADS" "${OUTDIR}/mxb_lifted.chr${CHR}.bcf"
 done
+echo "mxb_lift_v2 fixref=${FIXREF_MODE}" > "${OUTDIR}/mxb_lifted.recipe"
 
-echo "[$(date +%T)] # Complete. Outputs in ${OUTDIR}/mxb_lifted.chr*.bcf"
+echo "[$(date +%T)] # Complete. Outputs in ${OUTDIR}/mxb_lifted.chr*.bcf ($(cat "${OUTDIR}/mxb_lifted.recipe"))"

@@ -11,7 +11,8 @@ Create with `conda env create -f envs/shapeit5.yml`, activate with `conda activa
 1a_prep-mxb-liftover_clm.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
-1b_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
+1c_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG (relatives kept, `OUTLIERS=none`;
+earlier panels used the post-outlier set) with the lifted MXB, SGDP and Almarri,
 applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
 plink2 site QC, and SHAPEIT5_phase_common joint phasing. Imputation will be done with
 TOPMed/All-of-Us so rare-variant phasing is OFF by default; set `RUN_PHASE_RARE=1` at submit
@@ -59,7 +60,7 @@ Run order:
 2. `./init-project-tree.sh` (creates the dirs above + builds sample_groups.tsv,
    pel_rfmix.txt, pel_eas_rfmix.txt, and panel keep-files in one shot)
 3. `sbatch 1a_prep-mxb-liftover_clm.sh` (one-shot)
-4. `sbatch 1b_phasing-jointcall_clm.sh` (array 1-22)
+4. `sbatch 1c_phasing-jointcall_clm.sh` (array 1-22)
 5. Place `${ADMIX_POP}.dat` and `${ADMIX_POP}.sample.txt` in `02_simulations/`
 6. `ADMIX_POP=Brasa GEN=12 sbatch 2b_simulation_clm.sh` (array 1-22; per (admix-pop, gen))
 7. `ADMIX_POP=Brasa GEN=12 sbatch 3b_wgs-rfmix-jointcall_clm.sh` (array 1-22)
@@ -84,7 +85,14 @@ afr_simulation.txt - 1KG YRI population IDs used for simulation
 
 amr_rfmix.txt - HGDP AMR population IDs used as RFMix reference
 
-eur_rfmix.txt - 1KG IBS population IDs used as RFMix reference
+eur_rfmix.txt - HGDP European IDs (French, Orcadian, Sardinian, Russian) used as RFMix reference
 
-afr_rfmix.txt - 1KG YRI population IDs used as RFMix reference
+afr_rfmix.txt - HGDP African IDs (Mandenka, Yoruba, Bantu) used as RFMix reference.
+HGDP00621 (Bedouin) and HGDP01270 (Mozabite), Koenig 2024 ancestry-outlier
+removals absent from phased_haplotypes_v2, were replaced on 14 Nov 2026 by
+HGDP00933 and HGDP00934 (Yoruba; in the panel, on no list, no recorded relative).
+
+sas_rfmix.txt - HGDP Central/South Asian IDs (Balochi, Brahui, Makrani, Sindhi).
+HGDP00029 (Brahui) and HGDP00150 (Makrani), Koenig removals, were dropped on
+14 Nov 2026 (48 IDs). No simulation or RFMix arm reads this list.
 
