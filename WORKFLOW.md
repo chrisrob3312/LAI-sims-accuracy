@@ -370,7 +370,13 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    29 of 30, 48 of 50) until the lists are trimmed or the IDs replaced.
    `verify-rebuild.sh` section 4 names each missing ID's reason. 2b and 3b
    run without them; no arm reads `sas_rfmix` (4a loads it and no longer
-   uses it).
+   uses it). gnomAD's metadata labels HGDP00621 Bedouin and HGDP01270
+   Mozabite (both MID), HGDP00029 Brahui and HGDP00150 Makrani (CSA).
+   Resolved 14 Nov 2026: `afr_rfmix` takes HGDP00933 and HGDP00934 (Yoruba,
+   in the panel, on no list, no recorded relationship), so 50 again;
+   `sas_rfmix` drops its two (48). `afr_simulation`'s replacement for
+   NA18864 waits for an unused YRI with no recorded relative (NA18487, the
+   first candidate, has a parent-child relationship in gnomAD's inference).
    `python3 -I scripts/related-outliers-breakdown.py` (read-only) shows what
    that list holds by the gnomAD metadata flags (relatives vs PCA outliers,
    per population) and, where the metadata records relationships, every pair
