@@ -134,6 +134,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
+| after any failure | `bash scripts/failure-report.sh` — per stage the current run's task states; every task that did not complete (state, exit code, run time vs limit, MaxRSS vs memory asked, node, log paths); failures grouped by stage/state/exit code with their nodes; the full `.err`/`.out` of the first failure of each kind; what is still queued and why. Whole report, logs uncut, in `logs/failure_report_<date>.txt` | report file only |
 | any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
 
 **Re-chaining after a stage fails.** Dependencies cannot be edited in place on
