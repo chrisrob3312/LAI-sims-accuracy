@@ -78,15 +78,27 @@ def n(s):
     return int(s.replace(",", ""))
 
 
-def newest_log(logdir, stage, chrom, epoch):
-    """The newest <stage>_<chrom>_<job>.out of this rebuild, and its .err."""
+def logs_newest_first(logdir, stage, chrom, epoch):
+    """This rebuild's <stage>_<chrom>_<job>.out logs, newest first. A stage
+    re-submitted after its output was built only logs that it skipped (SGDP
+    prep job 3754833 did, on all 22), so the caller takes the newest log that
+    holds the count lines, not simply the newest."""
     hits = [p for p in glob.glob(os.path.join(logdir, f"{stage}_{chrom}_*.out"))
             if epoch is None or os.path.getmtime(p) > epoch]
-    if not hits:
-        return None, None
-    out = max(hits, key=os.path.getmtime)
+    return sorted(hits, key=os.path.getmtime, reverse=True)
+
+
+def count_lines(out):
+    """(key, match, path, line) for every count line in a log and its .err."""
     err = out[:-4] + ".err"
-    return out, (err if os.path.exists(err) else None)
+    found = []
+    for p, line in read_lines(out, err if os.path.exists(err) else None):
+        for key, rx in RX.items():
+            m = rx.search(line)
+            if m:
+                found.append((key, m, p, line))
+                break
+    return found
 
 
 def read_lines(*paths):
@@ -152,20 +164,20 @@ def main():
     have = {(c, s) for c, s, *_ in rows}
     for ch in chroms:
         for stage in ("1b_sgdp_raw", "1d_almarri", "1c_phase"):
-            out, err = newest_log(a.logdir, stage, ch, epoch)
-            if not out:
+            cands = logs_newest_first(a.logdir, stage, ch, epoch)
+            if not cands:
                 loglines.append((ch, stage, "-", f"no {stage}_{ch}_*.out newer than the epoch in {a.logdir}"))
                 continue
-            for p, line in read_lines(out, err):
-                hit = None
-                for key, rx in RX.items():
-                    m = rx.search(line)
-                    if m:
-                        hit = (key, m)
-                        break
-                if not hit:
-                    continue
-                key, m = hit
+            found = []
+            for out in cands:
+                found = count_lines(out)
+                if found:
+                    break
+            if not found:
+                loglines.append((ch, stage, os.path.basename(cands[0]),
+                                 f"no count line in any of the {len(cands)} {stage}_{ch} log(s) of this rebuild"))
+                continue
+            for key, m, p, line in found:
                 loglines.append((ch, stage, os.path.basename(p), line.strip()))
                 src = f"{os.path.basename(p)}: {line.strip()[:160]}"
                 if key == "sgdp_raw":
