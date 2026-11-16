@@ -256,6 +256,37 @@ if is_new "$P22" && [[ -s "$DP" && "$DP" -nt "$P22" ]]; then
     if [[ -f "$DROP" && "$DROP" -nt "$P22" ]]; then pass "drop list for 4a: $(awk 'NF' "$DROP" | wc -l) IDs (${DROP})"
     else fail "1e wrote duplicate pairs but no current drop list at ${DROP} (4a reads it)"; fi
 else info "not yet (no duplicate list from this rebuild's phased panel)"; fi
+# The donor and reference sets 2b checks, built the way 2b builds them: donors
+# from every reference_ids/*_simulation.txt; references from every
+# reference_ids/*_rfmix.txt (the curated lists and the <pop>_homog_rfmix.txt
+# lists 4a writes there) plus 4a's homog_${K}pop_samples.txt for this run.
+# A homog list older than the epoch is the previous build's (4a rewrites it),
+# so it is left out until 4a has run. Other homog_*pop_samples.txt files
+# (July's K=5 list, which holds 102 donors) are no reference set: 2b skips them.
+DSET="${TMPDIR:-/tmp}/verify_dset.$$"; RSET="${TMPDIR:-/tmp}/verify_rset.$$"
+: > "$DSET"; : > "$RSET"
+for f in reference_ids/*_simulation.txt; do
+    [[ -s "$f" ]] && awk -v l="$(basename "$f" .txt)" 'NF {print $1 "\t" l}' "$f" >> "$DSET"
+done
+for f in reference_ids/*_rfmix.txt "${HOMOG_DIR}/homog_${K}pop_samples.txt"; do
+    [[ -s "$f" ]] || continue
+    if [[ "$f" == *homog* ]] && ! is_new "$f"; then info "not checked until 4a rewrites it (previous build's): $f"; continue; fi
+    awk -v l="$(basename "$f" .txt)" 'NF {print $1 "\t" l}' "$f" >> "$RSET"
+done
+for f in "${HOMOG_DIR}"/homog_*pop_samples.txt; do
+    if [[ -e "$f" && "$f" != "${HOMOG_DIR}/homog_${K}pop_samples.txt" ]]; then
+        info "not a reference set for this run (not K=${K}; no arm reads it, 2b skips it): $f"
+    fi
+done
+ND=$(cut -f1 "$DSET" | sort -u | wc -l); NRF=$(cut -f1 "$RSET" | sort -u | wc -l)
+NOV=$(cut -f1 "$RSET" | sort -u | comm -12 <(cut -f1 "$DSET" | sort -u) - | wc -l)
+if [[ "$NOV" -eq 0 ]]; then
+    pass "no simulation donor is on a reference list (${ND} donors, ${NRF} reference IDs: the sets 2b checks)"
+else
+    fail "${NOV} simulation donor(s) are also on a reference list -- 2b refuses to run. Overlap per reference list (raw):"
+    cut -f1 "$RSET" | sort -u | comm -12 <(cut -f1 "$DSET" | sort -u) - \
+      | awk -F'\t' 'NR == FNR {o[$1] = 1; next} ($1 in o) {c[$2]++} END {for (k in c) print "          " k "\t" c[k]}' - "$RSET" | sort
+fi
 # Donor/reference RELATIVES. The project keeps relatives (1e removes duplicates
 # only) under one rule: a pair at KING >= ROLE_KINSHIP (0.177, first degree)
 # is never split across donor and reference, or RFMix is handed long stretches
@@ -273,15 +304,9 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
     else
         DR="${TMPDIR:-/tmp}/verify_donor_ref.$$"
         {
-            for l in $DONOR_LISTS; do
-                [[ -s "reference_ids/${l}.txt" ]] && awk -v l="$l" 'NF {print "D", $1, l}' "reference_ids/${l}.txt"
-            done
-            for l in $REF_LISTS; do
-                f="reference_ids/${l}.txt"; [[ -s "$f" ]] || continue
-                # 4a rewrites the homog list later in this rebuild; until then it is November's.
-                [[ "$l" == *homog* ]] && ! is_new "$f" && continue
-                awk -v l="$l" 'NF {print "R", $1, l}' "$f"
-            done
+            # The same donor and reference sets as the overlap check above (2b's).
+            awk -F'\t' '{print "D", $1, $2}' "$DSET"
+            awk -F'\t' '{print "R", $1, $2}' "$RSET"
             # IDs 4a keeps out of the homogeneous panel anyway: 1e's duplicate
             # drop list (when it is this rebuild's) and the named exclusions.
             [[ -f "$DROP" && "$DROP" -nt "$P22" ]] && awk 'NF && $1 !~ /^#/ {print "X", $1, "-"}' "$DROP"
@@ -318,6 +343,7 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
         rm -f "$DR" "${DR}.hits"
     fi
 else info "donor/reference relatives: not yet (needs king/king.kin0 from this rebuild's phased panel)"; fi
+rm -f "$DSET" "$RSET"
 
 section "8. ADMIXTURE K=${K} (4a_build_homogeneity_panel_kN_clm.sh)"
 jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'

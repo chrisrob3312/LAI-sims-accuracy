@@ -128,7 +128,8 @@ GMAP=$(printf "$GMAP_TPL" "$CHR")
 # ---------------------------------------------------------------------------
 DONOR_UNION="${WORKDIR_TMP:-/tmp}/.donors.$$.txt"
 REF_UNION="${WORKDIR_TMP:-/tmp}/.refs.$$.txt"
-trap 'rm -f "$DONOR_UNION" "$REF_UNION"' EXIT
+REF_SRC="${WORKDIR_TMP:-/tmp}/.refsrc.$$.txt"      # id <TAB> the list it came from
+trap 'rm -f "$DONOR_UNION" "$REF_UNION" "$REF_SRC"' EXIT
 : > "$DONOR_UNION"
 for f in "$NAT_HGDP_SIMU" "$NAT_HGDPMXB_SIMU" "$EUR_SIMU" "$AFR_SIMU" \
          "${REFS}/mxb_simulation.txt"; do
@@ -136,15 +137,25 @@ for f in "$NAT_HGDP_SIMU" "$NAT_HGDPMXB_SIMU" "$EUR_SIMU" "$AFR_SIMU" \
 done
 sort -u -o "$DONOR_UNION" "$DONOR_UNION"
 
-: > "$REF_UNION"
-for f in "${REFS}"/*_rfmix.txt; do
-    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+# Reference sets: every reference_ids/*_rfmix.txt (the curated lists, and the
+# <pop>_homog_rfmix.txt lists 4a writes there for the HOMOG arms), plus the
+# homogeneous panel 4a built for THIS run -- only the current K's list. The
+# same folder keeps older ones: July's K=5 homog_5pop_samples.txt was built
+# before 4a excluded donors and holds 102 of them, which stopped job 3754844
+# although no arm reads it.
+HOMOG_K="${HOMOG_K:-8}"
+HOMOG_LIST_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
+HOMOG_CUR="${HOMOG_LIST_DIR}/homog_${HOMOG_K}pop_samples.txt"
+: > "$REF_SRC"
+for f in "${REFS}"/*_rfmix.txt "$HOMOG_CUR"; do
+    if [[ -s "$f" ]]; then awk -v f="$(basename "$f")" 'NF {print $1 "\t" f}' "$f" >> "$REF_SRC"; fi
 done
-# The homogeneous panel is also a reference set, if 4a has produced one.
-for f in "${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"/homog_*_samples.txt; do
-    [[ -s "$f" ]] && awk 'NF' "$f" >> "$REF_UNION"
+for f in "${HOMOG_LIST_DIR}"/homog_*pop_samples.txt; do
+    if [[ -e "$f" && "$f" != "$HOMOG_CUR" ]]; then
+        echo "[$(date +%T)] not a reference set for this run (not K=${HOMOG_K}; no arm reads it): $f"
+    fi
 done
-sort -u -o "$REF_UNION" "$REF_UNION"
+cut -f1 "$REF_SRC" | sort -u > "$REF_UNION"
 
 N_DONOR=$(wc -l < "$DONOR_UNION"); N_REF=$(wc -l < "$REF_UNION")
 OVERLAP=$(comm -12 "$DONOR_UNION" "$REF_UNION" | wc -l)
@@ -152,6 +163,9 @@ echo "[$(date +%T)] donor/reference disjointness: ${N_DONOR} donors, ${N_REF} re
 if [[ "$OVERLAP" -gt 0 ]]; then
     echo "ERROR: ${OVERLAP} sample(s) are BOTH simulation donors AND reference-panel members."
     echo "       RFMix would be scored on haplotypes it was handed as reference."
+    echo "       Overlapping donors per reference list:"
+    comm -12 "$DONOR_UNION" "$REF_UNION" \
+      | awk -F'\t' 'NR == FNR {o[$1] = 1; next} ($1 in o) {c[$2]++} END {for (k in c) print "         " k ": " c[k]}' - "$REF_SRC" | sort
     echo "       Offending IDs (first 20):"
     comm -12 "$DONOR_UNION" "$REF_UNION" | head -20 | sed 's/^/         /'
     echo "       Fix the reference_ids lists, or re-run 4a (which now excludes"

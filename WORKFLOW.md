@@ -375,9 +375,19 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    Mozabite (both MID), HGDP00029 Brahui and HGDP00150 Makrani (CSA).
    Resolved 14 Nov 2026: `afr_rfmix` takes HGDP00933 and HGDP00934 (Yoruba,
    in the panel, on no list, no recorded relationship), so 50 again;
-   `sas_rfmix` drops its two (48). `afr_simulation`'s replacement for
-   NA18864 waits for an unused YRI with no recorded relative (NA18487, the
-   first candidate, has a parent-child relationship in gnomAD's inference).
+   `sas_rfmix` drops its two (48). `afr_simulation` drops NA18864 (29, as
+   July ran): the first replacement candidate, NA18487, has a parent-child
+   relationship in gnomAD's inference, and 4a ran (job 3754843) before
+   another was chosen. A donor added after 4a may already sit in its AFR
+   homogeneous panel, which 2b refuses, so a 30th YRI donor needs 4a again.
+
+   *2b's donor/reference check* reads every `reference_ids/*_rfmix.txt`
+   (with 4a's `<pop>_homog_rfmix.txt`) and this run's
+   `04_homogeneity_panel/homog_${HOMOG_K}pop_samples.txt` (K=8). Job 3754844
+   (16 Nov 2026) failed 22/22 because it also read July's K=5
+   `homog_5pop_samples.txt`, built before 4a excluded donors: 102 of the 116
+   donors are in it, although no arm reads that list. `verify-rebuild.sh`
+   section 7 runs the same check on the same sets before 2b starts.
    `python3 -I scripts/related-outliers-breakdown.py` (read-only) shows what
    that list holds by the gnomAD metadata flags (relatives vs PCA outliers,
    per population) and, where the metadata records relationships, every pair
