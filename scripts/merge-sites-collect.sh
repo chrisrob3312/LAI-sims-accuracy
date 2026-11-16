@@ -70,4 +70,39 @@ cut -f1-5 "$TOT" | sed 's/^/  /'
 python3 -I "$PY" --panel-dir "$PANEL_DIR" --out-dir "$OUT" --totals "$TOT" --epoch "$EPOCH" \
     --chroms "$CHROMS" ${SKIP_SITE_REPORT:+--no-site-report} \
     || { echo "ERROR: merge-sites-collect.py failed (stderr above)" >&2; exit 1; }
+
+# Variants kept and lost at each step (scripts/variant-accounting.py): the
+# record counts of each step's output files here; 1c's tables (gathered
+# above) and the stages' own log lines there. Paths as the stages write them.
+LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
+HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
+K="${K:-8}"
+# The HGDP+1KG release 1c merged -- same default as 1c and the rebuild driver.
+HGDP1KG_PATTERN="${HGDP1KG_PATTERN:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/original_data_downloads/phased_haplotypes_v2/hgdp1kgp_chr__CHR__.filtered.SNV_INDEL.phased.shapeit5.bcf}"
+FCNT=$(mktemp "${TMPDIR:-/tmp}/merge_sites_counts.XXXXXX") || exit 2
+trap 'rm -f "$TOT" "$FCNT"' EXIT
+printf 'chrom\tstep\tvalue\tsource\n' > "$FCNT"
+count () {   # count <chrom> <step> <indexed bcf>
+    [[ -s "$3" ]] || return 0
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(bcftools index -s "$3" | awk '{s += $3} END {print s + 0}')" \
+        "bcftools index -s $(basename "$3")" >> "$FCNT"
+}
+for CHR in $CHROMS; do
+    CHR="${CHR#chr}"
+    count "chr${CHR}" hgdp_release    "${HGDP1KG_PATTERN//__CHR__/$CHR}"
+    count "chr${CHR}" mxb_lifted      "${PANEL_DIR}/mxb_lifted.chr${CHR}.bcf"
+    count "chr${CHR}" sgdp_prepped    "${PANEL_DIR}/sgdp_prepped.chr${CHR}.bcf"
+    count "chr${CHR}" almarri_prepped "${PANEL_DIR}/almarri_prepped.chr${CHR}.bcf"
+    count "chr${CHR}" phased          "${PANEL_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
+    count "chr${CHR}" rechr           "${PANEL_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.rechr.bcf"
+done
+f="${PANEL_DIR}/mxb_lifted.rejected.vcf.gz"
+[[ -s "$f" ]] && printf 'genome\tmxb_rejects\t%s\t%s\n' "$(bcftools view -H "$f" | wc -l)" "records in $(basename "$f")" >> "$FCNT"
+f="${HOMOG_DIR}/admixture_k${K}/admix_sites.all.bed"
+[[ -s "$f" ]] && printf 'genome\tadmix_all\t%s\t%s\n' "$(wc -l < "$f")" "lines of admixture_k${K}/$(basename "$f")" >> "$FCNT"
+f="${HOMOG_DIR}/admixture_k${K}/lai_ref.bim"
+[[ -s "$f" ]] && printf 'genome\tpruned\t%s\t%s\n' "$(wc -l < "$f")" "lines of admixture_k${K}/$(basename "$f")" >> "$FCNT"
+python3 -I "${REPO_DIR}/scripts/variant-accounting.py" --out-dir "$OUT" --file-counts "$FCNT" \
+    --logdir "$LOGDIR" --epoch "$EPOCH" --chroms "$CHROMS" \
+    || { echo "ERROR: variant-accounting.py failed (stderr above)" >&2; exit 1; }
 echo "[merge-sites] done: $(ls "$OUT" | tr '\n' ' ')"

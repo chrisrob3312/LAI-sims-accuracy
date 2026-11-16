@@ -17,6 +17,10 @@
 #   bash scripts/failure-report.sh                    # since the rebuild epoch
 #   SINCE=2026-11-13 bash scripts/failure-report.sh   # since a date
 #   CAP=0 bash scripts/failure-report.sh              # never cut a log on screen
+#   SWEEP=1 bash scripts/failure-report.sh            # + section 6: EVERY task's .err and
+#       .out of the current run (completed ones too), lines grouped across tasks:
+#       those with a warning/error word, and those only a few tasks print.
+#       SWEEP_CAP=<n> groups per stage on screen (default 15; the file has all).
 # The whole report, logs uncut, goes to ${LOGDIR}/failure_report_<date>.txt.
 # =============================================================================
 set -uo pipefail
@@ -41,4 +45,5 @@ squeue -h -u "$U" -r -o '%i|%j|%T|%r' > "${WORK}/squeue.txt" || { echo "ERROR: s
 echo "sacct rows since ${SINCE}: $(wc -l < "${WORK}/sacct.txt"); queued/running tasks: $(wc -l < "${WORK}/squeue.txt")"
 
 python3 -I "$PY" --sacct "${WORK}/sacct.txt" --squeue "${WORK}/squeue.txt" --logdir "$LOGDIR" \
-    --since "$SINCE" --cap "$CAP" --report "${LOGDIR}/failure_report_$(date +%Y%m%d_%H%M).txt"
+    --since "$SINCE" --cap "$CAP" --report "${LOGDIR}/failure_report_$(date +%Y%m%d_%H%M).txt" \
+    ${SWEEP:+--sweep --sweep-cap "${SWEEP_CAP:-15}"}

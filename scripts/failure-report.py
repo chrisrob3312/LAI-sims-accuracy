@@ -68,6 +68,99 @@ def n_tasks(idx):
     return max(n, 1)
 
 
+FLAG = re.compile(r"warn|error|fail|fatal|abort|killed|segfault|core dump|exception|traceback|not found|no such"
+                  r"|cannot|can't|unable|invalid|unbound|stale|mismatch|refus|denied|out of memory|oom|truncat"
+                  r"|corrupt|skipp|\[[WE]::", re.I)   # [W::...] / [E::...]: htslib's own warnings and errors
+
+
+def norm(line):
+    """A log line with its numbers made generic, so 22 chromosomes' copies group."""
+    s = re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
+    s = re.sub(r"0x[0-9a-fA-F]+", "0x#", s)
+    s = re.sub(r"\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", "#", s)
+    return re.sub(r"\s+", " ", s)[:240]
+
+
+def sweep(a, names, by_name, current_by_name, emit, out_full, out_screen):
+    """Section 6: every pipeline task of the current run that has started, its .err
+    and .out read in full, lines grouped across tasks by their generic form."""
+    emit("\n== 6. every log of the current run: lines with a warning/error word, then lines only a"
+         " few tasks print ==")
+    emit("  (numbers are shown as # to group the chromosomes' copies; each group gives how many tasks"
+         " print it, how often, and one raw example)")
+
+    def show(lines):
+        for i, s in enumerate(lines):
+            if i < a.sweep_cap:
+                emit(s)
+            else:
+                out_full.append(s)
+        if len(lines) > a.sweep_cap:
+            out_screen.append(f"      [... {len(lines) - a.sweep_cap} more groups in the report file ...]")
+
+    for n in names:
+        if n not in ORDER:
+            continue
+        tasks = [r for b in current_by_name.get(n, []) for r in by_name[n][b] if r["state"] != "PENDING"]
+        if not tasks:
+            continue
+        groups, n_logs, n_err, n_err_lines, missing = {}, 0, 0, 0, 0
+        for r in tasks:
+            for ext in ("err", "out"):
+                hits = sorted(glob.glob(os.path.join(a.logdir, f"*_{r['raw']}.{ext}")))
+                if not hits:
+                    missing += 1
+                    continue
+                p = hits[0]
+                n_logs += 1
+                try:
+                    with open(p, errors="replace") as fh:
+                        lines = fh.read().splitlines()
+                except OSError as e:
+                    emit(f"  {n}: {p}: {e}")
+                    continue
+                if ext == "err" and any(l.strip() for l in lines):
+                    n_err += 1
+                    n_err_lines += sum(1 for l in lines if l.strip())
+                for l in lines:
+                    if not l.strip():
+                        continue
+                    k = (ext, norm(l))
+                    g = groups.get(k)
+                    if g is None:
+                        g = groups[k] = [set(), 0, f"{os.path.basename(p)}: {l.strip()[:200]}"]
+                    g[0].add(r["jobid"])
+                    g[1] += 1
+        nt = len(tasks)
+        emit(f"\n  -- {n}: {nt} task(s) started; {n_logs} log files read ({missing} not found);"
+             f" .err has text in {n_err} ({n_err_lines} lines)")
+        flagged = sorted(((k, g) for k, g in groups.items() if FLAG.search(k[1])),
+                         key=lambda kg: (-len(kg[1][0]), -kg[1][1], kg[0]))
+        if flagged:
+            emit(f"     lines with a warning/error word: {len(flagged)} group(s)")
+            show([f"      [{k[0]}] {len(g[0])}/{nt} tasks x{g[1]}  {k[1]}\n"
+                  f"             e.g. {g[2]}" for k, g in flagged])
+        else:
+            emit("     lines with a warning/error word: none")
+        # Tools write their warnings to stderr, worded however they like: every
+        # other .err line too, however many tasks print it.
+        other_err = sorted(((k, g) for k, g in groups.items() if k[0] == "err" and not FLAG.search(k[1])),
+                           key=lambda kg: (-len(kg[1][0]), -kg[1][1], kg[0]))
+        if other_err:
+            emit(f"     other .err lines: {len(other_err)} group(s)")
+            show([f"      [err] {len(g[0])}/{nt} tasks x{g[1]}  {k[1]}\n"
+                  f"             e.g. {g[2]}" for k, g in other_err])
+        if nt >= 5:
+            few = max(1, nt // 10)
+            rare = sorted(((k, g) for k, g in groups.items()
+                           if k[0] == "out" and not FLAG.search(k[1]) and len(g[0]) <= few),
+                          key=lambda kg: (len(kg[1][0]), kg[0]))
+            if rare:
+                emit(f"     lines only {few} or fewer of the {nt} tasks print (no warning word): {len(rare)} group(s)")
+                show([f"      [{k[0]}] {len(g[0])}/{nt} tasks x{g[1]}  {k[1]}\n"
+                      f"             e.g. {g[2]}" for k, g in rare])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sacct", required=True)
@@ -76,6 +169,9 @@ def main():
     ap.add_argument("--since", default="")
     ap.add_argument("--report", required=True)
     ap.add_argument("--cap", type=int, default=150)
+    ap.add_argument("--sweep", action="store_true",
+                    help="section 6: every log of the current run, completed tasks too, grouped")
+    ap.add_argument("--sweep-cap", type=int, default=15, help="groups per stage and kind shown on screen")
     a = ap.parse_args()
 
     alloc, rss = {}, {}
@@ -112,6 +208,7 @@ def main():
     emit(f"failure-report  {datetime.now():%Y-%m-%d %H:%M}  sacct since {a.since or '?'}  logs: {a.logdir}")
     names = [n for n in ORDER if n in by_name] + sorted(n for n in by_name if n not in ORDER)
     failures = []
+    current_by_name = {}
     emit("\n== 1. task states per stage (current run = latest submission of each name; earlier ones listed as superseded) ==")
     emit("  (a pending array range is one sacct row; it is counted here as the tasks it holds)")
     for n in names:
@@ -121,6 +218,7 @@ def main():
         current = [b for b in subs if b == latest or (t_latest and any(
             r["submit"] and abs(r["submit"] - t_latest) <= SAME_RUN for r in subs[b]))]
         old = sorted(b for b in subs if b not in current)
+        current_by_name[n] = current
         cnt = Counter()
         for b in current:
             for r in subs[b]:
@@ -204,6 +302,9 @@ def main():
     for (n, s, rsn), c in sorted(q.items(), key=lambda kv: (ORDER.index(kv[0][0]) if kv[0][0] in ORDER else 99, kv[0])):
         flag = "   <-- will never start: its dependency failed" if "DependencyNeverSatisfied" in rsn else ""
         emit(f"  {n:16s} {s:10s} {rsn:28s} x{c}{flag}")
+
+    if a.sweep:
+        sweep(a, names, by_name, current_by_name, emit, out_full, out_screen)
 
     with open(a.report, "w") as g:
         g.write("\n".join(out_full) + "\n")
