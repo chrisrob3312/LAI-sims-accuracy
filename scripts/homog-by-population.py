@@ -3,21 +3,26 @@
 homog-by-population.py -- 4a's homogeneous panel, population by population.
 READ-ONLY. For each super-pop and each population in lai_ref_panel_samples.kK.tsv:
 
-  n | in the homogeneous panel | why the others are not, counted in this order:
+  n | in the homogeneous panel | would pass at the cut used HERE (so a table
+      built at 0.93 shows what 0.95 would keep) | with no first-degree
+      relative in the panel
+  | why the others are not, counted in this order:
       donor or a donor's KING >= 0.177 relative / 1e duplicate drop /
       strongest supervised component is ANOTHER super-pop / below the cut
   | strongest-component counts | mean supervised Q of every component >= 0.02
   | how many of the population are anchors, and for which cluster
 
-then each cluster's anchors by cohort/population, and how many IBS and YRI
-in the panel have no first-degree relative (candidates for relative-free
-simulation donors).
+then each cluster's anchors by cohort/population, and for EVERY population
+that has simulation donors: its size, how many have no first-degree relative,
+the donors, how many of them have one, and how many relatives they keep out of
+the reference. scripts/donor-switch-plan.py finds the donor sets that keep out
+the fewest.
 
 Reads what 4a and 1e wrote: the Q table, reference_ids/*_anchors.kK.txt,
 reference_ids/*_simulation.txt, reference_ids/panel_duplicate_drop_ids.txt,
 admixture_kK/donor_relatives.kK.tsv and king/king.kin0. The cuts are 4a's
-defaults (HOMOG_THRESHOLD 0.93, HOMOG_THRESHOLD_STRICT 0.95 for EUR, EAS, AFR);
-pass --cut SP=Q to match a run made with others.
+defaults (HOMOG_THRESHOLD 0.93, HOMOG_THRESHOLD_STRICT 0.95 for EUR, EAS, AFR
+and, from 16 Nov, SAS); pass --cut SP=Q to match a run made with others.
 
   python3 -I scripts/homog-by-population.py
   python3 -I scripts/homog-by-population.py --table <tsv> --refs reference_ids --homog <04_homogeneity_panel>
@@ -42,7 +47,7 @@ def main():
     a = ap.parse_args()
     tsv = a.table or os.path.join(a.homog, f"lai_ref_panel_samples.k{a.k}.tsv")
 
-    cut = {"EUR": 0.95, "EAS": 0.95, "AFR": 0.95}          # 4a's tiers; every other super-pop 0.93
+    cut = {"EUR": 0.95, "EAS": 0.95, "AFR": 0.95, "SAS": 0.95}   # 4a's tiers; every other super-pop 0.93
     for c in a.cut:
         sp, q = c.split("=", 1)
         cut[sp.upper()] = float(q)
@@ -65,6 +70,7 @@ def main():
             anchors[s] = os.path.basename(f).split("_")[0].upper()
     kin_f = os.path.join(a.homog, "king", "king.kin0")
     has_rel = set()
+    kin_of = defaultdict(set)
     if os.path.exists(kin_f):
         with open(kin_f) as fh:
             h = fh.readline().lstrip("#").split()
@@ -72,14 +78,30 @@ def main():
             for line in fh:
                 f = line.split()
                 if float(f[ix["KINSHIP"]]) >= 0.177:
-                    has_rel.update((f[ix["IID1"]], f[ix["IID2"]]))
+                    x, y = f[ix["IID1"]], f[ix["IID2"]]
+                    has_rel.update((x, y))
+                    kin_of[x].add(y); kin_of[y].add(x)
+    else:
+        print(f"WARNING: no {kin_f}: relative counts below are all zero")
     print(f"donors {len(donors)}, donor relatives kept out {len(rel)} ({rel_f}), duplicate drops {len(dup)},"
           f" anchors {len(anchors)}, samples with a KING >= 0.177 relative {len(has_rel)}")
+
+    in_panel = {r["sample"] for r in rows} - dup
+    relfree = {s for s in in_panel if not (kin_of[s] & in_panel)}
+
+    def passes(r, t):
+        s = r["sample"]
+        if s in donors or s in rel or s in dup:
+            return False
+        if r["cohort"] == "MXB":                    # 4a includes every non-donor MXB sample
+            return True
+        return r["argmax_pop_sup"] == r["super_pop"] and float(r["max_Q_sup"]) >= t
 
     by = defaultdict(list)
     for r in rows:
         by[(r["super_pop"], r["pop"])].append(r)
-    print("\nper population: n | in the homogeneous panel | not, because: donor or donor's relative / duplicate /"
+    print("\nper population: n | in the homogeneous panel | would pass at the cut used here | with no"
+          " first-degree relative | not in the panel, because: donor or donor's relative / duplicate /"
           " strongest component is another super-pop / below the cut | strongest-component counts |"
           " mean supervised Q (components >= 0.02) | anchors")
     order = ["EUR", "AFR", "EAS", "SAS", "MEN", "AMR", "OCE"]
@@ -88,11 +110,15 @@ def main():
         if not pops:
             continue
         t = cut.get(sp, 0.93)
-        print(f"\n== {sp} (cut {t}): {sum(len(by[(sp, p)]) for p in pops)} samples,"
-              f" {sum(r['included'] == '1' for p in pops for r in by[(sp, p)])} in the panel")
+        allr = [r for p in pops for r in by[(sp, p)]]
+        print(f"\n== {sp} (cut used here {t}): {len(allr)} samples,"
+              f" {sum(r['included'] == '1' for r in allr)} in the panel,"
+              f" {sum(passes(r, t) for r in allr)} would pass at {t}")
         for p in pops:
             rs = by[(sp, p)]
             n, inc = len(rs), sum(r["included"] == "1" for r in rs)
+            npass = sum(passes(r, t) for r in rs)
+            nfree = sum(r["sample"] in relfree for r in rs)
             dr = du = wrong = below = 0
             for r in rs:
                 if r["included"] == "1":
@@ -110,7 +136,8 @@ def main():
             mq = {c: sum(float(r[f"Q_sup_{c}"]) for r in rs) / n for c in comps}
             mqs = " ".join(f"{c}:{v:.2f}" for c, v in sorted(mq.items(), key=lambda kv: -kv[1]) if v >= 0.02)
             na = Counter(anchors[r["sample"]] for r in rs if r["sample"] in anchors)
-            print(f"  {p:18s} n={n:<4d} in={inc:<4d} not: {dr}/{du}/{wrong}/{below}  strongest {am}  meanQ {mqs}"
+            print(f"  {p:18s} n={n:<4d} in={inc:<4d} pass@{t}={npass:<4d} relfree={nfree:<4d}"
+                  f" not: {dr}/{du}/{wrong}/{below}  strongest {am}  meanQ {mqs}"
                   f"  anchors {' '.join(f'{k}:{v}' for k, v in na.items()) or '-'}")
 
     print("\n== each cluster's anchors, by cohort/population")
@@ -119,12 +146,17 @@ def main():
         c = Counter(pop_of.get(s, "NOT-IN-TABLE") for s, x in anchors.items() if x == sp)
         print(f"  {sp} ({sum(c.values())}): " + ", ".join(f"{k} {v}" for k, v in c.most_common()))
 
-    print("\n== IBS and YRI in the panel with no KING >= 0.177 relative (candidates for relative-free donors)")
-    for p in ("IBS", "YRI"):
-        ids = [r["sample"] for r in rows if r["pop"] == p]
-        cur = [s for s in ids if s in donors]
-        print(f"  {p}: {len(ids)} in the panel, {sum(s not in has_rel for s in ids)} with no first-degree relative;"
-              f" current donors {len(cur)}, of which {sum(s in has_rel for s in cur)} have one")
+    print("\n== every population with simulation donors: relatives at KING >= 0.177 (duplicate drops not counted)")
+    print(f"  {'population':18s} {'n':>4s} {'relfree':>7s} {'donors':>6s} {'w/ relative':>11s} {'relatives kept out':>18s}")
+    pop_of_s = {r["sample"]: r["pop"] for r in rows}
+    dpops = Counter(pop_of_s.get(s, "NOT-IN-TABLE") for s in donors)
+    for p, nd in sorted(dpops.items()):
+        ids_p = [s for s, q in pop_of_s.items() if q == p]
+        cur = [s for s in donors if pop_of_s.get(s) == p]
+        out = set().union(*(kin_of[s] & in_panel for s in cur)) - donors if cur else set()
+        print(f"  {p:18s} {len(ids_p):4d} {sum(s in relfree for s in ids_p):7d} {nd:6d} "
+              f"{sum(bool(kin_of[s] & in_panel) for s in cur):11d} {len(out):18d}")
+    print("  -> scripts/donor-switch-plan.py proposes, for every list, the donors that keep out the fewest")
 
 
 if __name__ == "__main__":

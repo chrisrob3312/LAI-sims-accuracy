@@ -88,14 +88,17 @@ E. DE-DUPLICATION + ANCESTRY PANEL
     - duplicates (> 0.354) + known same-person pairs; keep MXB > ALMARRI >
       HGDP > 1KG > SGDP -> panel_duplicate_drop_ids.txt
   4a_build_homogeneity_panel_kN_clm.sh       K=8
-    - concat -> ADMIXTURE site list -> --maf 0.01 --indep-pairwise 500 50 0.1
+    - concat -> ADMIXTURE site list -> --indep-pairwise 500 50 0.1, no global
+      MAF floor (sites already MAF >= 0.005 in a super-pop; ADMIX_PRUNE_MAF);
+      PRUNE_ONLY=1 stops here with the marker count and expected hours
     - fit set: unrelated (1e duplicate copies out, then one of each pair at
       KING >= 0.0884); relatives projected (admixture -P) in both runs below
-    - unsupervised ADMIXTURE K=8
-    - data-first discovery: per cluster the top 50 at Q >= 0.93, cluster named
-      by its anchors' metadata super-pop
-    - supervised K=8 (.pop) -> tiered homogeneity (0.95 EUR/EAS/AFR, 0.93
-      others) -> lai_ref_panel_samples.k8.tsv
+    - unsupervised ADMIXTURE K=8; PCA of the fit set (top 10 PCs)
+    - data-first discovery: each cluster named from its top 50 at Q >= 0.93;
+      anchors = 50 with the best rank of Q + distance to the group's centre
+      in PC space (ANCHOR_SELECT=central; top_q = the old top-50-by-Q)
+    - supervised K=8 (.pop) -> tiered homogeneity (0.95 EUR/EAS/AFR/SAS, 0.93
+      AMR/MEN/OCE) -> lai_ref_panel_samples.k8.tsv
 
 F. LAI SIMULATION + ACCURACY   publication stages 4-6, chained to 4a
   2b_simulation_clm.sh        array 1-22
@@ -135,7 +138,9 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
 | after 1c (again after the site report) | `bash scripts/merge-sites-collect.sh` — gathers 1c's per-chromosome site tables (per stage and cohort: records, unique, why a cohort lacks a panel record; which cohort combinations carry each record; the fill check by super-pop; soft-union and ADMIXTURE-site rules; per-chromosome totals) and, when the site report exists, per-cohort summaries of it (present / absent / allele mismatch, missingness, pairwise allele-frequency histograms, 1-Mb bins) into `results/merge_sites/*.tsv` + `MANIFEST.tsv`, to commit and plot off the cluster. It also writes `variant_accounting{,_genome,_loglines}.tsv` (scripts/variant-accounting.py): variants kept and lost at every step, per chromosome and genome-wide -- each cohort's release and prep (liftover rejects, masked sites), what each file brings to the merge, the union, plink2 site QC, the two position drops, the soft-union, the ADMIXTURE list, phased and RFMix input, 4a's candidates and LD-pruned SNPs -- every number with its source (a file's record count, a 1c table, or the stage's own log line). Seconds without the site report; `sbatch` it after the site report (~27M records) | `results/merge_sites/` only |
-| after 4a | `python3 -I scripts/homog-by-population.py` — 4a's homogeneous panel per super-pop and population: n, in the panel, why the rest are not (donor or donor's relative / duplicate / strongest component another super-pop / below the cut), strongest-component counts, mean supervised Q per component, anchors per population; each cluster's anchors by cohort/population; IBS and YRI with no first-degree relative (relative-free donor candidates) | no |
+| after 4a | `python3 -I scripts/homog-by-population.py` — 4a's homogeneous panel per super-pop and population: n, in the panel, how many would pass at the cut given here (`--cut SAS=0.95` on a table built at 0.93), how many have no first-degree relative, why the rest are not in (donor or donor's relative / duplicate / strongest component another super-pop / below the cut), strongest-component counts, mean supervised Q per component, anchors per population; each cluster's anchors by cohort/population; for every population with simulation donors: relative-free count, donors with a relative, relatives they keep out | no |
+| after 4a | `python3 -I scripts/donor-switch-plan.py --table <lai_ref_panel_samples.k8.tsv> --kin <king.kin0> --refs reference_ids --out-dir results/donor_plan` — per donor list and population, the same-size donor set from the same population that keeps the fewest relatives out of the reference (relative-free first, then both parents of a trio), never two related donors, never a curated-reference member or relative, keeping as many current donors as possible; writes `<list>.proposed.txt`, `donor_plan_summary.tsv`, `donor_plan_changes.tsv`. Proposals only: copying one into `reference_ids/` is a separate step, and 4a must rerun before 2b | no |
+| any time after 1c | `bash scripts/admix-rule-compare.sh` — the ADMIXTURE site list under four versions of the missingness rule (`coded`: every cohort × super-pop ≤ 15%, panel ≤ 7%; `sp07_tot15`: every super-pop ≤ 7%, panel ≤ 15%; `grp07`: every cohort × super-pop ≤ 7%, panel ≤ 7%; `sp15_tot07`: every super-pop ≤ 15%, panel ≤ 7%), from the published pre-phasing soft-union with 1c's own groups; `coded` must come out IDENTICAL to 1c's list. `CHRS="$(seq 1 22)" RULES=<rule>` writes all 22 lists, which 4a reads with `ADMIX_SITES_TPL=<out>/<rule>/merged_chr%s.admix_sites.bed` — a rule change without re-running 1c | writes only its own folder |
 | any time after a stage ends | `SWEEP=1 bash scripts/failure-report.sh` — the failure report plus section 6: every task's `.err` and `.out` of the current run, completed ones too, lines grouped across tasks with numbers made generic -- those with a warning/error word (htslib `[W::]`/`[E::]` included), every other `.err` line, and `.out` lines only a few tasks print; one raw example each. Screen shows `SWEEP_CAP` (15) groups per stage, the report file all | report file only |
 | after any failure | `bash scripts/failure-report.sh` — per stage the current run's task states (a pending array range counted as its tasks; any job name no stage script sets, e.g. an interactive `bash`, marked "not a pipeline job"); every task that did not complete (state, exit code, run time vs limit, MaxRSS vs memory asked, node, log paths); failures grouped by stage/state/exit code with their nodes; the full `.err`/`.out` of the first failure of each kind; what is still queued and why. Whole report, logs uncut, in `logs/failure_report_<date>.txt` | report file only |
 | any time | `bash scripts/verify-rebuild.sh` — per stage: jobs queued and finished, outputs, and the checks (stamps, sample counts, A/T + C/G kept, fill check, reference-list IDs in the panel and why any are missing, donor/reference relatives from KING, anchors, no CHMI, results rewritten) | no |
@@ -496,9 +501,21 @@ of sites. `KING_INPUT=softunion` reads the pre-phasing genotypes instead.
 **4a — `4a_build_homogeneity_panel_kN_clm.sh`** (**K=8 now, K=5 in July**)
 1. concat the 22 phased chromosomes → `admixture_k8/all_chr.phased.bcf`
 2. restrict to 1c's ADMIXTURE site list (`--extract bed1`), then
-   `plink2 --maf 0.01 --indep-pairwise 500 50 0.1` over all samples at once
-   (same as July) → `--max-alleles 2 --snps-only just-acgt --make-bed` →
-   `admixture_k8/lai_ref` (528,876 SNPs in November, without the site list)
+   `plink2 --indep-pairwise 500 50 0.1` over all samples at once →
+   `--max-alleles 2 --snps-only just-acgt --make-bed` → `admixture_k8/lai_ref`.
+   **No global MAF floor from 16 Nov** (`ADMIX_PRUNE_MAF`, default none): every
+   site already passed the soft-union rule, MAF ≥ 0.005 in at least one
+   super-pop, and a global floor removes exactly the variants common in one
+   super-pop and rare overall. Until 16 Nov the prune ran with `--maf 0.01`
+   (as July did): 528,876 SNPs in November without the site list; 352,550 on
+   16 Nov, when `--maf 0.01` removed 11,285,750 of the 18,880,026 sites the
+   missingness rule kept. The rule is stamped in `lai_ref.recipe`; a pruned set
+   made under another rule is rebuilt. `lai_ref.mac_bins.tsv` counts the
+   markers by minor allele count (a super-pop as small as OCE, 55 samples,
+   passes MAF ≥ 0.005 with a single copy). `PRUNE_ONLY=1` stops after this
+   step and prints the count and the expected ADMIXTURE hours (both fits took
+   8 h 23 min on 352,550 markers); `ADMIX_MAX_SNPS=<n>` thins at random
+   (seed 20261116) if the count is too slow to fit.
 3. **fit set** (from 12 Nov 2026, with relatives kept in the panel):
    ADMIXTURE assumes unrelated individuals, so both runs are fitted on an
    unrelated subset -- 1e's duplicate copies out, then greedily the sample
@@ -514,9 +531,12 @@ of sites. `KING_INPUT=softunion` reads the pre-phasing genotypes instead.
    (`admixture_k8/unsup/fit/`), relatives projected (`unsup/proj/`), merged
    → `admixture_k8/unsup/lai_ref.8.Q` (~10 h; reused while its inputs are
    unchanged)
-4. **NEW — data-first discovery:** per cluster, rank every eligible sample,
-   keep the top 50 at Q ≥ 0.93, and name the cluster from those anchors'
-   metadata (see §3, 4a)
+4. **data-first discovery:** per cluster, rank every eligible sample, name
+   the cluster from its top 50 at Q ≥ 0.93, then **choose the anchors —
+   highest Q and central** (from 16 Nov; see §3, 4a): PCA of the fit set
+   (`admixture_k8/fit_pca.*`), and of the samples at Q ≥ 0.93 carrying the
+   cluster's label, the 50 with the smallest sum of their Q rank and their
+   rank of distance to the group's median → `anchor_selection.k8.tsv`
 5. supervised ADMIXTURE K=8 on those anchors, fitted on the same set
    (`sup_fit/`), relatives projected onto its allele frequencies
    (`sup_proj/`), merged → `admixture_k8/lai_ref.8.Q` → labels → tiered
@@ -551,14 +571,16 @@ Three stages: anchor discovery across all 7 pools → supervised ADMIXTURE at
 K=8 → homogeneity filter.
 
 **Data-first anchor discovery** (stage A). For each of the K unsupervised
-clusters: rank **every** eligible panel sample by its loading on it, keep the
-top 50 at Q ≥ 0.93, and **name the cluster from who those anchors are** — the
+clusters: rank **every** eligible panel sample by its loading on it, take the
+top 50 at Q ≥ 0.93, and **name the cluster from who they are** — the
 plurality metadata super-pop among them, holding ≥ 50% of the set. If two
 clusters claim one super-pop, the one with more supporting samples keeps it; a
-single unnamed cluster becomes OTH. Eligible = everyone except named
-exclusions and 1e's duplicate drops. No candidate pools and no a-priori
-naming: the curated `*_rfmix.txt` lists are not read (their overlap with the
-discovered anchors is reported).
+single unnamed cluster becomes OTH. Then the anchors are chosen from the
+cluster's samples at Q ≥ 0.93 by Q and centrality (see "Which anchors" below).
+Eligible = everyone except named exclusions, 1e's duplicate drops and the
+projected relatives. No candidate pools and no a-priori naming: the curated
+`*_rfmix.txt` lists are not read (their overlap with the discovered anchors is
+reported).
 
 Every cluster's composition goes to `discovery_clusters.k8.tsv` with the
 reason it was or was not named. Two checks print in the log:
@@ -592,6 +614,15 @@ site without using a single imputed genotype. `scripts/site-presence-check.py`
 measures how many "absent" sites are really allele mismatches (REF/ALT swapped,
 strand flipped, different ALT) that harmonisation would recover.
 
+**The rule (12 Nov):** every cohort × super-pop group ≤ 15% missing (n ≥ 5),
+then the whole panel ≤ 7% (`ADMIX_GROUP_MAXMISS`, `ADMIX_TOTAL_MAXMISS` in 1c).
+The panel's missingness is the size-weighted mean of the groups', so the panel
+cap only binds when it is the lower of the two numbers: "every group ≤ 7% and
+the panel ≤ 15%" can never fail the panel cap. `scripts/admix-rule-compare.sh`
+measures how many sites each version keeps, and writes the lists 4a can read
+instead of 1c's (`ADMIX_SITES_TPL`), so the rule can change without
+re-running 1c.
+
 The site list itself: In November, without it, every SGDP sample had no call
 at 38% of chr22's ADMIXTURE markers and every MXB sample at 62%; SHAPEIT5 had
 filled those in, and three of the eight clusters tracked cohorts (c0 ≈ 0.4 in
@@ -606,14 +637,44 @@ Writes `lai_ref_panel_samples.k8.tsv`, the Q table everything downstream
 reads: `sample, cohort, pop, super_pop, Q_sup_*, max_Q_sup, argmax_pop_sup,
 Q_unsup_*, sup_unsup_agree, included`.
 
-**Tiered homogeneity thresholds:** 0.95 for EUR/EAS/AFR, 0.93 for
-AMR/OCE/MEN/SAS.
+**Tiered homogeneity thresholds:** 0.95 for EUR/EAS/AFR/SAS, 0.93 for
+AMR/OCE/MEN. SAS moved to 0.95 on 16 Nov: at K=8 it had 321 samples in the
+panel at 0.93 (1KG ITU 98, STU 110, GIH 70, PJL 26, BEB 7, plus SGDP south
+Indians), so it can afford the stricter cut.
 
-**Anchor selection — two floors, not one.** Stage A takes each super-pop's
-draw-pool members with cluster Q **≥ `ANCHOR_MIN_Q` (0.93)**, sorted
-descending, **capped at `ANCHOR_CAP` (50)** — the "top 25–50 ≥ 0.93" rule from
-the NAT/Mexican accuracy pipeline. Two separate floors matter, and they fail
-differently:
+**Which anchors — highest Q and central (from 16 Nov).** The top 50 by
+unsupervised Q are each ancestry's most *drifted* members, because a sample
+loads 0.999 on a cluster exactly when it is furthest from every other cluster.
+On 16 Nov that made the anchors: EUR all northern (GBR 20, Orcadian 11, CEU 10,
+FIN 4, Estonian 2, Icelandic 2, Norwegian 1); AFR 24 of 50 rainforest
+hunter-gatherers (Biaka 16, Mbuti 8); EAS 45 CDX; SAS 49 ITU/STU. The
+supervised components, which the anchors define, centred on those ends.
+
+`ANCHOR_SELECT=central` (default): candidates are the samples at
+Q ≥ `ANCHOR_MIN_Q` on the cluster that carry its metadata super-pop. Each is
+ranked by Q (highest first) and by Euclidean distance to the candidates'
+median in the top `ANCHOR_PCS` (10) principal components of the unrelated fit
+set (each PC scaled by √eigenvalue; nearest first); the 50 with the smallest
+rank sum are the anchors. The centre is the median of the *candidates*, not of
+every sample with the label: for AMR that median sits among admixed Latin
+Americans, and the nearest unadmixed samples would be the ones with the most
+European ancestry. `ANCHOR_CENTER_MIN_Q` lowers the Q a sample needs to count
+toward the centre. PCs use the markers' common subset (`ANCHOR_PCA_MAF` 0.05)
+because PCA up-weights rare variants by 1/√(p(1−p)); that floor shapes the PCA
+only. `anchor_selection.k8.tsv` lists every candidate with its Q, distance,
+both ranks and whether it was chosen. `ANCHOR_SELECT=top_q` restores the old
+rule.
+
+What this is not expected to fix: at K=8 the MEN component takes 23–38% of
+every southern European population's supervised Q (TSI 0.35, Sardinian 0.38,
+IBS 0.23), so none of them can be an EUR anchor at Q ≥ 0.93, and more central
+anchors move their EUR share up only as far as the model's EUR/MEN split
+allows. July's K=5 had no MEN component and kept every European population.
+
+**Anchor floors — two, not one.** Stage A takes the candidates with cluster Q
+**≥ `ANCHOR_MIN_Q` (0.93)**, **capped at `ANCHOR_CAP` (50)** — the "top 25–50
+≥ 0.93" rule from the NAT/Mexican accuracy pipeline. Two separate floors
+matter, and they fail differently:
 
 | floor | what it stops | failure if absent |
 |---|---|---|

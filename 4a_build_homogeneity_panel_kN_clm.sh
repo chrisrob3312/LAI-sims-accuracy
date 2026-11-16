@@ -27,8 +27,12 @@
 # looks like it dates from c02 simply being busy. Re-add it only if a task
 # actually fails there, and write down what happened.
 #SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
-#SBATCH --time-min=01:00:00
-#SBATCH --time=48:00:00
+# 72 h, and no --time-min: with --time-min Slurm may START the job with any
+# limit down to that floor to backfill it, and an ADMIXTURE fit cut off part
+# way loses all of its progress. Two fits took 8 h 23 min on 352,550 markers
+# (16 Nov); without the global MAF floor there are more markers -- run
+# PRUNE_ONLY=1 first, which prints the count and the expected hours.
+#SBATCH --time=72:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/4a_homog_kN_%j.out
@@ -45,7 +49,10 @@
 #
 #   0. MARKERS. Concat the 22 phased chromosomes; restrict to the sites 1c
 #      found adequately called in EVERY cohort x super-pop group and overall
-#      (ADMIX_SITE_FILTER); MAF >= 0.01; LD-prune 500 50 0.1 over all samples.
+#      (ADMIX_SITE_FILTER); LD-prune 500 50 0.1 over all samples. No global
+#      MAF floor (ADMIX_PRUNE_MAF): every site already has MAF >= 0.005 in at
+#      least one super-pop (1c's soft-union). PRUNE_ONLY=1 stops here and
+#      reports the marker count, so the ADMIXTURE run time is known first.
 #
 #   FIT SET (FIT_UNRELATED=1): the panel keeps relatives, ADMIXTURE assumes
 #      none. Both runs below are FITTED on an unrelated subset (1e's duplicate
@@ -57,11 +64,18 @@
 #
 #   STAGE A (unsupervised fit, then DATA-FIRST anchor discovery):
 #     Unsupervised ADMIXTURE at K. For each cluster, rank every eligible
-#     sample by its loading, keep the top ANCHOR_CAP at Q >= ANCHOR_MIN_Q, and
-#     NAME the cluster from who those anchors are (plurality metadata
-#     super-pop, purity >= ANCHOR_NAME_PURITY; the stronger claim wins a
-#     contested super-pop; one unnamed cluster becomes OTH)
-#     -> reference_ids/<sp>_anchors.k${K}.txt for the 7, and OTH.
+#     sample by its loading and NAME the cluster from its top ANCHOR_CAP at
+#     Q >= ANCHOR_MIN_Q (plurality metadata super-pop, purity >=
+#     ANCHOR_NAME_PURITY; the stronger claim wins a contested super-pop; one
+#     unnamed cluster becomes OTH). Then CHOOSE the anchors (ANCHOR_SELECT):
+#     central (default) = of the samples at Q >= ANCHOR_MIN_Q that carry the
+#     cluster's super-pop label, the ANCHOR_CAP with the best combined rank of
+#     Q (highest) and distance to the group's median in the top ANCHOR_PCS
+#     principal components (nearest); top_q = the top ANCHOR_CAP by Q alone,
+#     which picks each ancestry's most drifted end (16 Nov run: EUR anchors
+#     all northern, AFR anchors half rainforest hunter-gatherers).
+#     -> reference_ids/<sp>_anchors.k${K}.txt for the 7, and OTH;
+#        every candidate's ranks in anchor_selection.k${K}.tsv.
 #     Every cluster's composition, and why it was or was not named, goes to
 #     discovery_clusters.k${K}.tsv. A cluster carried by one minority cohort
 #     across super-pops is flagged as a likely processing batch.
@@ -83,8 +97,11 @@
 # Outputs in $HOMOG_DIR (all paths carry ${K}, so K=5/7/8 never collide):
 #   admixture_k${K}/lai_ref.{bed,bim,fam,${K}.Q,${K}.P,pop}
 #   admixture_k${K}/admix_sites.all.bed                (ADMIXTURE-eligible sites)
+#   admixture_k${K}/lai_ref.recipe, lai_ref.mac_bins.tsv (pruning rule; markers by allele count)
+#   admixture_k${K}/fit_pca.{eigenvec,eigenval}        (centrality for anchor choice)
 #   admixture_k${K}/unsup/lai_ref.${K}.Q
 #   discovery_clusters.k${K}.tsv                       (every cluster: named or why not)
+#   anchor_selection.k${K}.tsv                         (every anchor candidate: Q, distance, ranks)
 #   reference_ids/<sp>_anchors.k${K}.txt, oth_anchors.k${K}.txt
 #   anchor_summary.k${K}.tsv
 #   lai_ref_panel_samples.k${K}.tsv
@@ -148,24 +165,64 @@ ANCHOR_MIN_Q_STRICT="${ANCHOR_MIN_Q_STRICT:-}"
 ANCHOR_STRICT_SUPERPOPS="${ANCHOR_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
 HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
 
+# WHICH ANCHORS: highest Q AND central to the super-pop (decided 16 Nov).
+#
+# The top ANCHOR_CAP by unsupervised Q are each ancestry's most DRIFTED
+# members, not its typical ones, because a sample loads 0.999 on a cluster
+# exactly when it is furthest from every other cluster. In the 16 Nov run that
+# made the EUR anchors all northern (GBR, Orcadian, CEU, FIN, Estonian,
+# Icelandic, Norwegian), the AFR anchors 24 of 50 rainforest hunter-gatherers
+# (Biaka, Mbuti), the EAS anchors 45 CDX, the SAS anchors 49 ITU/STU -- and the
+# supervised components, which the anchors define, centred on those ends.
+#
+#   ANCHOR_SELECT=central (default). Candidates = samples at Q >= ANCHOR_MIN_Q
+#     on the cluster that carry the cluster's metadata super-pop. Rank them by
+#     Q (highest first) and by distance to the candidates' median position in
+#     the top ANCHOR_PCS principal components of the unrelated fit set (PCs
+#     scaled by the square root of their eigenvalues; nearest first); keep the
+#     ANCHOR_CAP with the smallest sum of the two ranks.
+#     The centre is the median of the CANDIDATES, not of every sample with the
+#     label. For AMR the median of every label-carrier sits among admixed
+#     Latin Americans, and the "nearest" unadmixed samples would then be the
+#     ones with the most European ancestry -- the opposite of an anchor.
+#     ANCHOR_CENTER_MIN_Q lowers the Q a sample needs to count toward the
+#     centre (default ANCHOR_MIN_Q) if a broader centre is wanted.
+#   ANCHOR_SELECT=top_q: the top ANCHOR_CAP by Q (the rule before 16 Nov).
+#
+# PCs come from the markers' common subset (MAF >= ANCHOR_PCA_MAF over the fit
+# set): PCA weights a variant by 1/sqrt(p(1-p)), so rare variants would make
+# the axes track families and private haplotypes rather than populations.
+# This MAF floor shapes the PCA only; it removes no ADMIXTURE marker.
+ANCHOR_SELECT="${ANCHOR_SELECT:-central}"
+ANCHOR_PCS="${ANCHOR_PCS:-10}"
+ANCHOR_PCA_MAF="${ANCHOR_PCA_MAF:-0.05}"
+ANCHOR_CENTER_MIN_Q="${ANCHOR_CENTER_MIN_Q:-${ANCHOR_MIN_Q}}"
+case "$ANCHOR_SELECT" in central|top_q) ;; *)
+    echo "ERROR: ANCHOR_SELECT must be central or top_q, got '${ANCHOR_SELECT}'" >&2; exit 1 ;;
+esac
+
 # TIERED homogeneity cut. HOMOG_THRESHOLD above is the FLOOR and the default
 # for any super-pop not named here; HOMOG_THRESHOLD_STRICT applies to the
 # groups that have enough samples to afford it.
 #
 # WHY TWO NUMBERS. The cut trades purity against panel size, and the two sides
-# of that trade are not symmetric across super-pops. EUR, EAS and AFR are
-# richly sampled in HGDP+1KG, so 0.95 costs them little and buys cleaner
-# reference haplotypes. AMR, OCE, MEN and SAS are not: at 0.95 they lose
-# members the panel cannot spare, and a thin reference panel for exactly the
+# of that trade are not symmetric across super-pops. EUR, EAS, AFR and SAS
+# are richly sampled in HGDP+1KG, so 0.95 costs them little and buys cleaner
+# reference haplotypes. AMR, OCE and MEN are not: at 0.95 they lose members
+# the panel cannot spare, and a thin reference panel for exactly the
 # ancestries whose local-ancestry calls are hardest is the failure this whole
 # project is measuring. So the under-represented groups sit at 0.93.
+#
+# SAS joined the strict tier on 16 Nov: the K=8 run put 321 SAS samples in
+# the panel at 0.93 (1KG ITU 98, STU 110, GIH 70, PJL 26, BEB 7, plus SGDP
+# south Indians), so it can afford the stricter cut.
 #
 # This is a deliberate asymmetry and it belongs in the methods: the panel is
 # not "samples above one Q", it is "samples above a per-super-pop Q", and the
 # per-super-pop counts and cut are printed in the stage C log and carried in
 # homog_composition.k${K}.tsv.
 HOMOG_THRESHOLD_STRICT="${HOMOG_THRESHOLD_STRICT:-0.95}"
-HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
+HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-EUR,EAS,AFR,SAS}"
 
 # SGDP candidate pools (from scripts/fetch-sgdp-anchors.py). Used as exemplars
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
@@ -233,6 +290,28 @@ DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 # population-specific variants the soft-union exists to keep).
 ADMIX_SITE_FILTER="${ADMIX_SITE_FILTER:-1}"
 
+# ADMIX_PRUNE_MAF -- an extra GLOBAL minor-allele-frequency floor before LD
+# pruning. Empty (the default) = none. Every candidate site already passed
+# 1c's soft-union rule -- MAF >= LAI_MAF (0.005) in at least one super-pop of
+# >= MIN_SUBPOP_N samples -- and the missingness rule above. A global floor on
+# top removes exactly the variants that are common in one super-pop and rare
+# in the panel as a whole, i.e. the ones that tell the under-represented
+# ancestries apart: on 16 Nov `--maf 0.01` removed 11,285,750 of the
+# 18,880,026 sites the missingness rule kept.
+# Set ADMIX_PRUNE_MAF=0.01 to reproduce the 16 Nov marker set.
+#
+# ADMIX_MAX_SNPS -- optional random thin (fixed seed) of the pruned markers to
+# at most this many, if their number makes ADMIXTURE too slow. Empty = none.
+#
+# PRUNE_ONLY=1 -- build the pruned marker set, report its size, its allele
+# count spectrum and the expected ADMIXTURE hours, and stop before the fits.
+#
+# The rule is stamped in lai_ref.recipe and a pruned set made under another
+# rule is rebuilt, never reused: the timestamps alone cannot see a rule change.
+ADMIX_PRUNE_MAF="${ADMIX_PRUNE_MAF:-}"
+ADMIX_MAX_SNPS="${ADMIX_MAX_SNPS:-}"
+PRUNE_ONLY="${PRUNE_ONLY:-0}"
+
 # ADMIX_INPUT -- which genotypes ADMIXTURE reads.
 #   phased     the phased panel. SHAPEIT5 has filled every gap, so a site a
 #              cohort's file lacked carries imputed genotypes for that cohort.
@@ -248,6 +327,10 @@ case "$ADMIX_INPUT" in
     softunion) ADMIX_TPL="${PHASED_DIR}/merged_chr%s.softunion.bcf" ;;
     *)         echo "ERROR: ADMIX_INPUT must be phased or softunion, got '${ADMIX_INPUT}'" >&2; exit 1 ;;
 esac
+# 1c's per-chromosome lists by default. scripts/admix-rule-compare.sh writes the
+# same lists under other versions of the missingness rule, from the published
+# pre-phasing soft-union; point this at one to change the rule without
+# re-running 1c (or re-phasing): ADMIX_SITES_TPL=<out>/<rule>/merged_chr%s.admix_sites.bed
 ADMIX_SITES_TPL="${ADMIX_SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
 SUPERPOPS="EUR AFR AMR EAS SAS OCE MEN"
 
@@ -286,7 +369,8 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # ---------------------------------------------------------------------------
 # Verify required inputs.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}${ANCHOR_MIN_Q_STRICT:+ (strict ${ANCHOR_MIN_Q_STRICT} for ${ANCHOR_STRICT_SUPERPOPS})}  ANCHOR_CAP=${ANCHOR_CAP}  ANCHOR_FLOOR=${ANCHOR_FLOOR}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD}"
+echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}${ANCHOR_MIN_Q_STRICT:+ (strict ${ANCHOR_MIN_Q_STRICT} for ${ANCHOR_STRICT_SUPERPOPS})}  ANCHOR_CAP=${ANCHOR_CAP}  ANCHOR_FLOOR=${ANCHOR_FLOOR}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD} (${HOMOG_THRESHOLD_STRICT} for ${HOMOG_STRICT_SUPERPOPS})"
+echo "[$(date +%T)] ANCHOR_SELECT=${ANCHOR_SELECT}$([[ "$ANCHOR_SELECT" == central ]] && echo " (PCs ${ANCHOR_PCS}, PCA MAF ${ANCHOR_PCA_MAF}, centre Q >= ${ANCHOR_CENTER_MIN_Q})")  ADMIX_PRUNE_MAF=${ADMIX_PRUNE_MAF:-none}  ADMIX_MAX_SNPS=${ADMIX_MAX_SNPS:-none}  PRUNE_ONLY=${PRUNE_ONLY}"
 echo "[$(date +%T)] verifying inputs"
 for CHR in {1..22}; do
     F="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
@@ -358,9 +442,14 @@ ADMIX_SITES_ALL="${ADM_DIR}/admix_sites.all.bed"
 if [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
     SITE_LIST=()
     for CHR in {1..22}; do SITE_LIST+=("$(printf "$ADMIX_SITES_TPL" "$CHR")"); done
-    if newer_than "$ADMIX_SITES_ALL" "${SITE_LIST[@]}"; then
+    # Rebuilt when a list is newer OR when ADMIX_SITES_TPL points somewhere else
+    # (e.g. scripts/admix-rule-compare.sh's lists for another missingness rule,
+    # which may be older than the combined file).
+    if newer_than "$ADMIX_SITES_ALL" "${SITE_LIST[@]}" \
+       || [[ "$(cat "${ADMIX_SITES_ALL}.recipe" 2>/dev/null)" != "tpl=${ADMIX_SITES_TPL}" ]]; then
         cat "${SITE_LIST[@]}" > "${ADMIX_SITES_ALL}.partial"
         mv "${ADMIX_SITES_ALL}.partial" "$ADMIX_SITES_ALL"
+        echo "tpl=${ADMIX_SITES_TPL}" > "${ADMIX_SITES_ALL}.recipe"
     fi
     echo "[$(date +%T)] ADMIXTURE marker filter ON: $(wc -l < "$ADMIX_SITES_ALL") soft-union" \
          "sites pass the per-cohort x super-pop and overall missingness rule" \
@@ -375,21 +464,67 @@ fi
 # 2. plink2 import + LD-prune, over all samples jointly (as in July).
 # ---------------------------------------------------------------------------
 PRUNED="${ADM_DIR}/lai_ref"
-if newer_than "${PRUNED}.bed" "${PRUNE_INPUTS[@]}"; then
-    echo "[$(date +%T)] plink2 LD-prune (500 50 0.1 maf 0.01)"
-    rm -f "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "${ADM_DIR}/lai_ref.prune."*
+PRUNE_RECIPE="ld=500,50,0.1 maf=${ADMIX_PRUNE_MAF:-none} thin=${ADMIX_MAX_SNPS:-none} sitefilter=${ADMIX_SITE_FILTER} sites=${ADMIX_SITES_TPL} input=${ADMIX_INPUT}"
+MAF_ARG=()
+[[ -n "$ADMIX_PRUNE_MAF" ]] && MAF_ARG=(--maf "$ADMIX_PRUNE_MAF")
+if newer_than "${PRUNED}.bed" "${PRUNE_INPUTS[@]}" \
+   || [[ "$(cat "${PRUNED}.recipe" 2>/dev/null)" != "$PRUNE_RECIPE" ]]; then
+    echo "[$(date +%T)] plink2 LD-prune: ${PRUNE_RECIPE}"
+    [[ -s "${PRUNED}.recipe" ]] && echo "[$(date +%T)]   (previous pruned set: $(cat "${PRUNED}.recipe"))"
+    rm -f "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "${PRUNED}.recipe" "${ADM_DIR}/lai_ref.prune."* \
+          "${PRUNED}.unthinned".{bed,bim,fam,log}
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' ${EXTRACT_SITES[@]+"${EXTRACT_SITES[@]}"} \
-           --maf 0.01 --indep-pairwise 500 50 0.1 --out "${ADM_DIR}/lai_ref.prune"
+           ${MAF_ARG[@]+"${MAF_ARG[@]}"} --indep-pairwise 500 50 0.1 --out "${ADM_DIR}/lai_ref.prune"
+    _MADE="$PRUNED"; [[ -n "$ADMIX_MAX_SNPS" ]] && _MADE="${PRUNED}.unthinned"
     plink2 --bcf "$CONCAT" --threads "$THREADS" \
            --set-missing-var-ids '@:#[b38]' \
            --extract "${ADM_DIR}/lai_ref.prune.prune.in" \
            --max-alleles 2 --snps-only just-acgt \
-           --make-bed --out "$PRUNED"
+           --make-bed --out "$_MADE"
+    if [[ -n "$ADMIX_MAX_SNPS" ]]; then
+        if [[ $(wc -l < "${_MADE}.bim") -gt "$ADMIX_MAX_SNPS" ]]; then
+            echo "[$(date +%T)] thinning $(wc -l < "${_MADE}.bim") pruned SNPs to ${ADMIX_MAX_SNPS} at random (seed 20261116)"
+            plink2 --bfile "$_MADE" --threads "$THREADS" --thin-count "$ADMIX_MAX_SNPS" --seed 20261116 \
+                   --make-bed --out "$PRUNED"
+        else
+            for ext in bed bim fam; do mv "${_MADE}.${ext}" "${PRUNED}.${ext}"; done
+        fi
+        rm -f "${PRUNED}.unthinned".{bed,bim,fam,log}
+    fi
+    echo "$PRUNE_RECIPE" > "${PRUNED}.recipe"
     echo "[$(date +%T)] pruned: $(wc -l < "${PRUNED}.bim") SNPs, $(wc -l < "${PRUNED}.fam") samples"
 else
-    echo "[$(date +%T)] LD-pruned bed newer than its inputs -- reusing ${PRUNED}.bed" \
-         "($(wc -l < "${PRUNED}.bim") SNPs)"
+    echo "[$(date +%T)] LD-pruned bed newer than its inputs and made under this rule -- reusing" \
+         "${PRUNED}.bed ($(wc -l < "${PRUNED}.bim") SNPs; ${PRUNE_RECIPE})"
+fi
+
+# The pruned markers by minor allele count over every panel sample, and the
+# ADMIXTURE time that number implies. With no global MAF floor the markers
+# include variants common in one super-pop and rare overall -- and, in a
+# super-pop as small as OCE (55 samples), single copies: MAF >= 0.005 of 110
+# alleles is one allele. This table shows how many of each there are.
+MAC_BINS="${PRUNED}.mac_bins.tsv"
+if newer_than "$MAC_BINS" "${PRUNED}.bed" "${PRUNED}.bim"; then
+    plink2 --bfile "$PRUNED" --threads "$THREADS" --freq counts --out "${PRUNED}.mac"
+    awk 'NR == 1 { for (i = 1; i <= NF; i++) h[$i] = i; next }
+         { a = $h["ALT_CTS"]; n = $h["OBS_CT"]; m = (a < n - a) ? a : n - a; f = m / n
+           b = (m <= 1) ? "1_MAC_1" : (m <= 5) ? "2_MAC_2-5" : (f < 0.005) ? "3_MAC_6+_MAF<0.005" \
+             : (f < 0.01) ? "4_MAF_0.005-0.01" : (f < 0.05) ? "5_MAF_0.01-0.05" : "6_MAF>=0.05"
+           c[b]++; t++ }
+         END { print "bin\tSNPs\tpct"; for (k in c) printf "%s\t%d\t%.1f\n", k, c[k], 100 * c[k] / t }' \
+        "${PRUNED}.mac.acount" | { read -r _h; echo "$_h"; sort; } > "${MAC_BINS}.partial"
+    mv "${MAC_BINS}.partial" "$MAC_BINS"
+fi
+echo "[$(date +%T)] pruned markers by minor allele count over all $(wc -l < "${PRUNED}.fam") samples (${MAC_BINS}):"
+sed 's/^/    /' "$MAC_BINS"
+_NSNP=$(wc -l < "${PRUNED}.bim")
+echo "[$(date +%T)] expected ADMIXTURE time, both fits: about $(( (_NSNP * 503 / 352550 + 30) / 60 )) h" \
+     "(scaled from 8 h 23 min for 352,550 markers and 3,766 fitted samples on 16 threads, 16 Nov)"
+if [[ "$PRUNE_ONLY" == "1" ]]; then
+    echo "[$(date +%T)] PRUNE_ONLY=1: stopping before the ADMIXTURE fits. The pruned set is kept"
+    echo "[$(date +%T)] and the next run reuses it while the rule (${PRUNE_RECIPE}) is unchanged."
+    exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -572,28 +707,56 @@ merge_q "${UFIT}/lai_ref_fit.${K}.Q" "${UNSUP_DIR}/proj/lai_ref_proj.${K}.Q" "${
 ANCHOR_INELIG="${ADM_DIR}/anchor_ineligible.txt"
 { [[ -s "$DUP_DROP" ]] && awk 'NF && $1 !~ /^#/ {print $1}' "$DUP_DROP"
   awk 'NF {print $2}' "$PROJ_LIST"; } | sort -u > "$ANCHOR_INELIG"
+
+# ---------------------------------------------------------------------------
+# 3b. Principal components of the fitted (unrelated) samples, for
+#     ANCHOR_SELECT=central. Anchors are always fitted samples, so every
+#     candidate has PCs. See WHICH ANCHORS at the top.
+# ---------------------------------------------------------------------------
+PCA_PREFIX="${ADM_DIR}/fit_pca"
+PCA_RECIPE="pcs=${ANCHOR_PCS} maf=${ANCHOR_PCA_MAF}"
+if [[ "$ANCHOR_SELECT" == "central" ]]; then
+    if newer_than "${PCA_PREFIX}.eigenvec" "${FIT_BED}.bed" "${FIT_BED}.bim" "${FIT_BED}.fam" \
+       || [[ "$(cat "${PCA_PREFIX}.recipe" 2>/dev/null)" != "$PCA_RECIPE" ]]; then
+        echo "[$(date +%T)] PCA of the ${N_FIT} fitted samples (${PCA_RECIPE}) for the central anchor choice"
+        rm -f "${PCA_PREFIX}.eigenvec" "${PCA_PREFIX}.eigenval" "${PCA_PREFIX}.recipe"
+        plink2 --bfile "$FIT_BED" --threads "$THREADS" --maf "$ANCHOR_PCA_MAF" \
+               --pca "$ANCHOR_PCS" --out "$PCA_PREFIX"
+        echo "$PCA_RECIPE" > "${PCA_PREFIX}.recipe"
+    else
+        echo "[$(date +%T)] PCA newer than the fit set and made under this rule -- reusing ${PCA_PREFIX}.eigenvec"
+    fi
+    [[ -s "${PCA_PREFIX}.eigenvec" && -s "${PCA_PREFIX}.eigenval" ]] \
+        || { echo "ERROR: PCA of the fit set failed (${PCA_PREFIX}.eigenvec/.eigenval missing)" >&2; exit 1; }
+fi
+
 # ---------------------------------------------------------------------------
 # 4. STAGE A -- data-first anchor discovery from the unsupervised Q.
-#    Per cluster: rank every eligible sample, keep the top ANCHOR_CAP at
-#    Q >= ANCHOR_MIN_Q, name the cluster from who those anchors are.
-#    See DATA-FIRST ANCHOR DISCOVERY at the top for the rule and the history.
+#    Per cluster: rank every eligible sample, name the cluster from its top
+#    ANCHOR_CAP at Q >= ANCHOR_MIN_Q, then choose the anchors (ANCHOR_SELECT).
+#    See DATA-FIRST ANCHOR DISCOVERY and WHICH ANCHORS at the top.
 # ---------------------------------------------------------------------------
 DISCOVERY_TABLE="${HOMOG_DIR}/discovery_clusters.k${K}.tsv"
-echo "[$(date +%T)] data-first discovery from unsupervised K=${K}: per cluster, top ${ANCHOR_CAP} at Q >= ${ANCHOR_MIN_Q}, named by anchor metadata (purity >= ${ANCHOR_NAME_PURITY})"
-python3 - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$ANCHOR_CAP" \
+ANCHOR_TABLE="${HOMOG_DIR}/anchor_selection.k${K}.tsv"
+echo "[$(date +%T)] data-first discovery from unsupervised K=${K}: per cluster, named from its top ${ANCHOR_CAP} at Q >= ${ANCHOR_MIN_Q} (purity >= ${ANCHOR_NAME_PURITY}); anchors chosen ${ANCHOR_SELECT}"
+python3 -I - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" "$ANCHOR_CAP" \
     "${ANCHOR_MIN_Q_STRICT:-}" "$ANCHOR_STRICT_SUPERPOPS" "$ANCHOR_NAME_PURITY" "$ANCHOR_COHORT_WARN" \
     "$SAMPLE_GROUPS" "$MXB_POPINFO" "$SGDP_MANIFEST" "$ALMARRI_META" "$PANEL_EXCLUDE" "$ANCHOR_INELIG" \
-    "$REFS" "$SUPERPOPS" "$OTH_ANCHORS" "$DISCOVERY_TABLE" <<'PYEOF'
-import sys, re, csv
+    "$REFS" "$SUPERPOPS" "$OTH_ANCHORS" "$DISCOVERY_TABLE" \
+    "$ANCHOR_SELECT" "${PCA_PREFIX}.eigenvec" "${PCA_PREFIX}.eigenval" "$ANCHOR_CENTER_MIN_Q" \
+    "$GNOMAD_META" "$ANCHOR_TABLE" <<'PYEOF'
+import sys, re, csv, math
 from collections import Counter
 
 (fam_f, qu_f, K, thresh, cap, strict_q, strict_sps, purity_min, cohort_warn,
  groups_f, mxb_f, sgdp_f, almarri_f, excl_f, dup_f, refs, superpops,
- oth_out, table_out) = sys.argv[1:20]
+ oth_out, table_out, select, evec_f, eval_f, center_min_q, gnomad_f,
+ anchor_table_out) = sys.argv[1:26]
 K = int(K); thresh = float(thresh); cap = int(cap)
 strict_q = float(strict_q) if strict_q else None
 strict_sps = {x for x in strict_sps.replace(",", " ").split() if x}
 purity_min = float(purity_min); cohort_warn = float(cohort_warn)
+center_min_q = float(center_min_q)
 SUPERPOPS = superpops.split()
 
 def ids(path):
@@ -630,6 +793,32 @@ except FileNotFoundError:
     pass
 ALM_RE = re.compile(r"(^longranger\d*_wgs_|(^|_)APPG\d+(_|$))")
 
+# Population labels, ONLY to report who the anchors are. Same precedence as
+# pop_of() in stage C: MXB, then SGDP, then Almarri, then gnomAD.
+def tsv_map(path, key, val):
+    out = {}
+    try:
+        with open(path) as fh:
+            h = next(fh).rstrip("\n").split("\t")
+            if key in h and val in h:
+                ki, vi = h.index(key), h.index(val)
+                for l in fh:
+                    f = l.rstrip("\n").split("\t")
+                    if len(f) > max(ki, vi): out[f[ki]] = f[vi]
+    except (FileNotFoundError, StopIteration):
+        pass
+    return out
+popl = tsv_map(gnomad_f, "project_meta.sample_id", "hgdp_tgp_meta.Population")
+try:
+    with open(almarri_f) as fh:
+        for l in fh:
+            f = l.rstrip("\n").split("\t")
+            if len(f) >= 2 and f[0] and f[0] != "sample": popl[f[0]] = f[1]
+except FileNotFoundError:
+    pass
+popl.update(tsv_map(sgdp_f, "sample", "population"))
+popl.update(tsv_map(mxb_f, "Sample_ID", "inferred_genetic_cluster"))
+
 def superpop(s):     # same resolution order as super_pop_of() in stage C
     if s in mxb: return "AMR"
     if s in sgdp: return sgdp[s]
@@ -654,6 +843,86 @@ excluded = ids(excl_f) | ids(dup_f)
 elig = [i for i, s in enumerate(samples) if s not in excluded]
 SP = [superpop(s) for s in samples]
 CO = [cohort(s) for s in samples]
+POPL = [popl.get(s, "NA") for s in samples]
+
+# ---- principal components for ANCHOR_SELECT=central -------------------------
+# Each PC scaled by the square root of its eigenvalue, so Euclidean distance
+# weighs the axes by the variation they carry.
+PC = {}
+if select == "central":
+    ev = [float(l.split()[0]) for l in open(eval_f) if l.strip()]
+    with open(evec_f) as fh:
+        h = fh.readline().lstrip("#").split()
+        if "IID" not in h:
+            sys.exit(f"ERROR: {evec_f} header {h} has no IID column")
+        ii = h.index("IID")
+        pcc = [j for j, col in enumerate(h) if re.fullmatch(r"PC\d+", col)]
+        if not pcc or len(pcc) > len(ev):
+            sys.exit(f"ERROR: {evec_f} has {len(pcc)} PC columns but {eval_f} has {len(ev)} eigenvalues")
+        wt = [math.sqrt(max(ev[k], 0.0)) for k in range(len(pcc))]
+        for l in fh:
+            f = l.split()
+            if f:
+                PC[f[ii]] = [float(f[j]) * wt[k] for k, j in enumerate(pcc)]
+    print(f"[discover] central anchor choice: {len(PC)} fitted samples in {len(pcc)} PCs "
+          f"(eigenvalues {', '.join(f'{x:.1f}' for x in ev[:len(pcc)])}); centre = median of the "
+          f"candidates at Q >= {center_min_q}", file=sys.stderr)
+
+def avg_ranks(vals):
+    """1 = smallest value; tied values share their average rank."""
+    order = sorted(range(len(vals)), key=lambda j: vals[j])
+    r = [0.0] * len(vals)
+    j = 0
+    while j < len(order):
+        k = j
+        while k + 1 < len(order) and vals[order[k + 1]] == vals[order[j]]:
+            k += 1
+        for m in range(j, k + 1):
+            r[order[m]] = (j + k) / 2 + 1
+        j = k + 1
+    return r
+
+def median(xs):
+    xs = sorted(xs); n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+SEL = []   # every candidate considered: the anchor_selection table
+
+def choose(c, name, label, pool):
+    """The anchors for cluster c from pool (indices at the Q floor, Q-descending).
+    label: the metadata super-pop a candidate must carry, or None (OTH)."""
+    if select == "top_q":
+        chosen = set(pool[:cap])
+        rq = avg_ranks([-Q[i][c] for i in pool])
+        for j, i in enumerate(pool):
+            SEL.append([c, name, i, Q[i][c], None, rq[j], None, rq[j], int(i in chosen)])
+        return pool[:cap], ""
+    cand = [i for i in pool if label is None or SP[i] == label]
+    nopc = [samples[i] for i in cand if samples[i] not in PC]
+    if nopc:
+        sys.exit(f"ERROR: {len(nopc)} {name} anchor candidate(s) have no PCs (first: {nopc[:3]}); "
+                 f"candidates are fitted samples and every fitted sample is in {evec_f}")
+    centre = [i for i in elig if Q[i][c] >= center_min_q and (label is None or SP[i] == label)
+              and samples[i] in PC]
+    if not cand or not centre:
+        return [], "no candidate carries the label"
+    D = len(PC[samples[cand[0]]])
+    mid = [median([PC[samples[i]][d] for i in centre]) for d in range(D)]
+    dist = {i: math.sqrt(sum((PC[samples[i]][d] - mid[d]) ** 2 for d in range(D))) for i in cand}
+    rq = avg_ranks([-Q[i][c] for i in cand])
+    rd = avg_ranks([dist[i] for i in cand])
+    score = {i: rq[j] + rd[j] for j, i in enumerate(cand)}
+    chosen = sorted(cand, key=lambda i: (score[i], -Q[i][c], dist[i], samples[i]))[:cap]
+    ch = set(chosen)
+    for j, i in enumerate(cand):
+        SEL.append([c, name, i, Q[i][c], dist[i], rq[j], rd[j], score[i], int(i in ch)])
+    dropped = len(pool) - len(cand)
+    note = (f"central: {len(cand)} candidates at the Q floor carrying {label or 'any'} label"
+            f"{f' ({dropped} with another label left out)' if dropped else ''}; centre = median of "
+            f"{len(centre)} at Q >= {center_min_q}; chosen distance "
+            f"{min(dist[i] for i in chosen):.4f}-{max(dist[i] for i in chosen):.4f} "
+            f"(candidates {min(dist.values()):.4f}-{max(dist.values()):.4f})")
+    return chosen, note
 print(f"[discover] {len(samples)} samples; {len(samples) - len(elig)} not eligible "
       f"(named exclusions, 1e duplicate drops, relatives projected rather than fitted); "
       f"{len(elig)} ranked in every cluster",
@@ -748,6 +1017,22 @@ def write(path, idx):
     with open(path, "w") as g:
         for i in idx: g.write(samples[i] + "\n")
 
+def report(name, c, top, note, out, extra=""):
+    if not top:
+        print(f"[discover] {name}: cluster {c}, 0 anchors ({note or 'none at the Q floor'}) -> {out}",
+              file=sys.stderr)
+        return
+    qs = [Q[i][c] for i in top]
+    off = sum(1 for i in top if name != "OTH" and SP[i] != name)
+    print(f"[discover] {name}: cluster {c}, {len(top)} anchors (Q {min(qs):.4f}-{max(qs):.4f})"
+          f"{'' if not off else f', {off} with a different metadata label'}{extra} -> {out}",
+          file=sys.stderr)
+    if note:
+        print(f"[discover]     {note}", file=sys.stderr)
+    print(f"[discover]     by population: "
+          + ", ".join(f"{p} {n}" for p, n in Counter(POPL[i] for i in top).most_common(10)),
+          file=sys.stderr)
+
 for sp in SUPERPOPS:
     out = f"{refs}/{sp.lower()}_anchors.k{K}.txt"
     c = taken.get(sp)
@@ -755,27 +1040,45 @@ for sp in SUPERPOPS:
         write(out, [])
         print(f"[discover] {sp}: no cluster at K={K} -> empty {out}", file=sys.stderr)
         continue
-    top = rows[c]["top"]
-    if strict_q is not None and sp in strict_sps:
-        top = [i for i in top if Q[i][c] >= strict_q]
+    if select == "top_q":
+        # The rule before 16 Nov, unchanged: the top ANCHOR_CAP, then the strict floor.
+        top, note = choose(c, sp, sp, rows[c]["passing"])
+        if strict_q is not None and sp in strict_sps:
+            top = [i for i in top if Q[i][c] >= strict_q]
+            kept = set(top)
+            for row in SEL:
+                if row[0] == c:
+                    row[8] = int(row[2] in kept)
+    else:
+        pool = rows[c]["passing"]
+        if strict_q is not None and sp in strict_sps:
+            pool = [i for i in pool if Q[i][c] >= strict_q]
+        top, note = choose(c, sp, sp, pool)
     write(out, top)
-    off = sum(1 for i in top if SP[i] != sp)
     cur = ids(f"{refs}/{sp.lower()}_rfmix.txt")
-    extra = f"; {len({samples[i] for i in top} & cur)} also in {sp.lower()}_rfmix.txt" if cur else ""
-    print(f"[discover] {sp}: cluster {c}, {len(top)} anchors "
-          f"(Q {Q[top[0]][c]:.4f}..{Q[top[-1]][c]:.4f}){'' if not off else f', {off} with a different metadata label'}"
-          f"{extra} -> {out}" if top else f"[discover] {sp}: cluster {c}, 0 anchors after strict floor -> {out}",
-          file=sys.stderr)
-write(oth_out, rows[oth]["top"] if oth is not None else [])
-print(f"[discover] OTH: " + (f"cluster {oth}, {len(rows[oth]['top'])} anchors -> {oth_out}"
-                              if oth is not None else f"no unnamed cluster with anchors -> empty {oth_out}"),
-      file=sys.stderr)
+    report(sp, c, top, note, out,
+           f"; {len({samples[i] for i in top} & cur)} also in {sp.lower()}_rfmix.txt" if cur else "")
+if oth is not None:
+    oth_top, note = choose(oth, "OTH", None, rows[oth]["passing"])
+    write(oth_out, oth_top)
+    report("OTH", oth, oth_top, note, oth_out)
+else:
+    write(oth_out, [])
+    print(f"[discover] OTH: no unnamed cluster with anchors -> empty {oth_out}", file=sys.stderr)
 left = [r["c"] for r in unnamed if r["c"] != oth]
 if left:
     print(f"[discover] NOTE: {len(left)} more unnamed cluster(s) {left}. Supervised K={K} needs "
           f"K distinct labels, so a super-pop will be missing and 4a stops below. The table "
           f"above says why each cluster went unnamed.", file=sys.stderr)
+with open(anchor_table_out, "w") as g:
+    g.write("cluster\tname\tsample\tcohort\tpop\tmeta_super_pop\tQ\tdist_to_centre\t"
+            "rank_Q\trank_dist\trank_sum\tselected\n")
+    for c, nm, i, q, d, rq, rd, sc, s in SEL:
+        g.write(f"{c}\t{nm}\t{samples[i]}\t{CO[i]}\t{POPL[i]}\t{SP[i]}\t{q:.6f}\t"
+                f"{'NA' if d is None else f'{d:.5f}'}\t{rq:g}\t{'NA' if rd is None else f'{rd:g}'}\t"
+                f"{sc:g}\t{s}\n")
 print(f"[discover] cluster table -> {table_out}", file=sys.stderr)
+print(f"[discover] every anchor candidate, its Q, distance and ranks -> {anchor_table_out}", file=sys.stderr)
 PYEOF
 
 # Every one of the K labels must be populated or ADMIXTURE --supervised will
