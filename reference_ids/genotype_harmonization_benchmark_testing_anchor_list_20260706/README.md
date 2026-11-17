@@ -25,9 +25,11 @@ imputation servers' panels).
 - **July's K=5 run used them as its supervised anchors.** The `assigned`
   column of `../lai_ref_panel_samples.tsv` is these lists less the samples
   July's panel did not contain: EUR 49, AFR 46, EAS 50, SAS 48, AMR 50.
-- **4a `HOMOG_SET=lai3way`** (K=5, the 3-way LAI simulation's AMR panel) takes
-  its anchors from that `assigned` column, so it is anchored on these lists
-  as July was (`ANCHOR_SOURCE=table`).
+- **4a `HOMOG_SET=lai3way`** (K=5, the 3-way LAI simulation's AMR panel) does
+  NOT reuse them: it finds its anchors from its own unsupervised fit on the
+  expanded panel (central, Q >= 0.94), as the K=7 run does, and reports how
+  many of these by-name anchors it picks again. `ANCHOR_SOURCE=table`
+  reproduces July's by-name anchors for a comparison run.
 - **The benchmark's own anchors are not these.** 4a `HOMOG_SET=global` (K=7,
   every sample) discovers central, high-Q anchors from the data and writes
   them to `../<sp>_anchors.k7.txt`; the benchmark's donor / reference split

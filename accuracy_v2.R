@@ -49,6 +49,8 @@ CHRS   <- if (nzchar(Sys.getenv("CHRS"))) {
 # track; finalize passes TRACKS_TO_RUN so the other track is not counted as
 # 22 x panels "skipped" combos.
 TRACKS <- strsplit(trimws(Sys.getenv("TRACKS_TO_RUN", "NAT NATMXB")), "[ ,+]+")[[1]]
+TRACKS <- TRACKS[nzchar(TRACKS)]
+if (!length(TRACKS)) TRACKS <- c("NAT", "NATMXB")   # set but empty: both, as before
 PANELS <- strsplit(Sys.getenv("PANELS_TO_RUN",
                               "NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB NAT_HGDPMXB_FULL NAT_HOMOG"),
                    " +")[[1]]

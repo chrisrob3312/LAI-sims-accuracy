@@ -16,9 +16,10 @@
 #            4a_build_homogeneity_panel_kN_clm.sh, HOMOG_SET=global / lai3way):
 #              global  K=7, every sample, central high-Q anchors (Q >= 0.94),
 #                      homogeneous at Q >= 0.94 -- for the benchmark
-#              lai3way K=5 as July (EUR AFR AMR EAS SAS, July's anchors, MEN/
-#                      OCE/no-super-pop left out), Q >= 0.94 -- writes the
-#                      3-way HOMOG arms' amr_homog_rfmix.txt
+#              lai3way K=5 on July's five super-pops (EUR AFR AMR EAS SAS),
+#                      MEN/OCE/no-super-pop left out, anchors found by its own
+#                      unsupervised fit (central, Q >= 0.94), Q >= 0.94 -- writes
+#                      the 3-way HOMOG arms' amr_homog_rfmix.txt
 #            Both: every super-pop <= 7% missing, every cohort <= 15%; LD prune
 #            on the unrelated set; relatives projected.
 #   Stages 4-6, once per cohort in COHORTS (default Brasa:12:NAT
@@ -416,11 +417,12 @@ fi
 #           pruned on the unrelated fit set; unsupervised -> central high-Q
 #           anchors (Q >= 0.94) -> supervised; homogeneous at Q >= 0.94.
 #           For the genotype-harmonization benchmark (run_benchmark_cohort.sh).
-#   lai3way (HOMOG_SET=lai3way, K=5) -- the 3-way LAI simulation's AMR panel,
-#           judged as July judged it: EUR AFR AMR EAS SAS with July's anchors,
-#           MEN / OCE / no-super-pop samples left out of the run, Q >= 0.94.
-#           Publishes reference_ids/amr_homog_rfmix.txt (July's AMR panel + the
-#           AMR samples new since July that pass) for the HOMOG arms.
+#   lai3way (HOMOG_SET=lai3way, K=5) -- the 3-way LAI simulation's AMR panel:
+#           July's five super-pops (EUR AFR AMR EAS SAS), MEN / OCE /
+#           no-super-pop samples left out of the run, anchors found by its own
+#           unsupervised fit (central, high-Q) instead of July's by-name lists,
+#           Q >= 0.94. Publishes reference_ids/amr_homog_rfmix.txt (July's AMR
+#           panel + every AMR sample homogeneous here; HOMOG_3WAY_MODE).
 # Stages 4-6 wait on lai3way only; the benchmark waits on global. They share
 # 1e's KING table and one concatenated input (built under a lock).
 #

@@ -100,8 +100,11 @@ case and accounts for that group's entire 10-point gap; GIH is the SAS case.
 These belong in the methods; they are not defects to tune away.
 
 Donor pools for the 1000G-rich super-pops are bounded by their non-1000G
-supply. On the projection: **SAS 24 donors, AFR 47, EUR 59** — against 335,
-569 and 555 in set 1. SAS at 24 is thin.
+supply. An early projection gave **SAS 24 donors, AFR 47, EUR 59** — against
+335, 569 and 555 in set 1 -- but it predates the current panel (SAS was then
+judged only on July's 48 by-name anchors; no SGDP, no Almarri, no 0.94 / K=7)
+and is stale (17 Nov 2026). The split prints the real counts
+(`--dry-run` previews them on any 4a table).
 
 ## The SAS consequence, and what absorbs it
 

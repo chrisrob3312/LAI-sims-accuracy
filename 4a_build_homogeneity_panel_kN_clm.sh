@@ -55,13 +55,16 @@
 #     the number of named super-pops brings OTH back as the leftover cluster.
 #
 #   HOMOG_SET=lai3way -- K=5 for the 3-way NAT/EUR/AFR LAI accuracy simulation,
-#     judged the way July's K=5 run judged its samples: super-pops EUR AFR AMR
-#     EAS SAS, and July's own supervised anchors (the `assigned` column of
-#     reference_ids/lai_ref_panel_samples.tsv), with MEN, OCE and samples of no
-#     known super-pop left out of the run. Its only product the pipeline reads
-#     is reference_ids/amr_homog_rfmix.txt: July's AMR panel plus the AMR
-#     samples new since July (SGDP, restored HGDP, 1KG relatives) that pass
-#     here at Q >= 0.94, minus donors and their relatives.
+#     on the same five super-pops as July's K=5 run (EUR AFR AMR EAS SAS), with
+#     MEN, OCE and samples of no known super-pop left out of the run. The
+#     anchors are FOUND the same way as the global set's -- unsupervised K=5,
+#     then per cluster the central, high-Q (>= 0.94) samples carrying its label
+#     -- rather than taken by name as July's were (the 6 Jul Koenig lists). On
+#     the expanded set (HGDP, 1KG, MXB, SGDP) many will be the same people, but
+#     the group can differ and the homogeneous panel can be fuller.
+#     Its only product the pipeline reads is reference_ids/amr_homog_rfmix.txt:
+#     July's AMR panel together with every AMR sample homogeneous here at
+#     Q >= 0.94 (HOMOG_3WAY_MODE), minus donors and their relatives.
 #
 # Both sets use the same marker rule, fit set and projection, below.
 #
@@ -84,8 +87,8 @@
 #      order, so what follows reads it exactly as before; relatives cannot be
 #      anchors. Per-sample record: admixture_fit_set.k${K}.tsv.
 #
-#   STAGE A (unsupervised fit, then DATA-FIRST anchor discovery; HOMOG_SET=
-#     lai3way skips discovery and takes July's anchors, ANCHOR_SOURCE=table):
+#   STAGE A (unsupervised fit, then DATA-FIRST anchor discovery -- both sets;
+#     ANCHOR_SOURCE=table instead takes the anchors from a table by name):
 #     Unsupervised ADMIXTURE at K. For each cluster, rank every eligible
 #     sample by its loading and NAME the cluster from its top ANCHOR_CAP at
 #     Q >= ANCHOR_MIN_Q (plurality metadata super-pop, purity >=
@@ -164,17 +167,18 @@ REFS="${REFS:-${REPO_DIR}/reference_ids}"
 #   samples       every panel sample             MEN, OCE and NA left out --
 #                                                of the missingness rule and of
 #                                                the ADMIXTURE fit
-#   anchors       discovered (central, high Q)   July's (ANCHOR_SOURCE=table)
+#   anchors       discovered (central, high Q)   discovered the same way, at K=5
 #   output dir    $HOMOG_DIR                     $HOMOG_DIR/lai3way_k5
 #   publishes     <sp>_homog_rfmix.k7.txt        amr_homog_rfmix.txt (3-way)
 #   homog BCFs    homog_7pop/                    none (no arm reads them)
 #
-# July's anchors (4a_build_homogeneity_panel_clm.sh, from the 6 Jul lists):
-# EUR 49 HGDP French/Orcadian/Sardinian/Russian, AFR 46 HGDP Mandenka/Yoruba/
-# Bantu, EAS 50 HGDP Japanese/Han/Yakut, SAS 48 HGDP Sindhi/Makrani/Balochi/
-# Brahui, AMR 50 MXB. July also ran MEN/OCE/NA samples in the fit, unlabelled;
-# this set leaves them out, as decided. Its 1KG and HGDP samples are fitted
-# exactly as in the global set (unrelated fit, relatives projected).
+# July's K=5 run took its anchors BY NAME (the 6 Jul Koenig lists: HGDP EUR,
+# AFR, EAS, SAS and 50 MXB; reference_ids/genotype_harmonization_benchmark_
+# testing_anchor_list_20260706/) and ran MEN/OCE/NA samples in the fit,
+# unlabelled. lai3way finds its anchors from its own unsupervised fit instead
+# (decided 17 Nov), on the expanded sample set, and leaves MEN/OCE/NA out.
+# ANCHOR_SOURCE=table reproduces July's by-name anchors (the `assigned` column
+# of ANCHOR_FROM_TABLE), for comparison only.
 HOMOG_SET="${HOMOG_SET:-global}"
 case "$HOMOG_SET" in
     global)
@@ -189,7 +193,7 @@ case "$HOMOG_SET" in
         K="${K:-5}"
         SUPERPOPS="EUR AFR AMR EAS SAS"
         SET_DIR="${SET_DIR:-${HOMOG_DIR}/lai3way_k${K}}"
-        ANCHOR_SOURCE="${ANCHOR_SOURCE:-table}"
+        ANCHOR_SOURCE="${ANCHOR_SOURCE:-discover}"
         HOMOG_BCFS="${HOMOG_BCFS:-0}"
         # Sites polymorphic only in the samples this set leaves out (1c's
         # soft-union keeps OCE and MEN singletons) carry no allele in the set.
@@ -202,8 +206,9 @@ esac
 case "$ANCHOR_SOURCE" in discover|table) ;; *)
     echo "ERROR: ANCHOR_SOURCE must be discover or table, got '${ANCHOR_SOURCE}'" >&2; exit 1 ;;
 esac
-# ANCHOR_SOURCE=table: the anchors are the `assigned` labels of this table
-# (July's K=5 run by default) -- the same file the 3-way AMR panel is built on.
+# ANCHOR_SOURCE=table (not the default for either set): the anchors are the
+# `assigned` labels of this table, July's K=5 run by default -- July's by-name
+# anchors, for a comparison run.
 ANCHOR_FROM_TABLE="${ANCHOR_FROM_TABLE:-${REFS}/lai_ref_panel_samples.tsv}"
 
 # Two DISTINCT thresholds (do not conflate), both 0.94 for EVERY super-pop
@@ -1144,14 +1149,14 @@ python3 -I - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" 
     "$SAMPLE_GROUPS" "$MXB_POPINFO" "$SGDP_MANIFEST" "$ALMARRI_META" "$PANEL_EXCLUDE" "$ANCHOR_INELIG" \
     "$REFS" "$SUPERPOPS" "$OTH_ANCHORS" "$DISCOVERY_TABLE" \
     "$ANCHOR_SELECT" "${PCA_PREFIX}.eigenvec" "${PCA_PREFIX}.eigenval" "$ANCHOR_CENTER_MIN_Q" \
-    "$GNOMAD_META" "$ANCHOR_TABLE" "$WANT_OTH" <<'PYEOF'
+    "$GNOMAD_META" "$ANCHOR_TABLE" "$WANT_OTH" "$ANCHOR_FROM_TABLE" <<'PYEOF'
 import sys, re, csv, math
 from collections import Counter
 
 (fam_f, qu_f, K, thresh, cap, strict_q, strict_sps, purity_min, cohort_warn,
  groups_f, mxb_f, sgdp_f, almarri_f, excl_f, dup_f, refs, superpops,
  oth_out, table_out, select, evec_f, eval_f, center_min_q, gnomad_f,
- anchor_table_out, want_oth) = sys.argv[1:27]
+ anchor_table_out, want_oth, july_table) = sys.argv[1:28]
 want_oth = want_oth == "1"
 K = int(K); thresh = float(thresh); cap = int(cap)
 strict_q = float(strict_q) if strict_q else None
@@ -1268,6 +1273,18 @@ if select == "central":
     print(f"[discover] central anchor choice: {len(PC)} fitted samples in {len(pcc)} PCs "
           f"(eigenvalues {', '.join(f'{x:.1f}' for x in ev[:len(pcc)])}); centre = median of the "
           f"candidates at Q >= {center_min_q}", file=sys.stderr)
+
+# July's K=5 supervised anchors (the `assigned` column of its table), to
+# report how many of them discovery picks again. Reporting only.
+JULY = {}
+try:
+    with open(july_table) as fh:
+        for r in csv.DictReader(fh, delimiter="\t"):
+            lab = (r.get("assigned") or "-").strip()
+            if lab not in ("", "-"):
+                JULY.setdefault(lab, set()).add(r["sample"])
+except (FileNotFoundError, KeyError, TypeError):
+    pass
 
 def avg_ranks(vals):
     """1 = smallest value; tied values share their average rank."""
@@ -1457,8 +1474,12 @@ for sp in SUPERPOPS:
         top, note = choose(c, sp, sp, pool)
     write(out, top)
     cur = ids(f"{refs}/{sp.lower()}_rfmix.txt")
-    report(sp, c, top, note, out,
-           f"; {len({samples[i] for i in top} & cur)} also in {sp.lower()}_rfmix.txt" if cur else "")
+    extra = f"; {len({samples[i] for i in top} & cur)} also in {sp.lower()}_rfmix.txt" if cur else ""
+    # July's K=5 anchors were chosen by name; how many of them the data picks again.
+    if JULY.get(sp):
+        extra += (f"; {len({samples[i] for i in top} & JULY[sp])} of July's {len(JULY[sp])} "
+                  f"by-name {sp} anchors (of them {len(JULY[sp] & set(samples))} in this run)")
+    report(sp, c, top, note, out, extra)
 if oth is not None:
     oth_top, note = choose(oth, "OTH", None, rows[oth]["passing"])
     write(oth_out, oth_top)
@@ -2253,18 +2274,23 @@ echo "  per-super_pop ID lists -> ${SET_DIR}/homog_${K}pop_by_superpop/"
 # read reference_ids/amr_homog_rfmix.txt, and nothing wrote it: the HOMOG fork
 # silently kept whatever list an earlier run had left. Now:
 #
-#   lai3way  reference_ids/amr_homog_rfmix.txt, the list those arms read =
-#            July's K=5 AMR panel + the AMR samples new since July that pass
-#            HERE (K=5, 0.94), minus every donor, donor's relative, duplicate
-#            and exclusion (scripts/build-3way-amr-homog.py; also kept as
-#            amr_homog_rfmix.3way.txt). The previous list is preserved beside
-#            it as amr_homog_rfmix.superseded.txt when it changes.
-#            HOMOG_3WAY_BASE= (empty) publishes this run's own AMR list instead.
+#   lai3way  reference_ids/amr_homog_rfmix.txt, the list those arms read
+#            (scripts/build-3way-amr-homog.py; also kept as
+#            amr_homog_rfmix.3way.txt), by HOMOG_3WAY_MODE:
+#              union (default)  July's K=5 AMR panel + every AMR sample
+#                               homogeneous HERE (K=5, discovered anchors, 0.94)
+#              keep-july        July's panel + only samples July never saw
+#              current          this run's AMR homogeneous samples only
+#            each minus every donor, donor's relative, duplicate and exclusion.
+#            The builder prints all three groups whatever the mode. The
+#            previous list is preserved beside it as
+#            amr_homog_rfmix.superseded.txt when it changes.
 #   global   versioned reference_ids/<sp>_homog_rfmix.k7.txt only. Nothing in
 #            the 3-way pipeline reads them; the benchmark split reads the K=7
 #            table itself (lai_ref_panel_samples.k7.tsv).
 # ---------------------------------------------------------------------------
 HOMOG_3WAY_BASE="${HOMOG_3WAY_BASE-${REFS}/lai_ref_panel_samples.tsv}"
+HOMOG_3WAY_MODE="${HOMOG_3WAY_MODE:-union}"
 if [[ "$HOMOG_SET" == "global" ]]; then
     for _SP in $SUPERPOPS; do
         _src="${SET_DIR}/homog_${K}pop_by_superpop/${_SP}_homog_samples.txt"
@@ -2280,8 +2306,8 @@ else
         [[ -s "$HOMOG_3WAY_BASE" ]] || { echo "ERROR: HOMOG_3WAY_BASE ${HOMOG_3WAY_BASE} missing" >&2; exit 1; }
         python3 -I "${REPO_DIR}/scripts/build-3way-amr-homog.py" --base "$HOMOG_3WAY_BASE" \
             --table "$SAMPLES_TSV" --exclude "$SIM_DONORS" --out "${REFS}/amr_homog_rfmix.3way.txt" \
-            | sed 's/^/    /'
-        _pub="${REFS}/amr_homog_rfmix.3way.txt"; _what="the 3-way set (July K=5 + new since July at K=${K})"
+            --mode "$HOMOG_3WAY_MODE" | sed 's/^/    /'
+        _pub="${REFS}/amr_homog_rfmix.3way.txt"; _what="the 3-way set (${HOMOG_3WAY_MODE}: July's K=5 AMR panel and this K=${K} run)"
     else
         _pub="${SET_DIR}/homog_${K}pop_by_superpop/AMR_homog_samples.txt"; _what="this run's own AMR list"
         [[ -s "$_pub" ]] || { echo "ERROR: no AMR sample is homogeneous in this run (${_pub})" >&2; exit 1; }

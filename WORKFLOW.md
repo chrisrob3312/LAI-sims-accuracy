@@ -699,17 +699,18 @@ named super-pops.
 
 **Two homogeneity panels, one script (17 Nov): `HOMOG_SET`.** The 3-way
 NAT/EUR/AFR LAI simulation and the genotype-harmonization benchmark need
-different panels, and the 3-way one must be judged the way July judged it,
-not by the K=7 run:
+different panels. The 3-way one is judged at K=5 on July's five super-pops
+(never by the K=7 run), with its anchors found by its own unsupervised fit on
+the expanded panel rather than taken by name as July's were:
 
 | | `HOMOG_SET=global` (default) | `HOMOG_SET=lai3way` |
 |---|---|---|
 | for | the benchmark, the global panel | the 3-way simulation's HOMOG arms |
 | K, super-pops | 7: EUR AFR AMR EAS SAS OCE MEN | 5: EUR AFR AMR EAS SAS |
 | samples | every panel sample | MEN, OCE and no-super-pop samples left out of the missingness rule, the LD prune and both fits |
-| anchors | discovered: central and high-Q (≥ 0.94) | July's (`assigned` column of `reference_ids/lai_ref_panel_samples.tsv` = the 6 Jul lists: HGDP EUR 49, AFR 46, EAS 50, SAS 48; MXB 50), kept in the fit when a relative pair has to lose one |
+| anchors | discovered: central and high-Q (≥ 0.94) | discovered the same way at K=5, among its own samples (`reference_ids/<sp>_anchors.k5.txt`); the log counts how many are July's by-name anchors again (the 6 Jul lists: HGDP EUR 49, AFR 46, EAS 50, SAS 48; MXB 50) |
 | homogeneous | Q ≥ 0.94 and argmax = label | the same |
-| writes | `04_homogeneity_panel/*.k7.*`, `reference_ids/<sp>_homog_rfmix.k7.txt`, `homog_7pop/` BCFs | `04_homogeneity_panel/lai3way_k5/`, and `reference_ids/amr_homog_rfmix.txt` = July's AMR panel + AMR samples new since July that pass here, minus donors and their relatives |
+| writes | `04_homogeneity_panel/*.k7.*`, `reference_ids/<sp>_homog_rfmix.k7.txt`, `homog_7pop/` BCFs | `04_homogeneity_panel/lai3way_k5/`, and `reference_ids/amr_homog_rfmix.txt` = July's AMR panel + every AMR sample homogeneous here (`HOMOG_3WAY_MODE=union`; `keep-july` adds only samples July never saw, `current` uses this run alone), minus donors and their relatives |
 
 Both use the same rule (each super-pop ≤ 7% missing, each cohort ≤ 15%,
 measured on the set's own samples; no global MAF; LD on the unrelated fit set;
@@ -1100,8 +1101,9 @@ problem, not a coordinate bug.
 
 **Both halves carry power and GWAS simulations.** ~500 real genomes alone is
 too few; ~2,660 together is workable. But simulated individuals from a finite
-donor pool are cryptic relatives **by construction** — SAS at ~24 donors for
-200 SASEUR individuals is the binding case.
+donor pool are cryptic relatives **by construction** — the thinnest donor
+pool is the binding case (SAS was once projected at ~24; that projection is
+stale, and the split prints the real counts).
 
 That need not bias anything: the GWAS uses **GENESIS with a GRM**, which models
 relatedness rather than pruning it. What relatedness costs is **effective**

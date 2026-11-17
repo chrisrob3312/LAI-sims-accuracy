@@ -16,7 +16,7 @@
 #                          |
 #         4a global K=7 (the benchmark's panel: every sample, data-first
 #            discovery)   +   4a lai3way K=5 (the 3-way simulation's AMR panel:
-#            July's anchors, MEN/OCE left out)            (side by side)
+#            EUR AFR AMR EAS SAS, MEN/OCE left out, discovery) (side by side)
 #                          |  (lai3way)
 #         publication stages 4-6, per cohort (Brasa gen 12, MexLike gen 16):
 #         2b simulation -> RFMix/FLARE arms -> finalize

@@ -68,7 +68,7 @@ NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE}"
 # 1000 Genomes ONLY, NAT adds half the MXB, MEN a third of its pool. 1KG can
 # never BE a donor, so spending non-1KG samples on a role 1KG already fills
 # wastes the only donor-eligible material there is -- it roughly doubles the
-# SAS donor pool, which is the binding constraint on N_eff.
+# SAS donor pool, the thinnest pool and so the likeliest limit on N_eff.
 REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.33}"
 # ...but 1000 Genomes carries none of the deeply divergent lineages the other
 # sources do (no Biaka/Mbuti/San/Mandenka in AFR, no Basque/Sardinian/Orcadian

@@ -394,7 +394,10 @@ section "8. ADMIXTURE: global K=${K} and lai3way K=${K3} (4a_build_homogeneity_p
 jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'
 jobs_of 4a_homog_lai3way '4a_homog_kN_<job>.out/.err'
 check_4a "global K=${K}" "$K" "$HOMOG_DIR" reference_ids "afr eur eas sas amr men oce"
-check_4a "lai3way K=${K3}" "$K3" "$LAI3_DIR" "${LAI3_DIR}/anchors" "afr eur eas sas amr"
+# lai3way discovers its anchors into reference_ids/ as *.k5 (ANCHOR_SOURCE=table would
+# put July's into its own anchors/ folder).
+_A3=reference_ids; [[ -d "${LAI3_DIR}/anchors" ]] && compgen -G "${LAI3_DIR}/anchors/*_anchors.k${K3}.txt" > /dev/null && _A3="${LAI3_DIR}/anchors"
+check_4a "lai3way K=${K3}" "$K3" "$LAI3_DIR" "$_A3" "afr eur eas sas amr"
 if [[ -s reference_ids/amr_homog_rfmix.txt && -f "$HOMOG_3WAY" && reference_ids/amr_homog_rfmix.txt -nt "$P22" ]]; then
     pass "3-way AMR panel reference_ids/amr_homog_rfmix.txt: $(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) IDs, written after the phased panel (4a lai3way)"
 else

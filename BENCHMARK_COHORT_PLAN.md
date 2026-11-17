@@ -149,7 +149,7 @@ Donors are the `--mode benchmark` donor half from
 donor** (the imputation servers' panels contain 1000 Genomes; a 1KG donor
 would be imputed against its own haplotypes).
 
-| component | donor populations | projected donors |
+| component | donor populations | projected donors (STALE -- see below) |
 |---|---|---|
 | **NAT** | MXB (Nahua, Zapotec/Mazatec, Maya, Totonac, Tzotzil, Tarahumara, Huichol) + HGDP (Karitiana, Surui, Pima, Colombian) + SGDP | ~46 |
 | **EUR** | HGDP (French, Sardinian, Basque, Tuscan, Orcadian, Russian, Adygei) | ~59 |
@@ -163,10 +163,21 @@ Mexican-like cohort is simulated from Mexican haplotypes *and* tested against
 a reference panel that represents them. The 25/25 split is already built and
 stratified by genetic cluster (`split_mxb_samples.R`).
 
-**SAS at ~24 donors is the binding constraint.** 48 haplotypes for 200 SASEUR
-individuals is heavy reuse, which makes simulated SAS individuals cryptic
-relatives of each other — the intake's `7.sim_kinship` check is what detects
-it. See §5.
+**These projected counts are stale (17 Nov 2026) and should not be quoted.**
+They were projected before the current panel: before SAS was judged beyond
+July's 48 by-name anchors (July's table labelled every other Central/South
+Asian sample NA -- 504 1KG SAS and 131 HGDP CSA never judged), before SGDP and
+Almarri were in the fit, and before the 0.94 cut and K=7. The 16 Nov K=8 run
+already had far more homogeneous SAS and fewer homogeneous MEN than this
+table. The real counts come from the split on the K=7 table:
+`run_benchmark_cohort.sh` prints them, and `split-homog-donors-reference.py
+--mode benchmark ... --dry-run` previews them on any table without writing.
+Benchmark donors are the NON-1KG homogeneous samples (AFR/EUR/EAS/SAS take
+their reference from 1KG), so the SAS donor pool is the homogeneous HGDP CSA
+and SGDP SAS outside the imputation panels.
+
+If SAS turns out thin after all, the reuse is what the intake's
+`7.sim_kinship` check detects. See §5.
 
 ## 3. The real genomes — test samples, not donors
 
@@ -249,7 +260,7 @@ simulated is about 2,660, which can.
 The cost is that simulated individuals drawn from a finite donor pool are
 cryptic relatives *by construction* — two individuals built from the same
 donor haplotypes share long stretches, and the thinner the pool the worse it
-is (SAS, ~24 donors for 200 SASEUR individuals, is the binding case). That
+is (SAS was projected as the binding case; see §2 for why that projection is stale). That
 does **not** have to bias anything: the GWAS uses GENESIS with a GRM, which
 models relatedness rather than pruning it, and power simulations run through
 the same machinery inherit that. What relatedness costs is **effective**
@@ -326,7 +337,8 @@ effect, and the reverse.
 
 ## 5. The two decisions the real counts will force
 
-**SAS.** ~24 donors for 200 SASEUR individuals. Options, in preference order:
+**SAS** -- if the split's real count is thin for 200 SASEUR individuals (the
+~24 once projected is stale, §2). Options, in preference order:
 reduce SASEUR's n; accept the reuse and report the kinship distribution; or
 drop SASEUR to control-only and rely on real admixed SAS for the imputation
 readings. The LAI reading is the one that suffers either way.

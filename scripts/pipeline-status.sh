@@ -275,7 +275,7 @@ else
     printf ' %-34s %s\n' "K=${K} panel table" "not started"
 fi
 
-# 5. The 3-way simulation's panel: 4a HOMOG_SET=lai3way (K=5, July's anchors)
+# 5. The 3-way simulation's panel: 4a HOMOG_SET=lai3way (K=5, discovered anchors)
 L3="${HOMOG_DIR}/lai3way_k5/lai_ref_panel_samples.k5.tsv"
 if [[ -s "$L3" ]]; then
     tot=$(awk 'NR>1' "$L3" | wc -l); inc=$(awk -F'\t' 'NR>1 && $NF==1' "$L3" | wc -l)
