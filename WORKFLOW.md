@@ -110,12 +110,22 @@ F. LAI SIMULATION + ACCURACY   publication stages 4-6, chained to 4a
     - admix-simu donors from the phased panel (plink2 --export haps): NAT
       (HGDP) and NATMXB (HGDP + MXB) tracks; EUR = IBS, AFR = YRI
     - simulated admixed haplotypes + truth .bp / .hanc per track
-  3b_{wgs,homog_wgs,chip_wgs,chip_homog_wgs}-rfmix + 3b_flare_wgs
-    - RFMix v1.5.4 (and FLARE) over 4 reference panels x 2 sim tracks x 22 chr;
-      WGS and chip-density (GSA) arms, main and HOMOG (Q-filtered) panels
+  3b_{wgs,homog_wgs,chip_wgs,chip_homog_wgs}-rfmix + 3b_flare_wgs (x4)
+    - RFMix v1.5.4 AND FLARE on the same grid: reference panels x 2 sim
+      tracks (NAT = Brazilian-like, NATMXB = Mexican-like) x 22 chr; WGS and
+      chip-density (GSA) arms, main and HOMOG panels -- 8 arrays (17 Nov:
+      FLARE WGS HOMOG, chip main and chip HOMOG added; FLARE's HGDPMXB_FULL
+      NAT list now built like 3b's, no longer from the panel5 keep file,
+      which also held the IBS/YRI IDs and failed every such task)
+    - references: 1KG IBS (EUR), 1KG YRI (AFR), NAT lists, amr_homog_rfmix
+      (see reference_ids/rerun_jessicaH_3way_lai_sim/README.md)
   finalize_pilot.sbatch
-    - checks no broken .classes, scores WGS + chip (accuracy_v2.R),
-      commits + pushes the TSVs; slides/tables regenerate on the main-loop side
+    - checks no broken .classes, scores RFMix WGS + chip and FLARE WGS + chip
+      with the same scorer (accuracy_v2.R; scripts/flare-to-lat3.py puts
+      FLARE's .anc.vcf.gz in the .Lat3/.classes/.done layout, ancestry codes
+      mapped by name from its ##ANCESTRY header), asserts 22/22 chromosomes in
+      every table, commits + pushes results/accuracy_pilot{,_chip_gsa,_flare,
+      _flare_chip_gsa}; slides/tables regenerate on the main-loop side
 
 G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
   scripts/split-homog-donors-reference.py   twice, distinct suffixes
@@ -147,6 +157,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | after 4a | `python3 -I scripts/donor-switch-plan.py --table <lai_ref_panel_samples.k7.tsv, or .k8> --kin <king.kin0> --refs reference_ids --out-dir results/donor_plan` — per donor list and population, the same-size donor set from the same population that keeps the fewest relatives out of the reference (relative-free first, then both parents of a trio), never two related donors, never a curated-reference member or relative (a current donor who is one MUST be replaced: 2b refuses it), keeping as many current donors as possible; writes `<list>.proposed.txt`, `donor_plan_summary.tsv`, `donor_plan_changes.tsv`. Proposals only: copying one into `reference_ids/` is a separate step, and 4a must rerun before 2b | no |
 | after 4a (4a runs it) | `python3 -I scripts/build-3way-amr-homog.py --base reference_ids/lai_ref_panel_samples.tsv --table <lai_ref_panel_samples.k7.tsv> --exclude <admixture_k7/simulation_donors.all.txt> --out <list>` -- the AMR reference of the 3-way HOMOG arms: July's K=5 AMR homogeneous samples still in the panel, plus AMR samples new since July (SGDP, restored HGDP, 1KG relatives) homogeneous in this run, minus donors, their relatives, duplicates and exclusions; reports what was kept, dropped and added | writes only the list |
 | inside 4a | `bash scripts/admix-site-list.sh <chr> <out.bed>` -- one chromosome's ADMIXTURE site list under the 17 Nov rule (every super-pop <= 7%, every cohort <= 15%), from 1c's pre-phasing soft-union, groups rebuilt as 1c built them; `--groups` writes only the groups | writes only its outputs |
+| finalize runs it | `python3 -I scripts/flare-to-lat3.py --flare-dir <03_flare[_gsa_jessica]/Brasa/gen12> --out-dir <same>/lat3 --gen 12 --jobs 4` -- FLARE's calls in the layout accuracy_v2.R reads (`.Lat3` per site and haplotype, `.classes` all 0, `.done`); ancestry codes mapped by name from the `##ANCESTRY` header; a missing header or an ancestry other than NAT/EUR/AFR stops it | writes only `lat3/` |
 | any time after 1c | `bash scripts/admix-rule-compare.sh` — the ADMIXTURE site list under five versions of the missingness rule (`sp07_coh15`: every super-pop ≤ 7%, every cohort ≤ 15% -- the 17 Nov rule; `coded`: every cohort × super-pop ≤ 15%, panel ≤ 7%; `sp07_tot15`: every super-pop ≤ 7%, panel ≤ 15%; `grp07`: every cohort × super-pop ≤ 7%, panel ≤ 7%; `sp15_tot07`: every super-pop ≤ 15%, panel ≤ 7%), from the published pre-phasing soft-union with 1c's own groups; `coded` must come out IDENTICAL to 1c's list. `CHRS="$(seq 1 22)" RULES=<rule>` writes all 22 lists, which 4a reads with `ADMIX_SITES_TPL=<out>/<rule>/merged_chr%s.admix_sites.bed` — a rule change without re-running 1c | writes only its own folder |
 | any time after a stage ends | `SWEEP=1 bash scripts/failure-report.sh` — the failure report plus section 6: every task's `.err` and `.out` of the current run, completed ones too, lines grouped across tasks with numbers made generic -- those with a warning/error word (htslib `[W::]`/`[E::]` included), every other `.err` line, and `.out` lines only a few tasks print; one raw example each. Screen shows `SWEEP_CAP` (15) groups per stage, the report file all | report file only |
 | after any failure | `bash scripts/failure-report.sh` — per stage the current run's task states (a pending array range counted as its tasks; any job name no stage script sets, e.g. an interactive `bash`, marked "not a pipeline job"); every task that did not complete (state, exit code, run time vs limit, MaxRSS vs memory asked, node, log paths); failures grouped by stage/state/exit code with their nodes; the full `.err`/`.out` of the first failure of each kind; what is still queued and why. Whole report, logs uncut, in `logs/failure_report_<date>.txt` | report file only |
@@ -404,10 +415,10 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    23, Orcadian 12, Sardinian 8, Russian 6 and the AFR reference HGDP Yoruba
    21, Mandenka 20, BantuKenya 6 -- not the design (Jessica's lists, described
    in 4a_build_homogeneity_panel_clm.sh: EUR = 77 1KG IBS, AFR = 77 1KG YRI,
-   kept in `reference_ids/backup_pre_koenig/`). `eur_rfmix.txt` and
+   kept in `reference_ids/rerun_jessicaH_3way_lai_sim/`, named `backup_pre_koenig/` until 17 Nov). `eur_rfmix.txt` and
    `afr_rfmix.txt` now hold those lists exactly as July's panel used them
    (74 IBS, 72 YRI: the other 8 IDs were relatives July's panel did not
-   contain); the HGDP lists are in `reference_ids/backup_koenig_jul06/`. The
+   contain); the HGDP lists are in `reference_ids/benchmark_hgdp_anchors_jul06/` (they serve the harmonization benchmark's non-1KG needs). The
    donors (IBS, YRI) stay disjoint from them and, with
    `scripts/donor-switch-plan.py`, unrelated to them. The four RFMix arms now
    key their cached reference haplotypes (`IBS_1KG_chrN.haps` ...) by the

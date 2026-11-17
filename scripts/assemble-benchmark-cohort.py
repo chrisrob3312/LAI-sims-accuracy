@@ -29,14 +29,14 @@ exclusions:
 
 Dropping any one of the four silently inflates accuracy.
 
-THE HOMOGENEITY THRESHOLD IS TIERED BY DEFAULT.
-BENCHMARK_COHORT_PLAN.md section 3 writes a flat 0.93. The homogeneity panel
-that 4a builds uses 0.95 for EUR/EAS/AFR and 0.93 for AMR/OCE/MEN/SAS, because
-the deeply sampled super-pops can meet a stricter bar and the others cannot.
-Classifying test genomes on a flat bar while the panel uses a tiered one would
-put samples in real_homogeneous that the panel itself rejects as insufficiently
-homogeneous. So the tiered thresholds are the default here; --flat-threshold
-reproduces the plan document's literal reading.
+THE HOMOGENEITY THRESHOLD IS 0.94 FOR EVERY SUPER-POP (17 Nov).
+4a uses one number, 0.94, for anchors and the homogeneous panel, and the
+contract's flat threshold is 0.94 too (it was 0.93 against the panel's tiered
+0.95/0.93, so the two could disagree for EUR/EAS/AFR samples between 0.93 and
+0.95). Classifying test genomes on the same bar as the panel keeps
+real_homogeneous from admitting samples the panel itself rejects. The tier
+constants below remain so a tiered panel can be mirrored again; with no strict
+super-pops they reduce to the one number. --flat-threshold overrides both.
 
 Usage:
   python3 -I scripts/assemble-benchmark-cohort.py \\
@@ -100,9 +100,9 @@ CELLS = [(c, b) for c in CHIPS for b in BUILDS]   # six, fixed order
 #                 imputation; both effects paired.
 DESIGNS = ("paired-builds", "one-cell", "full")
 
-THRESH_STRICT = 0.95
-STRICT_SUPERPOPS = ("EUR", "EAS", "AFR")
-THRESH_RELAXED = 0.93
+THRESH_STRICT = 0.94
+STRICT_SUPERPOPS = ()           # 4a's tiers, now none: 0.94 for every super-pop
+THRESH_RELAXED = 0.94
 
 
 def read_tsv(path):
@@ -231,8 +231,8 @@ def main():
                          "smaller than this is marked reference_support=thin")
     ap.add_argument("--flat-threshold", type=float, default=None,
                     help="use one homogeneity threshold for every super-pop "
-                         "(the plan document's literal 0.93) instead of the "
-                         "tiered thresholds 4a applies")
+                         "(the contract's flat 0.94) instead of the "
+                         "per-super-pop constants mirroring 4a")
     ap.add_argument("--models", default="reference_ids/models.tsv",
                     help="the model table (Doc 20's models.tsv). Model sizes "
                          "live HERE, not in this file's MODELS list, because "
@@ -568,9 +568,9 @@ def main():
     w(f" panel       {a.panel}")
     w(f" split       {a.refs} (suffix {a.suffix})")
     w(f" threshold   " + ("flat %.2f" % a.flat_threshold if a.flat_threshold
-                          else "tiered: %.2f for %s, %.2f otherwise"
-                               % (THRESH_STRICT, "/".join(STRICT_SUPERPOPS),
-                                  THRESH_RELAXED)))
+                          else ("tiered: %.2f for %s, %.2f otherwise"
+                                % (THRESH_STRICT, "/".join(STRICT_SUPERPOPS), THRESH_RELAXED)
+                                if STRICT_SUPERPOPS else "%.2f for every super-pop" % THRESH_RELAXED)))
     w("")
     w(" REAL TEST GENOMES")
     w("-" * 72)

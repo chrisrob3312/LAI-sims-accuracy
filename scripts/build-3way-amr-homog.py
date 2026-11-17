@@ -38,6 +38,10 @@ def main():
     ap.add_argument("--table", required=True, help="the current lai_ref_panel_samples.k<K>.tsv")
     ap.add_argument("--exclude", required=True, help="donors + relatives + duplicates + exclusions")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--min-q", type=float, default=None,
+                    help="re-cut the NEW samples at this supervised Q instead of the table's "
+                         "included flag (argmax AMR and max_Q_sup >= Q; MXB kept as 4a keeps it) "
+                         "-- e.g. 0.94 on the 16 Nov K=8 table, cut at 0.93, as a preview")
     a = ap.parse_args()
 
     base = list(csv.DictReader(open(a.base), delimiter="\t"))
@@ -54,7 +58,13 @@ def main():
     absent = [s for s in base_amr if s not in panel]
     dropped = [s for s in base_amr if s in panel and s in excl]
     keep_base = [s for s in base_amr if s in panel and s not in excl]
-    new = [r["sample"] for r in cur if r["super_pop"] == "AMR" and r["included"] == "1"
+    def passes(r):
+        if a.min_q is None:
+            return r["included"] == "1"
+        if r.get("cohort") == "MXB":                 # 4a includes every non-donor MXB sample
+            return True
+        return r.get("argmax_pop_sup") == "AMR" and float(r.get("max_Q_sup", 0)) >= a.min_q
+    new = [r["sample"] for r in cur if r["super_pop"] == "AMR" and passes(r)
            and r["sample"] not in base_ids and r["sample"] not in excl]
     out = keep_base + new
     if len(set(out)) != len(out):
@@ -72,7 +82,8 @@ def main():
     print(f"    kept:    {comp(keep_base)}")
     if dropped:
         print(f"    dropped: {comp(dropped)}")
-    print(f"  new since July and homogeneous now: {len(new)}")
+    print(f"  new since July and homogeneous now"
+          f"{f' (supervised AMR Q >= {a.min_q})' if a.min_q is not None else ''}: {len(new)}")
     print(f"    added:   {comp(new)}")
 
 

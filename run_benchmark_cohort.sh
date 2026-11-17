@@ -56,11 +56,13 @@ BENCH_SUFFIX="${BENCH_SUFFIX:-bench}"
 # is statistically stronger for the liftover comparison but the intake refuses
 # it, so it is not the default here.
 DESIGN="${DESIGN:-one-cell}"
-# The contract's threshold is FLAT 0.93 (Doc 20, donors.tsv and
-# real_samples.tsv; plan_simset.R --threshold 0.93). Intake 2.real_samples
-# compares sample_type against top_fraction at this one number, so the tiered
-# 0.95/0.93 the panel build uses would disagree for EUR/EAS/AFR between them.
-FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.93}"
+# The contract's threshold is FLAT -- one number for every super-pop -- and
+# from 17 Nov it is 0.94, the same number 4a uses for anchors and the
+# homogeneous panel (it was 0.93 against the panel's tiered 0.95/0.93). Intake
+# 2.real_samples compares sample_type against top_fraction at this one number
+# (Doc 20, donors.tsv and real_samples.tsv; plan_simset.R --threshold), so the
+# Nextflow side must read 0.94 too.
+FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.94}"
 NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE}"
 # The contract's reference share: AFR/EUR/EAS/SAS take their reference from
 # 1000 Genomes ONLY, NAT adds half the MXB, MEN a third of its pool. 1KG can

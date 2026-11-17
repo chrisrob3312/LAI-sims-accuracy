@@ -41,11 +41,11 @@ from collections import defaultdict
 CHIPS = ("snp6", "affy500k", "gsa")
 BUILDS = ("hg19", "hg38")
 CELLS = [(c, b) for c in CHIPS for b in BUILDS]
-# The contract's flat threshold. NOT the tiered 0.95/0.93 the panel build uses:
-# intake 2.real_samples compares sample_type against top_fraction at this one
-# number, so a tiered classification disagrees with it for EUR/EAS/AFR samples
-# between 0.93 and 0.95.
-CONTRACT_THRESHOLD = 0.93
+# The contract's flat threshold: one number for every super-pop, 0.94 from
+# 17 Nov (it was 0.93), the same number 4a uses for anchors and the homogeneous
+# panel. Intake 2.real_samples compares sample_type against top_fraction at
+# this one number, so the Nextflow side (plan_simset.R --threshold) must match.
+CONTRACT_THRESHOLD = 0.94
 # Components a model draws on; 5.donors requires each to have donors.
 MODEL_COMPONENTS = {"NAT", "EUR", "AFR", "MEN", "EAS", "SAS"}
 COMPONENT_POOL = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR",

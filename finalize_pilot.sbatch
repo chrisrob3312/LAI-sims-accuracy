@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=finalize_pilot
 #SBATCH --partition=atkinson,mhgcp
-#SBATCH --time=02:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/finalize_pilot_%j.out
 #SBATCH --error=/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank/logs/finalize_pilot_%j.err
 #
 # Fires after all fix arrays exit ok (--dependency=afterok:...). Verifies no
-# broken .classes remain, scores WGS + chip via accuracy_v2.R, then commits +
-# pushes the fresh TSVs so the interactive session can walk away.
+# broken .classes remain, scores RFMix WGS + chip via accuracy_v2.R and, when
+# SCORE_FLARE=1 (the driver sets it when the FLARE arms were submitted), FLARE
+# WGS + chip the same way (scripts/flare-to-lat3.py puts FLARE's calls in the
+# .Lat3/.classes/.done layout accuracy_v2.R reads), then commits + pushes the
+# fresh TSVs so the interactive session can walk away.
 #
 # Deliberately skips Python figure/table/pptx regen — the cluster's
 # shapeit5 env is missing matplotlib. The main-loop side does that once
@@ -24,6 +27,10 @@ CHRS="1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
 
 WGS_WD="${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
 CHIP_WD="${PROJECT_ROOT}/03_rfmix/chip_gsa_jessica/${ADMIX_POP}/gen${GEN}"
+SCORE_FLARE="${SCORE_FLARE:-0}"
+CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
+FLARE_WD="${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
+FLARE_CHIP_WD="${PROJECT_ROOT}/03_flare_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
 
 # --- conda / R environment ---
 # unset any stale python env so shapeit5's R gets the right libraries
@@ -104,7 +111,28 @@ done
 if [ "$missing_wgs" -gt 0 ] || [ "$missing_chip" -gt 0 ]; then
     die "$missing_wgs WGS + $missing_chip CHIP required files missing — do not score partial output"
 fi
-echo "  input files: ok (all 21 chrs × 11 combos × 3 files present in both WGS and CHIP)"
+echo "  input files: ok (every chr × combo × 3 files present in both WGS and CHIP)"
+
+# 0e. FLARE: the same grid, one .anc.vcf.gz per combo, at both densities.
+if [ "$SCORE_FLARE" = "1" ]; then
+    missing_flare=0
+    for chr in ${CHR_ARR[@]+"${CHR_ARR[@]}"}; do
+        for track in $TRACKS; do
+            for panel in $PANELS_MAIN; do
+                [ "$track" = "NATMXB" ] && [ "$panel" = "NAT_HGDPMXB_FULL" ] && continue
+                for wd in "$FLARE_WD" "$FLARE_CHIP_WD"; do
+                    f="$wd/${track}.${panel}.gen${GEN}_chr${chr}.anc.vcf.gz"
+                    [ -s "$f" ] || { echo "  FLARE missing: $f"; missing_flare=$((missing_flare+1)); }
+                done
+            done
+        done
+    done
+    [ "$missing_flare" -eq 0 ] || die "$missing_flare FLARE combos missing — do not score partial output"
+    [ -f "$REPO_DIR/scripts/flare-to-lat3.py" ] || die "scripts/flare-to-lat3.py missing"
+    echo "  FLARE input files: ok (WGS + chip)"
+else
+    echo "  FLARE: not scored (SCORE_FLARE=${SCORE_FLARE})"
+fi
 
 # ---------- 1. Verify .classes are all healthy (fail if any broken) ----------
 echo
@@ -151,10 +179,30 @@ WORKDIR="$CHIP_WD" OUTDIR="$CHIP_OUT" \
 REVIEW_DIR="$CHIP_REVIEW" \
 bash "$REPO_DIR/run_accuracy_pilot.sh"
 
+# ---------- 3b. FLARE accuracy (WGS + chip), the same scorer ----------
+TAGS="accuracy_pilot accuracy_pilot_chip_gsa"
+if [ "$SCORE_FLARE" = "1" ]; then
+    for density in wgs chip; do
+        if [ "$density" = wgs ]; then FWD="$FLARE_WD"; FTAG=accuracy_pilot_flare; FOUT="${PROJECT_ROOT}/04_accuracy_flare"
+        else FWD="$FLARE_CHIP_WD"; FTAG=accuracy_pilot_flare_chip_gsa; FOUT="/tmp/accuracy_flare_chip_final_$$"; fi
+        echo
+        echo ">>> [3b] FLARE ${density} ($FWD)"
+        python3 -I "$REPO_DIR/scripts/flare-to-lat3.py" --flare-dir "$FWD" --out-dir "$FWD/lat3" \
+            --gen "$GEN" --jobs "${SLURM_CPUS_PER_TASK:-4}" || die "FLARE ${density}: conversion failed (above)"
+        rm -rf "${REPO_DIR}/results/${FTAG}"; mkdir -p "${REPO_DIR}/results/${FTAG}/plots"
+        CHRS="$CHRS" \
+        PROJECT_ROOT="$PROJECT_ROOT" ADMIX_POP="$ADMIX_POP" GEN="$GEN" \
+        WORKDIR="$FWD/lat3" OUTDIR="$FOUT" \
+        REVIEW_DIR="${REPO_DIR}/results/${FTAG}" \
+        bash "$REPO_DIR/run_accuracy_pilot.sh"
+        TAGS="$TAGS $FTAG"
+    done
+fi
+
 # ---------- 3.5 Post-run assertion: every chr present, no silent skips ----------
 echo
 echo ">>> [3.5] Post-run assertion — per-chr coverage complete"
-for tag in accuracy_pilot accuracy_pilot_chip_gsa; do
+for tag in $TAGS; do
     f="${REPO_DIR}/results/${tag}/accuracy_per_chr.tsv"
     [ -s "$f" ] || die "post-run: expected TSV missing/empty: $f"
     # Extract chr column for NAT_HGDP/NAT/NAT (proxy for full coverage)
@@ -167,9 +215,8 @@ for tag in accuracy_pilot accuracy_pilot_chip_gsa; do
     echo "  $tag: 22/22 chrs present ($chrs_present)"
 done
 # Also assert every panel in the summary has full-coverage n_sites
-Rscript -e '
-    for (path in c("results/accuracy_pilot/accuracy_summary.tsv",
-                   "results/accuracy_pilot_chip_gsa/accuracy_summary.tsv")) {
+TAGS="$TAGS" Rscript -e '
+    for (path in file.path("results", strsplit(Sys.getenv("TAGS"), " +")[[1]], "accuracy_summary.tsv")) {
         d <- read.delim(path, sep="\t", stringsAsFactors=FALSE)
         d <- d[d$ancestry=="NAT" & d$track=="NAT",]
         max_n <- max(d$total_sites)
@@ -190,7 +237,7 @@ cd "$REPO_DIR"
 git fetch origin claude/setup-shapeit5-conda-xlcdl 2>&1 | tail -3
 git pull --rebase -X theirs origin claude/setup-shapeit5-conda-xlcdl 2>&1 | tail -5 || {
     # rebase conflicts: prefer the pilot's fresh TSVs
-    git checkout --theirs results/accuracy_pilot/*.tsv results/accuracy_pilot_chip_gsa/*.tsv 2>/dev/null || true
+    git checkout --theirs results/accuracy_pilot*/*.tsv 2>/dev/null || true
     git add results/
     git rebase --continue || git rebase --abort
 }
@@ -199,11 +246,11 @@ git add -A results/
 if git diff --cached --quiet; then
     echo "  no result changes to commit — nothing to push"
 else
-    git commit -m "accuracy pilot: full 22-chr WGS + chip (post-fix, finalize_pilot job $SLURM_JOB_ID)
+    git commit -m "accuracy pilot: full 22-chr RFMix WGS + chip$([ "$SCORE_FLARE" = 1 ] && echo ' and FLARE WGS + chip') (finalize_pilot job $SLURM_JOB_ID)
 
-Auto-committed by finalize_pilot.sbatch after the .classes-fix arrays
-completed. All 8 previously-broken combos regenerated; verified no
-1-class or 2-class .classes files remain in either WORKDIR."
+Auto-committed by finalize_pilot.sbatch after the 3b arrays completed:
+every (track, panel, chr) combo present, no 1- or 2-class .classes file,
+22/22 chromosomes in every accuracy table ($TAGS)."
     for attempt in 1 2 3; do
         if git push origin claude/setup-shapeit5-conda-xlcdl; then
             echo "  push ok on attempt $attempt"

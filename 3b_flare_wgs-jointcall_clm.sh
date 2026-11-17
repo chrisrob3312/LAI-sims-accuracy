@@ -84,7 +84,12 @@ KEEP_DIR="${KEEP_DIR:-${PROJECT_ROOT}/panel_keep_files}"
 # Same reference-ID lists 3b uses, so the panels are identical.
 NAT_HGDP_RFMIX="${NAT_HGDP_RFMIX:-${REFS}/amr_rfmix.txt}"
 NAT_HGDPMXB_RFMIX="${NAT_HGDPMXB_RFMIX:-${REFS}/amr_hgdpmxb_rfmix.txt}"
-NAT_HGDPMXB_FULL_RFMIX="${NAT_HGDPMXB_FULL_RFMIX:-${KEEP_DIR}/panel5_HGDPMXB_FULL_IBS_YRI.keep}"
+# Panel 5's NAT component, built per task exactly as 3b builds it: HGDP NAT +
+# all 50 MXB (amr_rfmix + mxb_rfmix + mxb_simulation). NOT the panel5 keep
+# file: that file is the WHOLE panel -- it also holds the IBS and YRI IDs -- so
+# every one of them landed under NAT and again under EUR/AFR, and the duplicate
+# check below stopped every NAT_HGDPMXB_FULL task. Set this to override.
+NAT_HGDPMXB_FULL_RFMIX="${NAT_HGDPMXB_FULL_RFMIX:-}"
 # The HOMOG fork swaps ONLY the Indigenous American component for its
 # homogeneity-filtered list, keeping the same IBS and YRI references as every
 # other panel. That is the comparison it is for: whether filtering the NAT
@@ -271,7 +276,13 @@ case "$TASK_PANEL" in
     NAT_PEL)            NAT_LIST="$PEL_RFMIX" ;;
     NAT_PEL_EAS)        NAT_LIST="$PEL_EAS_RFMIX" ;;
     NAT_HGDPMXB)        NAT_LIST="$NAT_HGDPMXB_RFMIX" ;;
-    NAT_HGDPMXB_FULL)   NAT_LIST="$NAT_HGDPMXB_FULL_RFMIX" ;;
+    NAT_HGDPMXB_FULL)
+        if [[ -n "$NAT_HGDPMXB_FULL_RFMIX" ]]; then NAT_LIST="$NAT_HGDPMXB_FULL_RFMIX"
+        else
+            NAT_LIST="${TMP}/nat_hgdpmxb_full.txt"
+            cat "${REFS}/amr_rfmix.txt" "${REFS}/mxb_rfmix.txt" "${REFS}/mxb_simulation.txt" \
+                | awk 'NF && !seen[$1]++ {print $1}' > "$NAT_LIST"
+        fi ;;
     NAT_HOMOG)          NAT_LIST="$NAT_HOMOG_RFMIX" ;;
     *) echo "ERROR: unknown panel ${TASK_PANEL}"; exit 1 ;;
 esac

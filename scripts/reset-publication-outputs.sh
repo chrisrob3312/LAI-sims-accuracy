@@ -36,6 +36,7 @@ TREES=(
     "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
     "${PROJECT_ROOT}/03_rfmix/chip_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
     "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
+    "${PROJECT_ROOT}/03_flare_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
 )
 PUB_JOBS='^(2b_simu|3b_rfmix|3b_homog|3b_chip|3b_chip_homog|3b_flare|finalize_pilot)$'
 

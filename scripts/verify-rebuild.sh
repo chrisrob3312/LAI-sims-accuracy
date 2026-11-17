@@ -391,9 +391,10 @@ SIMD="${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}"
 for d in "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_rfmix/chip_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
     [[ -d "$d" ]] && info "RFMix: $(find "$d" -name '*.done' | wc -l) finished combos (.done) in ${d}" || info "RFMix: not yet (${d})"
 done
-FD="${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
-[[ -d "$FD" ]] && info "FLARE: $(find "$FD" -name '*.anc.vcf.gz' | wc -l) finished tasks in ${FD}" || info "FLARE: not yet"
-for t in accuracy_pilot accuracy_pilot_chip_gsa; do
+for FD in "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_flare_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
+    [[ -d "$FD" ]] && info "FLARE: $(find "$FD" -maxdepth 1 -name '*.anc.vcf.gz' | wc -l) finished tasks in ${FD}" || info "FLARE: not yet (${FD})"
+done
+for t in accuracy_pilot accuracy_pilot_chip_gsa accuracy_pilot_flare accuracy_pilot_flare_chip_gsa; do
     f="results/${t}/accuracy_summary.tsv"
     if [[ -s "$f" && -f "$EPOCH" && "$f" -nt "$EPOCH" ]]; then pass "${f} written after the rebuild epoch ($(date -r "$f" '+%F %T'))"
     else info "${f}: not yet rewritten by this rebuild"; fi

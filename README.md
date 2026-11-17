@@ -74,6 +74,14 @@ accuracy_error_plots.R - code used to generate the accuracy and error modes manu
 
 viterbi2msp.R - code to convert RFMix v1 .viterbi output to RFMix v2 .msp output file formats for use with Tractor.
 
+*Which sample sets serve which project (17 Nov 2026).* The projects need
+different sets, so the lists are kept apart:
+
+| project | references | donors / test genomes | rule set |
+|---|---|---|---|
+| 3-way NAT/EUR/AFR LAI accuracy simulation (rerun of Jessica Honorato-Mauer's design; RFMix + FLARE, WGS + GSA chip) | top-level `*_rfmix.txt`: 1KG IBS (EUR), 1KG YRI (AFR), the NAT lists, and `amr_homog_rfmix.txt` (July's K=5 AMR panel + AMR samples new since July, from 4a) | `*_simulation.txt` (1KG IBS, 1KG YRI, HGDP NAT, MXB) | references and donors disjoint, never first-degree relatives; 1KG allowed. Originals in `rerun_jessicaH_3way_lai_sim/` |
+| genotyping-harmonization / imputation benchmark (Nextflow) and the global panel | the K=7 panel (`lai_ref_panel_samples.k7.tsv`, Q >= 0.94, central high-Q anchors), split by `run_benchmark_cohort.sh` | no 1KG donor and no real 1KG test genome (1KG is in the imputation panels) | contract threshold 0.94 (`plan_simset.R` must match). The 6 Jul HGDP anchor lists are in `benchmark_hgdp_anchors_jul06/` |
+
 *IDs of reference samples used to generate admixed haplotypes and RFMix Reference:*
 
 amr_simulation.txt - HGDP AMR population IDs used for simulation 
@@ -87,14 +95,14 @@ amr_rfmix.txt - HGDP AMR population IDs used as RFMix reference
 
 eur_rfmix.txt - 1KG IBS IDs (74) used as the EUR RFMix / FLARE reference in every
 3-way arm. Restored on 17 Nov 2026 to the design (Jessica's 77-ID IBS list in
-backup_pre_koenig/, as July's panel used it: the other 3 were relatives July's
+rerun_jessicaH_3way_lai_sim/, as July's panel used it: the other 3 were relatives July's
 panel did not contain). From 6 Jul to 17 Nov it held HGDP French, Orcadian,
-Sardinian and Russian anchors (backup_koenig_jul06/).
+Sardinian and Russian anchors (benchmark_hgdp_anchors_jul06/).
 
 afr_rfmix.txt - 1KG YRI IDs (72) used as the AFR RFMix / FLARE reference in every
 3-way arm. Restored on 17 Nov 2026 the same way (77-ID YRI list; 5 relatives not
 in July's panel). From 6 Jul to 17 Nov it held HGDP Yoruba, Mandenka and Bantu
-anchors (backup_koenig_jul06/).
+anchors (benchmark_hgdp_anchors_jul06/).
 
 sas_rfmix.txt - HGDP Central/South Asian IDs (Balochi, Brahui, Makrani, Sindhi).
 HGDP00029 (Brahui) and HGDP00150 (Makrani), Koenig removals, were dropped on

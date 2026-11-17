@@ -178,12 +178,15 @@ seen them.
 |---|---|---|
 | `real_homogeneous` | top Q ≥ threshold for the **argmax** super-pop | real rare variation and real haplotype structure that simulation cannot produce |
 | `real_admixed` | top Q below that threshold | real admixture, with the correlation structure between ancestry and genotype that a simulation idealises away |
-| `real_unassigned` | argmax is **OTH**, the empirical leftover cluster at K=8 | the multiracial-like individuals a real diverse cohort carries. No reference ancestry fits them, so they are neither homogeneous nor admixed between named components |
+| `real_unassigned` | argmax is **OTH**, the leftover cluster (only when 4a runs above K=7; none at K=7) | the multiracial-like individuals a real diverse cohort carries. No reference ancestry fits them, so they are neither homogeneous nor admixed between named components |
 
-Thresholds are **tiered**, matching what 4a applies to the panel: 0.95 for
-EUR/EAS/AFR, 0.93 for AMR/OCE/MEN/SAS. Classifying test genomes on a flat
-0.93 while the panel uses a tiered bar would admit samples to
-`real_homogeneous` that the panel itself rejects.
+The threshold is **0.94 for every super-pop** (17 Nov 2026), the same number 4a
+applies to anchors and the homogeneous panel, and the contract's flat threshold
+(`run_benchmark_cohort.sh FLAT_THRESHOLD`, `check-simset-contract.py`, and on
+the Nextflow side `plan_simset.R --threshold` and intake 2.real_samples). Until
+then the panel was tiered (0.95 EUR/EAS/AFR, 0.93 AMR/OCE/MEN/SAS) while the
+contract was a flat 0.93, so the two could disagree for samples between 0.93
+and 0.95; one number for both removes that.
 
 **The threshold is keyed on the ADMIXTURE argmax, not on the metadata label,
 and homogeneity does not depend on the two agreeing.** "Is this genome

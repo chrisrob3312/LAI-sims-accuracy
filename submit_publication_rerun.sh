@@ -505,21 +505,24 @@ if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------- STAGE 5
-# Full RFMix sweep on both WGS and chip-GSA density. Four parallel arrays:
+# Full RFMix + FLARE sweep on both WGS and chip-GSA density. Eight parallel
+# arrays, the same grid for both methods:
 #   - 3b_wgs main array:        22 chr * 9 default panels = 198 tasks
 #   - 3b_homog fork:            22 chr * 2 tracks         = 44 tasks
 #   - 3b_chip_wgs main array:   198 tasks  (CHIP_NAME=gsa_jessica)
 #   - 3b_chip_homog fork:       44 tasks   (CHIP_NAME=gsa_jessica)
+#   - 3b_flare: WGS main 198, WGS HOMOG 44 (PANELS_TO_RUN=NAT_HOMOG),
+#               chip main 198 and chip HOMOG 44 (CHIP_NAME + CHIP_SNPS_TPL)
 #
-# All four run in parallel after stage 4 completes. The chip ones get the
+# All run in parallel after stage 4 completes. The chip ones get the
 # CHIP_NAME + CHIP_SNPS_TPL env from the submit line to avoid the bug where
 # unset CHIP_NAME defaults to "wgs" and runs at WGS density in chip_wgs/.
 CHIP_SNPS_TPL="${CHIP_SNPS_TPL:-${REPO_DIR}/reference_ids/chip_gsa_jessica/chr%d.snps}"
 CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
 
 echo
-echo "============ STAGE 5: full RFMix sweep (4 arrays) ============"
-J5a=""; J5b=""; J5c=""; J5d=""; J5e=""
+echo "============ STAGE 5: full RFMix + FLARE sweep (8 arrays) ============"
+J5a=""; J5b=""; J5c=""; J5d=""; J5e=""; J5f=""; J5g=""; J5h=""
 if want 5; then
     _d5="$(dep_of "$J4")"
     J5a=$(submit "stage5_wgs_main" \
@@ -538,13 +541,22 @@ if want 5; then
           "--array=1-44%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
           ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
 
-    # FLARE on the SAME grid as 5a, in parallel with it. Same tracks, panels
-    # and chromosomes, so the only thing differing between the two sweeps is
-    # the method -- which is the whole point of running both. Off with
-    # RUN_FLARE=0 if the jar is not installed yet.
+    # FLARE on the SAME grid as the four RFMix arms, in parallel with them.
+    # Same tracks, panels, chromosomes and densities, so the only thing
+    # differing between the two sweeps is the method -- which is the whole
+    # point of running both. Off with RUN_FLARE=0 if the jar is not installed.
     if [[ "${RUN_FLARE:-1}" == "1" && -f ./3b_flare_wgs-jointcall_clm.sh ]]; then
         J5e=$(submit "stage5_flare_wgs" \
               "--array=1-198%${THROTTLE} --mem=32G ${_d5}" \
+              ./3b_flare_wgs-jointcall_clm.sh)
+        J5f=$(submit "stage5_flare_wgs_homog" \
+              "--array=1-44%${THROTTLE} --mem=32G ${_d5} --export=ALL,PANELS_TO_RUN=NAT_HOMOG" \
+              ./3b_flare_wgs-jointcall_clm.sh)
+        J5g=$(submit "stage5_flare_chip" \
+              "--array=1-198%${THROTTLE} --mem=32G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
+              ./3b_flare_wgs-jointcall_clm.sh)
+        J5h=$(submit "stage5_flare_chip_homog" \
+              "--array=1-44%${THROTTLE} --mem=32G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL},PANELS_TO_RUN=NAT_HOMOG" \
               ./3b_flare_wgs-jointcall_clm.sh)
     else
         echo "  (RUN_FLARE=0 or script absent -- FLARE arm not submitted)"
@@ -564,15 +576,17 @@ J6=""
 if want 6; then
     if [[ -n "$J5a" ]]; then
         # FLARE is included when it was submitted, because the accuracy tables
-        # are meant to carry RFMix AND FLARE side by side -- scoring before
-        # the FLARE arm lands would produce tables with one method in them.
-        # The benchmark split does NOT gate this: it branched off stage 3 and
-        # has nothing to do with scoring.
-        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}${J5e:+:${J5e}}"
+        # carry RFMix AND FLARE side by side -- scoring before the FLARE arms
+        # land would produce tables with one method in them. finalize scores
+        # FLARE only when it was submitted (SCORE_FLARE). The benchmark split
+        # does NOT gate this: it branched off stage 3.
+        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}"
+        for _j in "$J5e" "$J5f" "$J5g" "$J5h"; do [[ -n "$_j" ]] && _d6="${_d6}:${_j}"; done
     else
         _d6="$(dep_of "")"
     fi
-    J6=$(submit "stage6_finalize" "${_d6}" ./finalize_pilot.sbatch)
+    _sf=0; [[ -n "$J5e" || ( -z "$J5a" && "${RUN_FLARE:-1}" == "1" ) ]] && _sf=1
+    J6=$(submit "stage6_finalize" "${_d6} --export=ALL,SCORE_FLARE=${_sf},CHIP_NAME=${CHIP_NAME}" ./finalize_pilot.sbatch)
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
 fi
@@ -591,7 +605,10 @@ row "stage 5a (WGS main sweep)"  "$J5a"
 row "stage 5b (WGS HOMOG fork)"  "$J5b"
 row "stage 5c (chip main sweep)" "$J5c"
 row "stage 5d (chip HOMOG fork)" "$J5d"
-row "stage 5e (FLARE sweep)"      "$J5e"
+row "stage 5e (FLARE WGS)"        "$J5e"
+row "stage 5f (FLARE WGS HOMOG)"  "$J5f"
+row "stage 5g (FLARE chip)"       "$J5g"
+row "stage 5h (FLARE chip HOMOG)" "$J5h"
 row "stage 6 (accuracy + push)"  "$J6"
 if [[ "$STOP_STAGE" -lt 6 ]]; then
     echo
