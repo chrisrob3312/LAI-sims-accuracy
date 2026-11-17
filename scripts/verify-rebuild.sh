@@ -7,7 +7,8 @@
 # the rebuild epoch), then checks on what it wrote. Each check is PASS, WARN or
 # FAIL with the numbers behind it; a stage with no output yet says "not yet".
 #   0 SGDP download   1 SGDP prep   2 MXB lift   3 Almarri   4 1c merge
-#   5 chunks   6 ligate   7 KING   8 4a K=7   9 simulation / RFMix / FLARE / scoring
+#   5 chunks   6 ligate   7 KING   8 4a global K=7 + lai3way K=5
+#   9 simulation / RFMix / FLARE / scoring, per cohort (COHORTS)
 #
 # Run from the repo checkout inside the shapeit5 env:
 #   bash scripts/verify-rebuild.sh
@@ -24,7 +25,11 @@ LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 SGDP_RAW_DIR="${SGDP_RAW_DIR:-${PROJECT_ROOT}/00_sgdp_raw/vcf_variants}"
 CHUNKS_TSV="${CHUNKS_TSV:-${REPO_DIR}/resources/b38_chunks.tsv}"
 FIXREF_MODE="${FIXREF_MODE:-flip-all}"
-ADMIX_POP="${ADMIX_POP:-Brasa}"; GEN="${GEN:-12}"; K="${K:-7}"
+K="${K:-7}"                                   # 4a HOMOG_SET=global
+K3="${K3:-5}"; LAI3_DIR="${LAI3_DIR:-${HOMOG_DIR}/lai3way_k${K3}}"   # 4a HOMOG_SET=lai3way
+# The 3-way simulation's homogeneous panel: what 2b checks donors against.
+HOMOG_3WAY="${LAI3_DIR}/homog_${K3}pop_samples.txt"
+COHORTS="${COHORTS:-Brasa:12:NAT MexLike:16:NATMXB}"   # as the driver runs them
 # 1c's HGDP+1KG drop list (related_outliers.txt): same default as 1c.
 OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
 # Simulation donors and the reference lists the RFMix / FLARE arms read.
@@ -258,25 +263,25 @@ if is_new "$P22" && [[ -s "$DP" && "$DP" -nt "$P22" ]]; then
 else info "not yet (no duplicate list from this rebuild's phased panel)"; fi
 # The donor and reference sets 2b checks, built the way 2b builds them: donors
 # from every reference_ids/*_simulation.txt; references from every
-# reference_ids/*_rfmix.txt (the curated lists and the <pop>_homog_rfmix.txt
-# lists 4a writes there) plus 4a's homog_${K}pop_samples.txt for this run.
+# reference_ids/*_rfmix.txt (the curated lists and the amr_homog_rfmix.txt
+# 4a writes there) plus the 3-way simulation's homogeneous panel, 4a
+# HOMOG_SET=lai3way's ${HOMOG_3WAY}.
 # A homog list older than the epoch is the previous build's (4a rewrites it),
 # so it is left out until 4a has run. Other homog_*pop_samples.txt files
-# (July's K=5 list, which holds 102 donors) are no reference set: 2b skips them.
+# (July's K=5 list, which holds 102 donors; the K=7 global panel, which serves
+# the benchmark) are no reference set of these arms: 2b skips them.
 DSET="${TMPDIR:-/tmp}/verify_dset.$$"; RSET="${TMPDIR:-/tmp}/verify_rset.$$"
 : > "$DSET"; : > "$RSET"
 for f in reference_ids/*_simulation.txt; do
     [[ -s "$f" ]] && awk -v l="$(basename "$f" .txt)" 'NF {print $1 "\t" l}' "$f" >> "$DSET"
 done
-for f in reference_ids/*_rfmix.txt "${HOMOG_DIR}/homog_${K}pop_samples.txt"; do
+for f in reference_ids/*_rfmix.txt "$HOMOG_3WAY"; do
     [[ -s "$f" ]] || continue
     if [[ "$f" == *homog* ]] && ! is_new "$f"; then info "not checked until 4a rewrites it (previous build's): $f"; continue; fi
     awk -v l="$(basename "$f" .txt)" 'NF {print $1 "\t" l}' "$f" >> "$RSET"
 done
 for f in "${HOMOG_DIR}"/homog_*pop_samples.txt; do
-    if [[ -e "$f" && "$f" != "${HOMOG_DIR}/homog_${K}pop_samples.txt" ]]; then
-        info "not a reference set for this run (not K=${K}; no arm reads it, 2b skips it): $f"
-    fi
+    [[ -e "$f" ]] && info "not a reference set of the 3-way arms (2b skips it): $f"
 done
 ND=$(cut -f1 "$DSET" | sort -u | wc -l); NRF=$(cut -f1 "$RSET" | sort -u | wc -l)
 NOV=$(cut -f1 "$RSET" | sort -u | comm -12 <(cut -f1 "$DSET" | sort -u) - | wc -l)
@@ -345,38 +350,56 @@ if is_new "$P22" && [[ -s "$KIN" && "$KIN" -nt "$P22" ]]; then
 else info "donor/reference relatives: not yet (needs king/king.kin0 from this rebuild's phased panel)"; fi
 rm -f "$DSET" "$RSET"
 
-section "8. ADMIXTURE K=${K} (4a_build_homogeneity_panel_kN_clm.sh)"
-jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'
-ST="${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv"; DT="${HOMOG_DIR}/discovery_clusters.k${K}.tsv"
-if is_new "$P22" && [[ -s "$ST" && "$ST" -nt "$P22" ]]; then
-    info "discovery clusters (raw):"; sed 's/^/          /' "$DT"
-    shopt -s nullglob; ANCH=(reference_ids/*_anchors.k${K}.txt); shopt -u nullglob
-    if [[ ${#ANCH[@]} -gt 0 ]]; then info "anchors per super-pop:"; wc -l "${ANCH[@]}" | sed 's/^/          /'
-    else fail "4a wrote no reference_ids/*_anchors.k${K}.txt"; fi
-    FST="${HOMOG_DIR}/admixture_k${K}/admixture_fit_set.k${K}.tsv"
+# check_4a <set> <K> <dir> <anchor dir> <super-pops>: what one 4a job wrote.
+check_4a () {
+    local set="$1" k="$2" dir="$3" adir="$4" sps="$5"
+    local ST="${dir}/lai_ref_panel_samples.k${k}.tsv" DT="${dir}/discovery_clusters.k${k}.tsv"
+    if ! { is_new "$P22" && [[ -s "$ST" && "$ST" -nt "$P22" ]]; }; then
+        info "${set}: not yet (no ${ST} from this rebuild's phased panel)"; return
+    fi
+    [[ -s "$DT" ]] && { info "${set}: discovery clusters (raw):"; sed 's/^/          /' "$DT"; }
+    local ANCH=() a sp
+    shopt -s nullglob; ANCH=("${adir}"/*_anchors.k${k}.txt); shopt -u nullglob
+    if [[ ${#ANCH[@]} -gt 0 ]]; then info "${set}: anchors per super-pop:"; wc -l "${ANCH[@]}" | sed 's/^/          /'
+    else fail "${set}: 4a wrote no ${adir}/*_anchors.k${k}.txt"; fi
+    local FST="${dir}/admixture_k${k}/admixture_fit_set.k${k}.tsv"
     if [[ -f "$FST" && "$FST" -nt "$P22" ]]; then
-        info "ADMIXTURE fit set (raw counts by role / reason): $(awk -F'\t' 'NR > 1 {split($3, w, " "); n[$2 " (" (w[1] == "-" ? "unrelated" : w[1]) ")"]++} END {for (k in n) printf "%s %d; ", k, n[k]}' "$FST")"
+        info "${set}: ADMIXTURE fit set (raw counts by role / reason): $(awk -F'\t' 'NR > 1 {split($3, w, " "); n[$2 " (" (w[1] == "-" ? "unrelated" : w[1]) ")"]++} END {for (k in n) printf "%s %d; ", k, n[k]}' "$FST")"
     else
-        warn "no current ${FST}: this 4a fitted ADMIXTURE on every sample, relatives included"
+        warn "${set}: no current ${FST}: this 4a fitted ADMIXTURE on every sample, relatives included"
     fi
-    DRL="${HOMOG_DIR}/admixture_k${K}/donor_relatives.k${K}.tsv"
+    local DRL="${dir}/admixture_k${k}/donor_relatives.k${k}.tsv"
     if [[ -f "$DRL" && "$DRL" -nt "$P22" ]]; then
-        info "4a kept $(( $(wc -l < "$DRL") - 1 )) relative(s) of simulation donors (KING >= ${ROLE_KINSHIP}) out of the homogeneous panel: ${DRL}"
+        info "${set}: 4a kept $(( $(wc -l < "$DRL") - 1 )) relative(s) of simulation donors (KING >= ${ROLE_KINSHIP}) out of the homogeneous panel: ${DRL}"
     else
-        warn "no current ${DRL}: this 4a ran without the donor-relatives rule (or without 1e's KING table)"
+        warn "${set}: no current ${DRL}: this 4a ran without the donor-relatives rule (or without 1e's KING table)"
     fi
-    info "samples by super-pop: total / included (raw):"
+    local SETS="${dir}/admixture_k${k}/set_samples.txt"
+    [[ -s "$SETS" ]] && info "${set}: $(wc -l < "$SETS") samples in the run (${SETS}); the rest were left out by super-pop"
+    info "${set}: samples by super-pop: total / included (raw):"
     awk -F'\t' 'NR == 1 {for (i = 1; i <= NF; i++) h[$i] = i; next}
                 {t[$h["super_pop"]]++; if ($h["included"] == 1) n[$h["super_pop"]]++}
                 END {for (s in t) printf "          %-6s %5d total %5d included\n", s, t[s], n[s] + 0}' "$ST" | sort
-    NCH=$(grep -c 'CHMI' "$ST"); [[ "$NCH" -eq 0 ]] && pass "no CHMI sample in the table" || fail "CHMI present ${NCH} time(s)"
+    local NCH NNA
+    NCH=$(grep -c 'CHMI' "$ST"); [[ "$NCH" -eq 0 ]] && pass "${set}: no CHMI sample in the table" || fail "${set}: CHMI present ${NCH} time(s)"
     NNA=$(awk -F'\t' 'NR == 1 {for (i = 1; i <= NF; i++) h[$i] = i; next} $h["super_pop"] == "NA"' "$ST" | wc -l)
-    [[ "$NNA" -eq 0 ]] && pass "every sample has a super-pop label" || warn "${NNA} samples with super_pop NA (excluded by 4a)"
-    for sp in afr eur eas sas amr men oce; do
-        a="reference_ids/${sp}_anchors.k${K}.txt"
-        [[ -s "$a" ]] || warn "no anchors for ${sp^^} (${a})"
+    [[ "$NNA" -eq 0 ]] && pass "${set}: every sample has a super-pop label" || warn "${set}: ${NNA} samples with super_pop NA (excluded by 4a)"
+    for sp in $sps; do
+        a="${adir}/${sp}_anchors.k${k}.txt"
+        [[ -s "$a" ]] || warn "${set}: no anchors for ${sp^^} (${a})"
     done
-else info "not yet (no lai_ref_panel_samples.k${K}.tsv from this rebuild's phased panel)"; fi
+}
+
+section "8. ADMIXTURE: global K=${K} and lai3way K=${K3} (4a_build_homogeneity_panel_kN_clm.sh)"
+jobs_of 4a_homog_kN '4a_homog_kN_<job>.out/.err'
+jobs_of 4a_homog_lai3way '4a_homog_kN_<job>.out/.err'
+check_4a "global K=${K}" "$K" "$HOMOG_DIR" reference_ids "afr eur eas sas amr men oce"
+check_4a "lai3way K=${K3}" "$K3" "$LAI3_DIR" "${LAI3_DIR}/anchors" "afr eur eas sas amr"
+if [[ -s reference_ids/amr_homog_rfmix.txt && -f "$HOMOG_3WAY" && reference_ids/amr_homog_rfmix.txt -nt "$P22" ]]; then
+    pass "3-way AMR panel reference_ids/amr_homog_rfmix.txt: $(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) IDs, written after the phased panel (4a lai3way)"
+else
+    info "3-way AMR panel reference_ids/amr_homog_rfmix.txt: not yet rewritten by 4a lai3way"
+fi
 
 section "9. simulation, RFMix, FLARE, scoring (publication stages 4-6)"
 PROJECT_ROOT="$PROJECT_ROOT" bash scripts/reset-publication-outputs.sh --check | sed 's/^/          /'
@@ -386,18 +409,40 @@ for j in 2b_simu:'2b_simu_chr<N>_<job>' 3b_rfmix:'3b_rfmix_task<N>_<job>' 3b_hom
          finalize_pilot:'finalize_pilot_<job>'; do
     jobs_of "${j%%:*}" "${j#*:}.out/.err"
 done
-SIMD="${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}"
-[[ -d "$SIMD" ]] && info "simulation outputs: $(find "$SIMD" -name '*.hanc' | wc -l) .hanc truth files in ${SIMD}" || info "simulation: not yet"
-for d in "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_rfmix/chip_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
-    [[ -d "$d" ]] && info "RFMix: $(find "$d" -name '*.done' | wc -l) finished combos (.done) in ${d}" || info "RFMix: not yet (${d})"
-done
-for FD in "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_flare_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
-    [[ -d "$FD" ]] && info "FLARE: $(find "$FD" -maxdepth 1 -name '*.anc.vcf.gz' | wc -l) finished tasks in ${FD}" || info "FLARE: not yet (${FD})"
-done
-for t in accuracy_pilot accuracy_pilot_chip_gsa accuracy_pilot_flare accuracy_pilot_flare_chip_gsa; do
-    f="results/${t}/accuracy_summary.tsv"
-    if [[ -s "$f" && -f "$EPOCH" && "$f" -nt "$EPOCH" ]]; then pass "${f} written after the rebuild epoch ($(date -r "$f" '+%F %T'))"
-    else info "${f}: not yet rewritten by this rebuild"; fi
+for _c in $COHORTS; do
+    IFS=':' read -r ADMIX_POP GEN _ <<< "$_c"
+    SFX=""; [[ "$ADMIX_POP" == Brasa ]] || SFX="_${ADMIX_POP}"
+    info "--- cohort ${ADMIX_POP} gen${GEN} ---"
+    SIMD="${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}"
+    [[ -d "$SIMD" ]] && info "simulation outputs: $(find "$SIMD" -name '*.hanc' | wc -l) .hanc truth files in ${SIMD}" || info "simulation: not yet (${SIMD})"
+    [[ -s "${SIMD}/${ADMIX_POP}.notref" ]] && info "${ADMIX_POP}.notref: $(wc -l < "${SIMD}/${ADMIX_POP}.notref") simulated individuals (2b writes it)"
+    # Did the .dat's generations take effect? chr22 truth tracts against the
+    # model 2b actually used (its copy, ${ADMIX_POP}.dat.used).
+    if [[ -s "${SIMD}/${ADMIX_POP}.dat.used" && -s "${SIMD}/1kg_hgdp.chr22.snp" ]]; then
+        info "model used (raw): $(tr '\n' '|' < "${SIMD}/${ADMIX_POP}.dat.used")"
+        PROPS=$(awk 'NR == 2 {print $3 "," $4 "," $5}' "${SIMD}/${ADMIX_POP}.dat.used")
+        for H in "${SIMD}"/*."${ADMIX_POP}"22.hanc2; do
+            [[ -s "$H" ]] || continue
+            if python3 -I scripts/validate-simset-tracts.py --hanc2 "$H" --snp "${SIMD}/1kg_hgdp.chr22.snp" \
+                   --gen "$GEN" --props "$PROPS" --components NAT,EUR,AFR > "${TMPDIR:-/tmp}/verify_tracts.$$" 2>&1; then
+                pass "$(basename "$H"): tract lengths and ancestry match gen ${GEN}, ${PROPS} (raw below)"
+            else
+                fail "$(basename "$H"): tract lengths or ancestry do not match gen ${GEN}, ${PROPS} (raw below)"
+            fi
+            sed 's/^/          /' "${TMPDIR:-/tmp}/verify_tracts.$$"; rm -f "${TMPDIR:-/tmp}/verify_tracts.$$"
+        done
+    fi
+    for d in "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_rfmix/chip_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
+        [[ -d "$d" ]] && info "RFMix: $(find "$d" -name '*.done' | wc -l) finished combos (.done) in ${d}" || info "RFMix: not yet (${d})"
+    done
+    for FD in "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}" "${PROJECT_ROOT}/03_flare_gsa_jessica/${ADMIX_POP}/gen${GEN}"; do
+        [[ -d "$FD" ]] && info "FLARE: $(find "$FD" -maxdepth 1 -name '*.anc.vcf.gz' | wc -l) finished tasks in ${FD}" || info "FLARE: not yet (${FD})"
+    done
+    for t in accuracy_pilot accuracy_pilot_chip_gsa accuracy_pilot_flare accuracy_pilot_flare_chip_gsa; do
+        f="results/${t}${SFX}/accuracy_summary.tsv"
+        if [[ -s "$f" && -f "$EPOCH" && "$f" -nt "$EPOCH" ]]; then pass "${f} written after the rebuild epoch ($(date -r "$f" '+%F %T'))"
+        else info "${f}: not yet rewritten by this rebuild"; fi
+    done
 done
 
 printf '\n== summary: %d PASS, %d WARN, %d FAIL ==\n' "$NP" "$NW" "$NF"

@@ -27,17 +27,21 @@
 set -uo pipefail
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 REPO_DIR="${REPO_DIR:-$(pwd)}"
-ADMIX_POP="${ADMIX_POP:-Brasa}"
-GEN="${GEN:-12}"
+# Every cohort the driver runs (its COHORTS, "<ADMIX_POP>:<GEN>[:<tracks>]").
+COHORTS="${COHORTS:-Brasa:12:NAT MexLike:16:NATMXB}"
 CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
 EPOCH="${PROJECT_ROOT}/rebuild_epoch"
-TREES=(
-    "${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}"
-    "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
-    "${PROJECT_ROOT}/03_rfmix/chip_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
-    "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
-    "${PROJECT_ROOT}/03_flare_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
-)
+TREES=()
+for _c in $COHORTS; do
+    IFS=':' read -r ADMIX_POP GEN _ <<< "$_c"
+    TREES+=(
+        "${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}"
+        "${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
+        "${PROJECT_ROOT}/03_rfmix/chip_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
+        "${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
+        "${PROJECT_ROOT}/03_flare_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
+    )
+done
 PUB_JOBS='^(2b_simu|3b_rfmix|3b_homog|3b_chip|3b_chip_homog|3b_flare|finalize_pilot)$'
 
 if [[ "${1:-}" == "--check" ]]; then

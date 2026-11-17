@@ -14,10 +14,12 @@
 #                          |
 #         1b_phase_ligate  -> 1e KING (called sites + metadata duplicates)
 #                          |
-#         4a K=8  (site-filtered markers, unsupervised, data-first discovery,
-#                  supervised, homogeneity)
-#                          |
-#         publication stages 4-6: 2b simulation -> RFMix/FLARE arms -> finalize
+#         4a global K=7 (the benchmark's panel: every sample, data-first
+#            discovery)   +   4a lai3way K=5 (the 3-way simulation's AMR panel:
+#            July's anchors, MEN/OCE left out)            (side by side)
+#                          |  (lai3way)
+#         publication stages 4-6, per cohort (Brasa gen 12, MexLike gen 16):
+#         2b simulation -> RFMix/FLARE arms -> finalize
 #
 # IDEMPOTENT. Every stage reuses its output when it is current and skips:
 # the download (DONE stamp), SGDP prep and 1d (recipe stamps), 1a (run only
@@ -258,7 +260,7 @@ for _j in "$J_1A_LIVE" "$J_SG_LIVE" "$J_1D_LIVE"; do
 done
 # Anything from 1c onward that is still queued belongs to an earlier
 # submission, and this one would run beside it on the same files.
-DOWNSTREAM_NAMES=" 1c_phase 1b_chunk 1b_ligate 1e_king_dedup 4a_homog_kN 2b_simu 3b_rfmix 3b_homog 3b_chip 3b_chip_homog 3b_flare finalize_pilot "
+DOWNSTREAM_NAMES=" 1c_phase 1b_chunk 1b_ligate 1e_king_dedup 4a_homog_kN 4a_homog_lai3way 2b_simu 3b_rfmix 3b_homog 3b_chip 3b_chip_homog 3b_flare finalize_pilot "
 if command -v squeue > /dev/null; then
     QUEUED=$(squeue -h -u "$WHO" -o '%A %j %T' | awk -v n="$DOWNSTREAM_NAMES" 'index(n, " " $2 " ")' | sort -u)
     if [[ -n "$QUEUED" ]]; then
@@ -319,19 +321,25 @@ J_CHH=$(submit chunks_heavy --array=${HEAVY_CHUNKS} --time=48:00:00 --cpus-per-t
     --dependency=afterok:${J_1C} 1b_phase_chunks_clm.sh)
 J_LG=$(submit ligate --array=1-22%${THROTTLE} --dependency=afterok:${J_CH}:${J_CHH} 1b_phase_ligate_clm.sh)
 J_1E=$(submit 1e_king --dependency=afterok:${J_LG} 1e_king_dedup_clm.sh)
-J_4A=$(submit 4a_k8 --dependency=afterok:${J_1E} 4a_build_homogeneity_panel_kN_clm.sh)
+# Two 4a jobs, side by side (17 Nov): the K=7 global panel for the benchmark,
+# and the K=5 lai3way panel the 3-way simulation's HOMOG arms read.
+J_4A=$(submit 4a_global_k7 --dependency=afterok:${J_1E} --export=ALL,HOMOG_SET=global \
+       4a_build_homogeneity_panel_kN_clm.sh)
+J_4L=$(submit 4a_lai3way_k5 --dependency=afterok:${J_1E} --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way \
+       4a_build_homogeneity_panel_kN_clm.sh)
 
-echo "[rebuild] 4a = ${J_4A}" >&2
+echo "[rebuild] 4a global K=7 = ${J_4A}; 4a lai3way K=5 = ${J_4L}" >&2
 if [[ "$CHAIN_PUBLICATION" == "1" ]]; then
-    # The publication stages read 4a's outputs; they wait on 4a (afterok).
+    # The publication stages read the lai3way panel; they wait on it (afterok).
     echo "[rebuild] chaining the publication stages 4-6 (2b simulation, RFMix/FLARE arms," \
-         "finalize) to 4a = ${J_4A}" >&2
-    START_STAGE=4 AFTER_JOB="$J_4A" DRY_RUN="$DRY_RUN" bash submit_publication_rerun.sh
+         "finalize; per cohort) to 4a lai3way = ${J_4L}" >&2
+    START_STAGE=4 AFTER_JOB="$J_4L" DRY_RUN="$DRY_RUN" bash submit_publication_rerun.sh
 else
     cat >&2 <<EOF
 [rebuild] Publication stages not chained (CHAIN_PUBLICATION=${CHAIN_PUBLICATION}). To chain them:
-    START_STAGE=4 AFTER_JOB=${J_4A} bash submit_publication_rerun.sh
+    START_STAGE=4 AFTER_JOB=${J_4L} bash submit_publication_rerun.sh
 EOF
 fi
+echo "[rebuild] the benchmark waits on 4a global = ${J_4A}: ./run_benchmark_cohort.sh --dry-run, then ./run_benchmark_cohort.sh" >&2
 if [[ -n "$DRY_RUN" ]]; then echo "[rebuild] DRY RUN -- nothing was submitted." >&2; fi
 echo "[rebuild] Watch: bash scripts/pipeline-status.sh" >&2

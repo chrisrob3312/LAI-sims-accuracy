@@ -40,6 +40,17 @@ Usage:
       --simset 06_benchmark_simset \\
       --individuals results/benchmark_cohort_simset_individuals.tsv \\
       --chr chr2
+
+One 2b output (the 3-way simulation's cohorts), e.g. the Mexican-like chr22:
+  python3 -I scripts/validate-simset-tracts.py \\
+      --hanc2 02_simulations/MexLike/gen16/NATMXB.MexLike22.hanc2 \\
+      --snp 02_simulations/MexLike/gen16/1kg_hgdp.chr22.snp \\
+      --gen 16 --props 0.50,0.45,0.05 --components NAT,EUR,AFR
+
+The .dat semantics this tests are admix-simu's own (README, "Dat file"): the
+first generation line is a pulse at generation 1 (p_admixed = 0), and the
+population then mixes with itself up to the generation on the LAST line, so
+"16 0 0.50 0.45 0.05" alone is a 16-generation pulse model.
 """
 import argparse
 import glob
@@ -91,7 +102,9 @@ def tract_stats(hanc_path, pos_cm):
     seen = 0
     with open(hanc_path) as f:
         for ln in f:
-            ln = ln.strip()
+            # 6b's .hanc2 is one character per haplotype; 2b's separates them
+            # with spaces. Either way the haplotypes are the non-blank chars.
+            ln = "".join(ln.split())
             if not ln:
                 continue
             if switches is None:
@@ -152,12 +165,58 @@ def hanc_path(d, model, ch):
     return None, None
 
 
+def single(a):
+    """One site-per-line .hanc2 + its .snp against one intended model."""
+    pos, unit = read_snp_positions(a.snp)
+    if pos is None:
+        sys.exit(f"FATAL: unusable genetic positions in {a.snp}")
+    props = [float(x) for x in a.props.split(",")]
+    comps = a.components.split(",") if a.components else [str(i) for i in range(len(props))]
+    if len(comps) != len(props) or abs(sum(props) - 1.0) > 1e-3:
+        sys.exit(f"FATAL: --props {a.props} must be {len(comps)} proportions summing to 1")
+    per_m, frac, err, n_hap, span_cm = tract_stats(a.hanc2, pos)
+    if err:
+        sys.exit(f"FATAL: {a.hanc2}: {err}")
+    obs = sum(per_m) / len(per_m)
+    exp = predicted_switches(a.gen, props)
+    rel = abs(obs - exp) / exp if exp > 0 else 0.0
+    print(f" {a.hanc2}")
+    print(f"   {n_hap} haplotypes, {len(pos)} sites over {span_cm:.1f} cM (.snp positions in {unit})")
+    print(f"   switches per Morgan: expected {exp:.2f} at gen {a.gen}, observed {obs:.2f} "
+          f"(deviation {rel:.0%}; mean tract {100.0 / exp if exp else float('inf'):.1f} cM expected, "
+          f"{100.0 / obs if obs else float('inf'):.1f} cM observed)")
+    if a.gen > 1 and obs > 0:
+        # Invert the prediction: the generation count these tracts imply.
+        g_hat = 1 + obs / (1.0 - sum(p * p for p in props))
+        print(f"   generations implied by the observed switch rate: {g_hat:.1f}")
+    n_eff = max(1.0, n_hap * max(1.0, (a.gen - 1) * span_cm / 100.0))
+    bad = []
+    parts = []
+    for i, comp in enumerate(comps):
+        got = frac.get(str(i), 0.0)
+        bound = max(0.03, 4.0 * (props[i] * (1.0 - props[i]) / n_eff) ** 0.5)
+        flag = "!" if abs(got - props[i]) > bound else ""
+        if flag:
+            bad.append(comp)
+        parts.append(f"{comp} {props[i]:.2f}->{got:.3f}{flag}")
+    print("   realized ancestry (intended -> observed): " + "  ".join(parts))
+    ok = rel <= a.tolerance and not bad
+    print(f" {'ok' if ok else 'NOT OK'} -- "
+          + ("tract lengths match the intended generations and ancestry the proportions" if ok else
+             ", ".join(x for x in [f"switch rate {rel:.0%} off (tolerance {a.tolerance:.0%})" if rel > a.tolerance else "",
+                                   f"ancestry off for {', '.join(bad)}" if bad else ""] if x)))
+    sys.exit(0 if ok else 1)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--simset", required=True,
-                    help="06_benchmark_simset (holds chr*/ subdirs)")
-    ap.add_argument("--individuals", required=True,
-                    help="benchmark_cohort_simset_individuals.tsv")
+    ap.add_argument("--simset", help="06_benchmark_simset (holds chr*/ subdirs)")
+    ap.add_argument("--individuals", help="benchmark_cohort_simset_individuals.tsv")
+    ap.add_argument("--hanc2", help="one site-per-line truth file (2b or 6b) instead of a simset")
+    ap.add_argument("--snp", help="with --hanc2: its .snp (genetic positions in column 3)")
+    ap.add_argument("--gen", type=int, help="with --hanc2: the intended generations")
+    ap.add_argument("--props", help="with --hanc2: intended proportions, in ancestry-index order")
+    ap.add_argument("--components", default="", help="with --hanc2: their names, e.g. NAT,EUR,AFR")
     ap.add_argument("--chr", default="",
                     help="one chromosome, e.g. chr2. Default: every chr* "
                          "directory present.")
@@ -165,6 +224,12 @@ def main():
                     help="relative deviation in switches/Morgan tolerated "
                          "before a model is flagged (default 0.35)")
     a = ap.parse_args()
+    if a.hanc2:
+        if not (a.snp and a.gen is not None and a.props):
+            sys.exit("FATAL: --hanc2 needs --snp, --gen and --props")
+        single(a)
+    if not (a.simset and a.individuals):
+        sys.exit("FATAL: give --simset and --individuals, or --hanc2 with --snp --gen --props")
 
     models = {}
     with open(a.individuals) as f:

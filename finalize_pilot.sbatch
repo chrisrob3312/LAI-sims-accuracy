@@ -17,18 +17,31 @@
 # Deliberately skips Python figure/table/pptx regen — the cluster's
 # shapeit5 env is missing matplotlib. The main-loop side does that once
 # the push lands.
+#
+# ONE COHORT PER JOB (17 Nov): ADMIX_POP / GEN / TRACKS_TO_RUN come from the
+# driver --
+#   Brazilian-like  ADMIX_POP=Brasa   GEN=12 TRACKS_TO_RUN=NAT     -> results/accuracy_pilot*/
+#   Mexican-like    ADMIX_POP=MexLike GEN=16 TRACKS_TO_RUN=NATMXB  -> results/accuracy_pilot*_MexLike/
+# Brasa keeps the result folder names it always had; any other cohort gets
+# RESULT_SUFFIX=_<ADMIX_POP>. The driver chains the cohorts' finalize jobs one
+# after the other, because both commit and push from this one checkout.
 set -euo pipefail
 
 REPO_DIR="/storage/atkinson/home/magyar/LAI-sims-accuracy"
 PROJECT_ROOT="/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank"
-ADMIX_POP="Brasa"
-GEN="12"
+ADMIX_POP="${ADMIX_POP:-Brasa}"
+GEN="${GEN:-12}"
+TRACKS="${TRACKS_TO_RUN:-NAT NATMXB}"
+TRACKS="${TRACKS//+/ }"                   # the driver joins tracks with +
+export TRACKS_TO_RUN="$TRACKS"            # accuracy_v2.R scores only these tracks
+T1="${TRACKS%% *}"                        # the coverage checks below read this track
+RESULT_SUFFIX="${RESULT_SUFFIX-$([[ "$ADMIX_POP" == Brasa ]] || echo "_${ADMIX_POP}")}"
 CHRS="1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22"
 
-WGS_WD="${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
-CHIP_WD="${PROJECT_ROOT}/03_rfmix/chip_gsa_jessica/${ADMIX_POP}/gen${GEN}"
 SCORE_FLARE="${SCORE_FLARE:-0}"
 CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
+WGS_WD="${PROJECT_ROOT}/03_rfmix/${ADMIX_POP}/gen${GEN}"
+CHIP_WD="${PROJECT_ROOT}/03_rfmix/chip_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
 FLARE_WD="${PROJECT_ROOT}/03_flare/${ADMIX_POP}/gen${GEN}"
 FLARE_CHIP_WD="${PROJECT_ROOT}/03_flare_${CHIP_NAME}/${ADMIX_POP}/gen${GEN}"
 
@@ -45,6 +58,7 @@ echo "==================================================================="
 echo "[finalize_pilot] host=$(hostname)  time=$(date -u +%FT%TZ)"
 echo "[finalize_pilot] repo=$REPO_DIR"
 echo "[finalize_pilot] chrs=$CHRS"
+echo "[finalize_pilot] cohort ${ADMIX_POP} gen${GEN}, tracks: ${TRACKS}; results/accuracy_pilot*${RESULT_SUFFIX}/"
 echo "==================================================================="
 
 # ---------- 0. Hard precheck — every required path/tool/input must exist ----------
@@ -91,7 +105,6 @@ echo "  tools: ok (Rscript, git, dplyr all loadable)"
 # 0d. Every (track, panel, chr) combo we expect to score must have all 3 files
 #     (.done marker + .Lat3 + .classes). Fail if any are missing.
 PANELS_MAIN="NAT_HGDP NAT_PEL NAT_PEL_EAS NAT_HGDPMXB NAT_HGDPMXB_FULL NAT_HOMOG"
-TRACKS="NAT NATMXB"
 IFS=',' read -ra CHR_ARR <<< "$CHRS"
 missing_wgs=0; missing_chip=0
 for chr in ${CHR_ARR[@]+"${CHR_ARR[@]}"}; do
@@ -161,15 +174,15 @@ echo
 echo ">>> [2/4] WGS pilot ($WGS_WD)"
 CHRS="$CHRS" \
 PROJECT_ROOT="$PROJECT_ROOT" ADMIX_POP="$ADMIX_POP" GEN="$GEN" \
-WORKDIR="$WGS_WD" OUTDIR="${PROJECT_ROOT}/04_accuracy" \
-REVIEW_DIR="${REPO_DIR}/results/accuracy_pilot" \
+WORKDIR="$WGS_WD" OUTDIR="${PROJECT_ROOT}/04_accuracy${RESULT_SUFFIX}" \
+REVIEW_DIR="${REPO_DIR}/results/accuracy_pilot${RESULT_SUFFIX}" \
 bash "$REPO_DIR/run_accuracy_pilot.sh"
 
 # ---------- 3. Chip accuracy pilot ----------
 echo
 echo ">>> [3/4] Chip-GSA pilot ($CHIP_WD)"
 CHIP_OUT="/tmp/accuracy_chip_gsa_final_$$"
-CHIP_REVIEW="${REPO_DIR}/results/accuracy_pilot_chip_gsa"
+CHIP_REVIEW="${REPO_DIR}/results/accuracy_pilot_chip_gsa${RESULT_SUFFIX}"
 rm -rf "$CHIP_REVIEW"
 mkdir -p "$CHIP_REVIEW/plots"
 
@@ -180,11 +193,11 @@ REVIEW_DIR="$CHIP_REVIEW" \
 bash "$REPO_DIR/run_accuracy_pilot.sh"
 
 # ---------- 3b. FLARE accuracy (WGS + chip), the same scorer ----------
-TAGS="accuracy_pilot accuracy_pilot_chip_gsa"
+TAGS="accuracy_pilot${RESULT_SUFFIX} accuracy_pilot_chip_gsa${RESULT_SUFFIX}"
 if [ "$SCORE_FLARE" = "1" ]; then
     for density in wgs chip; do
-        if [ "$density" = wgs ]; then FWD="$FLARE_WD"; FTAG=accuracy_pilot_flare; FOUT="${PROJECT_ROOT}/04_accuracy_flare"
-        else FWD="$FLARE_CHIP_WD"; FTAG=accuracy_pilot_flare_chip_gsa; FOUT="/tmp/accuracy_flare_chip_final_$$"; fi
+        if [ "$density" = wgs ]; then FWD="$FLARE_WD"; FTAG=accuracy_pilot_flare${RESULT_SUFFIX}; FOUT="${PROJECT_ROOT}/04_accuracy_flare${RESULT_SUFFIX}"
+        else FWD="$FLARE_CHIP_WD"; FTAG=accuracy_pilot_flare_chip_gsa${RESULT_SUFFIX}; FOUT="/tmp/accuracy_flare_chip_final_$$"; fi
         echo
         echo ">>> [3b] FLARE ${density} ($FWD)"
         python3 -I "$REPO_DIR/scripts/flare-to-lat3.py" --flare-dir "$FWD" --out-dir "$FWD/lat3" \
@@ -205,8 +218,8 @@ echo ">>> [3.5] Post-run assertion — per-chr coverage complete"
 for tag in $TAGS; do
     f="${REPO_DIR}/results/${tag}/accuracy_per_chr.tsv"
     [ -s "$f" ] || die "post-run: expected TSV missing/empty: $f"
-    # Extract chr column for NAT_HGDP/NAT/NAT (proxy for full coverage)
-    chrs_present=$(awk -F'\t' 'NR>1 && $2=="NAT_HGDP" && $1=="NAT" && $3=="NAT" {print $4}' \
+    # Extract chr column for NAT_HGDP / this cohort's first track / NAT (proxy for full coverage)
+    chrs_present=$(awk -F'\t' -v t="$T1" 'NR>1 && $2=="NAT_HGDP" && $1==t && $3=="NAT" {print $4}' \
         "$f" | sort -nu | paste -sd,)
     n_chrs=$(echo "$chrs_present" | tr ',' '\n' | wc -l)
     if [ "$n_chrs" -lt 22 ]; then
@@ -215,10 +228,10 @@ for tag in $TAGS; do
     echo "  $tag: 22/22 chrs present ($chrs_present)"
 done
 # Also assert every panel in the summary has full-coverage n_sites
-TAGS="$TAGS" Rscript -e '
+TAGS="$TAGS" T1="$T1" Rscript -e '
     for (path in file.path("results", strsplit(Sys.getenv("TAGS"), " +")[[1]], "accuracy_summary.tsv")) {
         d <- read.delim(path, sep="\t", stringsAsFactors=FALSE)
-        d <- d[d$ancestry=="NAT" & d$track=="NAT",]
+        d <- d[d$ancestry=="NAT" & d$track==Sys.getenv("T1"),]
         max_n <- max(d$total_sites)
         low   <- d[d$total_sites < 0.5 * max_n, c("panel","total_sites")]
         if (nrow(low)) {
@@ -246,7 +259,7 @@ git add -A results/
 if git diff --cached --quiet; then
     echo "  no result changes to commit — nothing to push"
 else
-    git commit -m "accuracy pilot: full 22-chr RFMix WGS + chip$([ "$SCORE_FLARE" = 1 ] && echo ' and FLARE WGS + chip') (finalize_pilot job $SLURM_JOB_ID)
+    git commit -m "accuracy pilot ${ADMIX_POP} gen${GEN} (${TRACKS}): full 22-chr RFMix WGS + chip$([ "$SCORE_FLARE" = 1 ] && echo ' and FLARE WGS + chip') (finalize_pilot job $SLURM_JOB_ID)
 
 Auto-committed by finalize_pilot.sbatch after the 3b arrays completed:
 every (track, panel, chr) combo present, no 1- or 2-class .classes file,

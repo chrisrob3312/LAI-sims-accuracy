@@ -21,9 +21,10 @@ Those relate to the files here as follows:
 | `eas_rfmix.txt` | 501 1KG EAS | not used by the 3-way arms (top level holds the 6 Jul Koenig list) |
 | `sas_rfmix.txt` | 507 1KG SAS | not used by the 3-way arms (top level holds the 6 Jul Koenig list) |
 
-The NAT_HOMOG arms add `amr_homog_rfmix.txt`, which 4a writes: July's K=5
-AMR homogeneous samples plus the AMR samples new since July that pass in the
-current run, minus simulation donors and their relatives
+The NAT_HOMOG arms add `amr_homog_rfmix.txt`, which 4a `HOMOG_SET=lai3way`
+writes: July's K=5 AMR homogeneous samples plus the AMR samples new since July
+that pass a K=5 run judged as July's was (July's anchors, MEN/OCE/no-super-pop
+samples left out, Q >= 0.94), minus simulation donors and their relatives
 (`scripts/build-3way-amr-homog.py`).
 
 Rules for this project: reference and donor samples are disjoint and never

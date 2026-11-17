@@ -21,6 +21,11 @@
 # Why here and not in 1c: 1c measured a different rule (cohort x super-pop
 # groups <= 15%, panel <= 7%), and changing 1c re-phases the panel. The site
 # list only decides which markers ADMIXTURE reads, so 4a computes it itself.
+#
+# MEASURE_KEEP=<file of sample IDs> measures the rule on those samples only:
+# the others are in no group, so no AN_<group> counts them and no margin is
+# judged on them. 4a's HOMOG_SET=lai3way uses it to leave MEN, OCE and samples
+# of no known super-pop out of the K=5 run's rule. Unset = every sample.
 # =============================================================================
 set -uo pipefail
 MODE=sites
@@ -76,6 +81,17 @@ done
 python3 -I "$GROUPER" --samples "${WORK}/samples.txt" "${COH[@]}" --default-cohort HGDP1KG \
     --groups "$SAMPLE_GROUPS" --sgdp-manifest "$SGDP_MANIFEST" > "${WORK}/groups.tsv" \
     || die "build-missingness-groups.py failed"
+MEASURE_KEEP="${MEASURE_KEEP:-}"
+if [[ -n "$MEASURE_KEEP" ]]; then
+    [[ -s "$MEASURE_KEEP" ]] || die "MEASURE_KEEP=${MEASURE_KEEP} is missing or empty"
+    awk -F'\t' 'NR == FNR { if (NF && $1 !~ /^#/) k[$1] = 1; next } ($1 in k)' \
+        "$MEASURE_KEEP" "${WORK}/groups.tsv" > "${WORK}/groups.kept.tsv" || die "cannot filter the groups"
+    [[ -s "${WORK}/groups.kept.tsv" ]] || die "no sample of MEASURE_KEEP is in $SU"
+    echo "NOTE [chr${CHR}]: measuring $(wc -l < "${WORK}/groups.kept.tsv") of $(wc -l < "${WORK}/groups.tsv")" \
+         "samples (MEASURE_KEEP=${MEASURE_KEEP}); groups:" \
+         "$(cut -f2 "${WORK}/groups.kept.tsv" | sort | uniq -c | awk '{printf "%s %d, ", $2, $1}')" >&2
+    mv "${WORK}/groups.kept.tsv" "${WORK}/groups.tsv"
+fi
 if [[ "$MODE" == groups ]]; then
     cp "${WORK}/groups.tsv" "$OUT"; exit 0
 fi

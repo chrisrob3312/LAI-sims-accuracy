@@ -128,6 +128,7 @@ PANELS_TO_RUN="${PANELS_TO_RUN:-$DEFAULT_PANELS}"
 
 # Sim tracks to run (space-separated)
 TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"
+TRACKS_TO_RUN="${TRACKS_TO_RUN//+/ }"    # the driver joins tracks with + (sbatch --export splits on commas)
 
 # RFMix params (legacy values)
 RFMIX_E="${RFMIX_E:-2}"
@@ -207,6 +208,10 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
+# The .haps/.sample consistency check (the August chr13 cache, below).
+# shellcheck source=scripts/haps-guard.sh
+source "${REPO_DIR}/scripts/haps-guard.sh" || { echo "ERROR: cannot read ${REPO_DIR}/scripts/haps-guard.sh"; exit 1; }
+
 # ----------------------------------------------------------------------------
 # Helper: per-pop .haps/.sample for one panel-component (NAT, IBS, YRI, etc.)
 # ----------------------------------------------------------------------------
@@ -219,14 +224,31 @@ extract_haps () {
     # IBS / YRI on 17 Nov) the old haplotypes must not be reused under the
     # same IBS_1KG / YRI_1KG name.
     local want; want=$(awk 'NF {print $1}' "$keep_file" | sort -u | md5sum | cut -c1-32)
+    # ...and only while the cached pair is whole and newer than the panel: in
+    # August chr13's NAT_PEL_chr13.sample was a header with no individuals
+    # beside an intact .haps, and "the .haps exists" reused it (haps-guard.sh).
+    local why="" msg
     if [[ ! -s "${out}.haps" || "$(cat "${out}.keep.md5" 2>/dev/null)" != "$want" ]]; then
+        why="not cached for this list"
+    elif [[ "$PANEL" -nt "${out}.haps" ]]; then
+        why="the panel is newer than the cached .haps"
+    elif ! msg=$(haps_pair_check "${out}.haps" "${out}.sample"); then
+        why="the cached pair is inconsistent: ${msg}"
+    fi
+    if [[ -n "$why" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] ${label}: extracting (${why})"
         rm -f "${out}.haps" "${out}.sample" "${out}.keep.md5"
-        plink2 --bcf "$PANEL" \
+        if ! plink2 --bcf "$PANEL" \
                --keep <(awk '{print 0, $1}' "$keep_file") \
                --export haps \
                --threads "$THREADS" \
                --out "$out" \
-               > "${out}.plink.log" 2>&1
+               > "${out}.plink.log" 2>&1; then
+            echo "ERROR: [chr${CHR}] plink2 --export haps failed for ${label}; ${out}.plink.log:" >&2
+            cat "${out}.plink.log" >&2
+            rm -f "${out}.haps" "${out}.sample"
+            return 1
+        fi
         echo "$want" > "${out}.keep.md5"
     fi
 
@@ -243,6 +265,10 @@ extract_haps () {
             sed '1,2d' "${out}.sample" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
         } > "${out}.sample.rewrite"
         mv "${out}.sample.rewrite" "${out}.sample"
+    fi
+    if ! msg=$(haps_pair_check "${out}.haps" "${out}.sample"); then
+        echo "ERROR: [chr${CHR}] ${label}: ${msg} -- not handing RFMix an inconsistent pair" >&2
+        return 1
     fi
 }
 
@@ -282,11 +308,11 @@ mkdir -p "$WORKDIR"
     echo "[$(date +%T)] [chr${CHR}] extracting per-pop reference haps (prep-lock held)"
     extract_haps NAT_HGDP        "$NAT_HGDP_RFMIX"
     extract_haps NAT_HGDPMXB     "$NAT_HGDPMXB_RFMIX"
-    [[ -s "$NAT_HOMOG_RFMIX" ]] && extract_haps NAT_HOMOG "$NAT_HOMOG_RFMIX" || true
+    if [[ -s "$NAT_HOMOG_RFMIX" ]]; then extract_haps NAT_HOMOG "$NAT_HOMOG_RFMIX"; fi
     extract_haps IBS_1KG         "$IBS_RFMIX"
     extract_haps YRI_1KG         "$YRI_RFMIX"
-    [[ -s "$PEL_RFMIX"     ]] && extract_haps NAT_PEL         "$PEL_RFMIX"     || true
-    [[ -s "$PEL_EAS_RFMIX" ]] && extract_haps NAT_PEL_EAS     "$PEL_EAS_RFMIX" || true
+    if [[ -s "$PEL_RFMIX" ]]; then extract_haps NAT_PEL "$PEL_RFMIX"; fi
+    if [[ -s "$PEL_EAS_RFMIX" ]]; then extract_haps NAT_PEL_EAS "$PEL_EAS_RFMIX"; fi
 
     # Panel 5 (HGDP-NAT + ALL 50 MXB) -- AMR = amr_rfmix + mxb_rfmix + mxb_simulation
     {
@@ -381,12 +407,27 @@ run_panel_track () {
     # 2b emits a 3-col .sample header (ID_1 ID_2 missing) but shapeit2rfmix.py
     # requires the SHAPEIT 7-col header. Normalize into a work copy per (track,chr).
     local admixed_sample="${WORKDIR}/${track}.${ADMIX_POP}.chr${CHR}.7col.sample"
-    if [[ ! -s "$admixed_sample" ]]; then
+    if [[ ! -s "$admixed_sample" || "$admixed_sample_raw" -nt "$admixed_sample" ]]; then
         {
             echo "ID_1 ID_2 missing father mother sex plink_pheno"
             echo "0 0 0 D D D B"
             sed '1,2d' "$admixed_sample_raw" | awk '{print $1, $2, $3, 0, 0, 0, -9}'
         } > "$admixed_sample"
+    fi
+
+    # The simulated individuals: the .haps must hold exactly the .sample's
+    # individuals, and every ID in NOTREF_FILE must be among them --
+    # shapeit2rfmix.py keeps the --admixed_keep IDs it finds and silently drops
+    # the rest, so a mismatch would score RFMix on fewer individuals, or none.
+    local msg nmiss
+    if ! msg=$(haps_pair_check "$admixed_haps" "$admixed_sample"); then
+        echo "ERROR: [chr${CHR}] [$track/$panel] simulated cohort: ${msg}"
+        return 1
+    fi
+    nmiss=$(awk 'NR == FNR { if (FNR > 2) s[$2] = 1; next } NF && !($1 in s)' "$admixed_sample" "$NOTREF_FILE" | wc -l)
+    if [[ "$nmiss" -gt 0 ]]; then
+        echo "ERROR: [chr${CHR}] [$track/$panel] ${nmiss} ID(s) of ${NOTREF_FILE} are not in ${admixed_sample_raw}"
+        return 1
     fi
 
     local ref_keep="${WORKDIR}/REF_${panel}.chr${CHR}.ref"

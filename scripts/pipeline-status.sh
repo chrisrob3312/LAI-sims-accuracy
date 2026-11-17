@@ -126,7 +126,7 @@ stage_row "1c prep (chunked)"   "1c_phase"
 stage_row "phase chunks"        "1b_chunk"
 stage_row "ligate"              "1b_ligat"
 stage_row "KING dedup"          "1e_king"
-stage_row "4a ADMIXTURE K=${K}"    "4a_homog"
+stage_row "4a global + lai3way"  "4a_homog"
 stage_row "2b simulate"         "2b_simu"
 stage_row "RFMix WGS"           "3b_rfmix"
 stage_row "RFMix WGS homog"     "3b_homog"
@@ -275,13 +275,22 @@ else
     printf ' %-34s %s\n' "K=${K} panel table" "not started"
 fi
 
-# 5. homog list freshness -- the arm that silently used a K=5 list
-if [[ -s reference_ids/amr_homog_rfmix.k${K}.txt ]]; then
-    printf ' %-34s %s\n' "homog AMR list (K=${K})" \
-      "ok ($(awk 'NF' reference_ids/amr_homog_rfmix.k${K}.txt | wc -l) ids)"
+# 5. The 3-way simulation's panel: 4a HOMOG_SET=lai3way (K=5, July's anchors)
+L3="${HOMOG_DIR}/lai3way_k5/lai_ref_panel_samples.k5.tsv"
+if [[ -s "$L3" ]]; then
+    tot=$(awk 'NR>1' "$L3" | wc -l); inc=$(awk -F'\t' 'NR>1 && $NF==1' "$L3" | wc -l)
+    printf ' %-34s %s\n' "lai3way K=5 panel table" "ok (${tot} samples, ${inc} homogeneous)"
+else
+    printf ' %-34s %s\n' "lai3way K=5 panel table" "not started"
+fi
+# The list the 3-way HOMOG arms read: rewritten by lai3way (July's AMR panel +
+# AMR samples new since July that pass at K=5, minus donors and relatives).
+if [[ -s reference_ids/amr_homog_rfmix.txt && -s "$L3" && ! reference_ids/amr_homog_rfmix.txt -ot "$L3" ]]; then
+    printf ' %-34s %s\n' "homog AMR list (3-way)" \
+      "ok ($(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) ids, written by lai3way)"
 elif [[ -s reference_ids/amr_homog_rfmix.txt ]]; then
-    printf ' %-34s %s\n' "homog AMR list" \
-      "still K=5 ($(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) ids) -- 4a has not run"
+    printf ' %-34s %s\n' "homog AMR list (3-way)" \
+      "previous list ($(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) ids) -- 4a lai3way has not run"
 fi
 hr
 echo

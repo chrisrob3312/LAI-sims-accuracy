@@ -140,6 +140,7 @@ SIM_DIR="${SIM_DIR:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}/gen${GEN}}"
 FLARE_OUTDIR="${FLARE_OUTDIR:-${PROJECT_ROOT}/03_flare${CHIP_NAME:+_${CHIP_NAME}}}"
 
 TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"
+TRACKS_TO_RUN="${TRACKS_TO_RUN//+/ }"    # the driver joins tracks with + (sbatch --export splits on commas)
 DEFAULT_PANELS="NAT_HGDP"
 [[ -s "$PEL_RFMIX"     ]] && DEFAULT_PANELS="${DEFAULT_PANELS} NAT_PEL"
 [[ -s "$PEL_EAS_RFMIX" ]] && DEFAULT_PANELS="${DEFAULT_PANELS} NAT_PEL_EAS"
@@ -326,6 +327,14 @@ HAPS="${SIM_DIR}/${TASK_TRACK}.${ADMIX_POP}.chr${CHR}.haps"
 SAMP="${SIM_DIR}/${TASK_TRACK}.${ADMIX_POP}.chr${CHR}.sample"
 [[ -s "$HAPS" ]] || { echo "ERROR: missing $HAPS (run 2b first)"; exit 1; }
 [[ -s "$SAMP" ]] || { echo "ERROR: missing $SAMP"; exit 1; }
+# The pair must agree (5 + 2 x individuals columns, first and last line): the
+# check the RFMix arms run on every cached .haps (scripts/haps-guard.sh).
+# shellcheck source=scripts/haps-guard.sh
+source "${REPO_DIR}/scripts/haps-guard.sh" || { echo "ERROR: cannot read ${REPO_DIR}/scripts/haps-guard.sh"; exit 1; }
+if ! _msg=$(haps_pair_check "$HAPS" "$SAMP"); then
+    echo "ERROR: [chr${CHR}] simulated cohort: ${_msg}"
+    exit 1
+fi
 
 GT_VCF="${TMP}/target.chr${CHR}.vcf.gz"
 echo "[$(date +%T)] [chr${CHR}] converting simulated haplotypes -> VCF"

@@ -12,14 +12,20 @@
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 60 keep-list
 #            samples that were previously filtered as "related" + merge
 #            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
-#   Stage 3: K=7 homogeneity filter: 4a's own ADMIXTURE site list (every
-#            super-pop <= 7% missing, every cohort <= 15%), LD prune on the
-#            unrelated set, unsupervised -> central high-Q anchors (Q >= 0.94)
-#            -> supervised ADMIXTURE, homogeneous at Q >= 0.94
-#            (sbatch 4a_build_homogeneity_panel_kN_clm.sh)
-#   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
-#   Stage 5: Full RFMix sweep — WGS main + HOMOG fork, chip main + HOMOG fork
-#            (sbatch 3b_*.sh — 4 arrays)
+#   Stage 3: two homogeneity filters side by side (sbatch
+#            4a_build_homogeneity_panel_kN_clm.sh, HOMOG_SET=global / lai3way):
+#              global  K=7, every sample, central high-Q anchors (Q >= 0.94),
+#                      homogeneous at Q >= 0.94 -- for the benchmark
+#              lai3way K=5 as July (EUR AFR AMR EAS SAS, July's anchors, MEN/
+#                      OCE/no-super-pop left out), Q >= 0.94 -- writes the
+#                      3-way HOMOG arms' amr_homog_rfmix.txt
+#            Both: every super-pop <= 7% missing, every cohort <= 15%; LD prune
+#            on the unrelated set; relatives projected.
+#   Stages 4-6, once per cohort in COHORTS (default Brasa:12:NAT
+#            MexLike:16:NATMXB -- Brazilian-like and Mexican-like):
+#   Stage 4: simulate the cohort (sbatch 2b_simulation_clm.sh)
+#   Stage 5: RFMix + FLARE, WGS + GSA chip, main panels + HOMOG fork
+#            (sbatch 3b_*.sh -- 8 arrays)
 #   Stage 6: Score accuracy + commit + push (sbatch finalize_pilot.sbatch)
 #   Stage 7: (main-loop side, not here) regen deck + tables + figures
 #
@@ -249,7 +255,7 @@ if command -v squeue > /dev/null; then
     _names=" "
     want 2 && _names+="1c_phase "
     if want 3 && { want 2 || [[ "${RUN_KING:-}" == "1" ]]; }; then _names+="1e_king_dedup "; fi
-    want 3 && _names+="4a_homog_kN "
+    want 3 && _names+="4a_homog_kN 4a_homog_lai3way "
     want 4 && _names+="2b_simu "
     want 5 && _names+="3b_rfmix 3b_homog 3b_chip 3b_chip_homog 3b_flare "
     want 6 && _names+="finalize_pilot "
@@ -404,21 +410,19 @@ else
 fi
 
 # ---------------------------------------------------------------- STAGE 3
-# K=7 homogeneity filter (4a_build_homogeneity_panel_kN_clm.sh; K=7 from 17 Nov).
-#   MARKERS: 4a's own site list from the pre-phasing soft-union (every
-#            super-pop <= 7% missing, every cohort <= 15%), no global MAF, LD
-#            pruned on the unrelated fit set; stops before the fits if the
-#            marker count would not finish inside ADMIX_MAX_HOURS.
-#   STAGE A: unsupervised ADMIXTURE K=7; per cluster, anchors = the 50 with the
-#            best rank of Q (>= 0.94, carrying the cluster's label) plus
-#            distance to the group's centre in PC space.
-#   STAGE B: supervised ADMIXTURE K=7.
-#   STAGE C: included iff supervised max_Q >= 0.94 (every super-pop) AND the
-#            supervised argmax == the assigned super-pop. Publishes
-#            amr_homog_rfmix.txt for the 3-way HOMOG arms = July's K=5 AMR
-#            panel + AMR samples new since July that pass, minus donors.
-# Writes k7 outputs (admixture_k7/, homog_7pop/, lai_ref_panel_samples.k7.tsv)
-# and never clobbers the K=5 or K=8 outputs.
+# Homogeneity filter: TWO 4a jobs, run side by side (17 Nov), one per project.
+#   global  (HOMOG_SET=global, K=7) -- every panel sample; 4a's own ADMIXTURE
+#           site list (every super-pop <= 7% missing, every cohort <= 15%), LD
+#           pruned on the unrelated fit set; unsupervised -> central high-Q
+#           anchors (Q >= 0.94) -> supervised; homogeneous at Q >= 0.94.
+#           For the genotype-harmonization benchmark (run_benchmark_cohort.sh).
+#   lai3way (HOMOG_SET=lai3way, K=5) -- the 3-way LAI simulation's AMR panel,
+#           judged as July judged it: EUR AFR AMR EAS SAS with July's anchors,
+#           MEN / OCE / no-super-pop samples left out of the run, Q >= 0.94.
+#           Publishes reference_ids/amr_homog_rfmix.txt (July's AMR panel + the
+#           AMR samples new since July that pass) for the HOMOG arms.
+# Stages 4-6 wait on lai3way only; the benchmark waits on global. They share
+# 1e's KING table and one concatenated input (built under a lock).
 #
 # THIS MATTERS AT SUBMIT TIME, NOT AT RUN TIME. sbatch takes a COPY of the
 # batch script when the job is queued, and the job runs that copy -- editing
@@ -429,7 +433,7 @@ fi
 # So either fix 4a before submitting stage 3, or submit stage 1 on its own
 # (START_STAGE=1) and submit stages 2-6 later with AFTER_JOB=<stage1 jobid>.
 echo
-echo "============ STAGE 3: homogeneity filter (K=${K:-7}, 4a) ============"
+echo "============ STAGE 3: homogeneity filter (4a: global K=7 + lai3way K=5) ============"
 # ----------------------------------------------------------------- STAGE 2B
 # KING de-duplication, BETWEEN the merge and ADMIXTURE.
 #
@@ -451,28 +455,15 @@ if want 3 && { want 2 || [[ "${RUN_KING:-}" == "1" ]]; }; then
     J2B=$(submit "stage2b_king_dedup" "$(dep_of "$J2")" ./1e_king_dedup_clm.sh)
 fi
 
-J3=""
+J3=""; J3L=""
 if want 3; then
-    # Stage 3 waits on KING when it ran, so 4a reads a finished drop list
-    # rather than whatever happens to be on disk.
-    J3=$(submit "stage3_homog_kN" "$(dep_of "${J2B:-$J2}")" \
+    # Both wait on KING when it ran, so 4a reads a finished drop list rather
+    # than whatever happens to be on disk.
+    J3=$(submit "stage3_homog_global_k7" "$(dep_of "${J2B:-$J2}") --export=ALL,HOMOG_SET=global" \
          ./4a_build_homogeneity_panel_kN_clm.sh)
-else
-    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
-fi
-
-# ---------------------------------------------------------------- STAGE 4
-# Re-simulate admixed cohorts against the new panel. Simulation DONORS come
-# from reference_ids/*_simulation.txt, which are DIFFERENT individuals from
-# the reference-panel samples to avoid donor-in-reference confound. If donor
-# IDs haven't changed, this stage still needs to re-run because the per-chr
-# genetic maps now source from the rebuilt panel.
-echo
-echo "============ STAGE 4: re-simulate admixed cohorts ============"
-J4=""
-if want 4; then
-    J4=$(submit "stage4_simulate" "--array=1-22%${THROTTLE} $(dep_of "$J3")" \
-         ./2b_simulation_clm.sh)
+    J3L=$(submit "stage3_homog_lai3way_k5" \
+          "$(dep_of "${J2B:-$J2}") --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way" \
+          ./4a_build_homogeneity_panel_kN_clm.sh)
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
 fi
@@ -480,22 +471,16 @@ fi
 # ------------------------------------------------------------------ STAGE 3B
 # The benchmark donor/reference split, IN PARALLEL with stages 4-6.
 #
-# It depends on stage 3 and on nothing after it: the split is a function of
-# the homogeneity panel alone. Chaining it behind the RFMix sweep and the
-# accuracy tables would hold the genotyping-pipeline benchmark hostage to a
-# multi-day run it does not need, so it branches off stage 3 beside stage 4.
-#
-# Both modes are written: --mode lai for the LAI/ADMIXTURE panels, --mode
-# benchmark for the genotyping pipeline (where 1000 Genomes may not be a
-# donor). The script exits non-zero when a super-pop is too small to supply
-# both roles, which is a decision to make, not a failure to retry -- so this
-# runs inline and its exit status is reported rather than failing the chain.
+# It depends on the GLOBAL 4a and on nothing after it: the split is a function
+# of the K=7 panel alone. Chaining it behind the RFMix sweep and the accuracy
+# tables would hold the genotyping-pipeline benchmark hostage to a multi-day
+# run it does not need, so it branches off stage 3 beside stage 4.
 if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
     echo
     echo "============ STAGE 3B: benchmark donor/reference split ============"
     if [[ -n "$J3" ]]; then
-        echo "  stage 3 is queued as ${J3}; the benchmark cohort needs its output, so"
-        echo "  once stage 3 completes run (the split takes seconds; 6b-6e are arrays):"
+        echo "  the global 4a is queued as ${J3}; the benchmark cohort needs its output, so"
+        echo "  once it completes run (the split takes seconds; 6b-6e are arrays):"
         echo
         echo "    ./run_benchmark_cohort.sh --dry-run"
         echo "    ./run_benchmark_cohort.sh"
@@ -504,92 +489,134 @@ if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
     fi
 fi
 
-# ---------------------------------------------------------------- STAGE 5
-# Full RFMix + FLARE sweep on both WGS and chip-GSA density. Eight parallel
-# arrays, the same grid for both methods:
-#   - 3b_wgs main array:        22 chr * 9 default panels = 198 tasks
-#   - 3b_homog fork:            22 chr * 2 tracks         = 44 tasks
-#   - 3b_chip_wgs main array:   198 tasks  (CHIP_NAME=gsa_jessica)
-#   - 3b_chip_homog fork:       44 tasks   (CHIP_NAME=gsa_jessica)
-#   - 3b_flare: WGS main 198, WGS HOMOG 44 (PANELS_TO_RUN=NAT_HOMOG),
-#               chip main 198 and chip HOMOG 44 (CHIP_NAME + CHIP_SNPS_TPL)
-#
-# All run in parallel after stage 4 completes. The chip ones get the
-# CHIP_NAME + CHIP_SNPS_TPL env from the submit line to avoid the bug where
-# unset CHIP_NAME defaults to "wgs" and runs at WGS density in chip_wgs/.
+# ------------------------------------------------------------- STAGES 4-6
+# One simulated cohort per entry of COHORTS, "<ADMIX_POP>:<GEN>:<tracks>",
+# tracks joined with '+' (sbatch --export splits on commas):
+#   Brasa:12:NAT        Brazilian-like  NAT .15 / EUR .60 / AFR .25, HGDP-NAT donors
+#   MexLike:16:NATMXB   Mexican-like    NAT .50 / EUR .45 / AFR .05, HGDP-NAT + MXB donors
+# the pairing of the August pilot, whose two cohorts both ran off Brasa.dat
+# (so its Mexican-like cohort had Brazilian proportions and 12 generations).
+# Each cohort: a 2b array, the eight RFMix/FLARE arrays, a finalize. The
+# finalize jobs run one after another (afterany on the previous one), since
+# each commits and pushes from the same checkout.
+COHORTS="${COHORTS:-Brasa:12:NAT MexLike:16:NATMXB}"
 CHIP_SNPS_TPL="${CHIP_SNPS_TPL:-${REPO_DIR}/reference_ids/chip_gsa_jessica/chr%d.snps}"
 CHIP_NAME="${CHIP_NAME:-gsa_jessica}"
+# The main arms' panels, as the 3b scripts build their default list.
+MAIN_PANELS="NAT_HGDP"
+[[ -s reference_ids/pel_rfmix.txt     ]] && MAIN_PANELS="${MAIN_PANELS} NAT_PEL"
+[[ -s reference_ids/pel_eas_rfmix.txt ]] && MAIN_PANELS="${MAIN_PANELS} NAT_PEL_EAS"
+MAIN_PANELS="${MAIN_PANELS} NAT_HGDPMXB NAT_HGDPMXB_FULL"
+declare -A C_GEN C_TRACKS C_MAIN C_HOMOG
+COHORT_LIST=()
+for _c in $COHORTS; do
+    IFS=':' read -r _pop _gen _tr <<< "$_c"
+    [[ -n "$_pop" && "$_gen" =~ ^[0-9]+$ && -n "$_tr" ]] || die "COHORTS entry '${_c}' is not <ADMIX_POP>:<GEN>:<tracks>"
+    _nmain=0; _nhom=0
+    for _t in ${_tr//+/ }; do
+        case "$_t" in NAT|NATMXB) ;; *) die "COHORTS entry '${_c}': track '${_t}' is not NAT or NATMXB" ;; esac
+        _nhom=$((_nhom + 1))
+        for _p in $MAIN_PANELS; do
+            [[ "$_t" == NATMXB && "$_p" == NAT_HGDPMXB_FULL ]] && continue   # donors would be in the reference
+            _nmain=$((_nmain + 1))
+        done
+    done
+    _dat="${PROJECT_ROOT}/02_simulations/${_pop}.dat"
+    [[ -s "$_dat" ]] || _dat="${REPO_DIR}/simulation_models/${_pop}.dat"
+    [[ -s "$_dat" ]] || die "COHORTS entry '${_c}': no ${PROJECT_ROOT}/02_simulations/${_pop}.dat and no simulation_models/${_pop}.dat"
+    C_GEN[$_pop]="$_gen"; C_TRACKS[$_pop]="$_tr"
+    C_MAIN[$_pop]=$((22 * _nmain)); C_HOMOG[$_pop]=$((22 * _nhom))
+    COHORT_LIST+=("$_pop")
+    echo "[precheck] cohort ${_pop}: gen ${_gen}, tracks ${_tr//+/ }; model ${_dat}: $(tr '\n' '|' < "$_dat")"
+    echo "[precheck]   arrays: main ${C_MAIN[$_pop]} tasks (${_nmain} track x panel combos x 22), HOMOG ${C_HOMOG[$_pop]}"
+done
 
-echo
-echo "============ STAGE 5: full RFMix + FLARE sweep (8 arrays) ============"
-J5a=""; J5b=""; J5c=""; J5d=""; J5e=""; J5f=""; J5g=""; J5h=""
-if want 5; then
-    _d5="$(dep_of "$J4")"
-    J5a=$(submit "stage5_wgs_main" \
-          "--array=1-198%${THROTTLE} --mem=64G ${_d5}" \
-          ./3b_wgs-rfmix-jointcall_clm.sh)
+declare -A J4 J5 J6
+_prev6=""
+for _pop in "${COHORT_LIST[@]}"; do
+    _gen="${C_GEN[$_pop]}"; _tr="${C_TRACKS[$_pop]}"
+    _ex="ADMIX_POP=${_pop},GEN=${_gen},TRACKS_TO_RUN=${_tr}"
+    _sfx=""; [[ "$_pop" == Brasa ]] || _sfx="_${_pop}"
 
-    J5b=$(submit "stage5_wgs_homog" \
-          "--array=1-44%${THROTTLE} --mem=64G ${_d5}" \
-          ./3b_homog_wgs-rfmix-jointcall_clm.sh)
-
-    J5c=$(submit "stage5_chip_main" \
-          "--array=1-198%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
-          ./3b_chip_wgs-rfmix-jointcall_clm.sh)
-
-    J5d=$(submit "stage5_chip_homog" \
-          "--array=1-44%${THROTTLE} --mem=64G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
-          ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
-
-    # FLARE on the SAME grid as the four RFMix arms, in parallel with them.
-    # Same tracks, panels, chromosomes and densities, so the only thing
-    # differing between the two sweeps is the method -- which is the whole
-    # point of running both. Off with RUN_FLARE=0 if the jar is not installed.
-    if [[ "${RUN_FLARE:-1}" == "1" && -f ./3b_flare_wgs-jointcall_clm.sh ]]; then
-        J5e=$(submit "stage5_flare_wgs" \
-              "--array=1-198%${THROTTLE} --mem=32G ${_d5}" \
-              ./3b_flare_wgs-jointcall_clm.sh)
-        J5f=$(submit "stage5_flare_wgs_homog" \
-              "--array=1-44%${THROTTLE} --mem=32G ${_d5} --export=ALL,PANELS_TO_RUN=NAT_HOMOG" \
-              ./3b_flare_wgs-jointcall_clm.sh)
-        J5g=$(submit "stage5_flare_chip" \
-              "--array=1-198%${THROTTLE} --mem=32G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}" \
-              ./3b_flare_wgs-jointcall_clm.sh)
-        J5h=$(submit "stage5_flare_chip_homog" \
-              "--array=1-44%${THROTTLE} --mem=32G ${_d5} --export=ALL,CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL},PANELS_TO_RUN=NAT_HOMOG" \
-              ./3b_flare_wgs-jointcall_clm.sh)
+    # ------------------------------------------------------------ STAGE 4
+    # Re-simulate the cohort against the new panel. Simulation DONORS come
+    # from reference_ids/*_simulation.txt, which are DIFFERENT individuals from
+    # the reference-panel samples to avoid donor-in-reference confound.
+    echo
+    echo "============ STAGE 4: simulate ${_pop} (gen ${_gen}, ${_tr//+/ }) ============"
+    J4[$_pop]=""
+    if want 4; then
+        J4[$_pop]=$(submit "stage4_simulate_${_pop}" "--array=1-22%${THROTTLE} $(dep_of "$J3L") --export=ALL,${_ex}" \
+                    ./2b_simulation_clm.sh)
     else
-        echo "  (RUN_FLARE=0 or script absent -- FLARE arm not submitted)"
+        echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
     fi
-else
-    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
-fi
 
-# ---------------------------------------------------------------- STAGE 6
-# Accuracy pilot + verify + commit + push. finalize_pilot.sbatch has its
-# own gates (confirms every (track, panel, chr) combo wrote .done + .Lat3 +
-# .classes, rejects any 2-class .classes, checks per-chr coverage), then
-# runs accuracy_v2.R, commits the TSVs, and pushes.
-echo
-echo "============ STAGE 6: accuracy pilot + push ============"
-J6=""
-if want 6; then
-    if [[ -n "$J5a" ]]; then
-        # FLARE is included when it was submitted, because the accuracy tables
-        # carry RFMix AND FLARE side by side -- scoring before the FLARE arms
-        # land would produce tables with one method in them. finalize scores
-        # FLARE only when it was submitted (SCORE_FLARE). The benchmark split
-        # does NOT gate this: it branched off stage 3.
-        _d6="--dependency=afterok:${J5a}:${J5b}:${J5c}:${J5d}"
-        for _j in "$J5e" "$J5f" "$J5g" "$J5h"; do [[ -n "$_j" ]] && _d6="${_d6}:${_j}"; done
+    # ------------------------------------------------------------ STAGE 5
+    # RFMix + FLARE on both WGS and chip-GSA density, the same grid for both
+    # methods: main panels and the HOMOG fork, at each density. The chip ones
+    # get CHIP_NAME + CHIP_SNPS_TPL on the submit line, so an unset CHIP_NAME
+    # cannot default to "wgs" and run at WGS density in chip_wgs/.
+    echo
+    echo "============ STAGE 5: RFMix + FLARE sweep for ${_pop} (8 arrays) ============"
+    J5[$_pop]=""
+    if want 5; then
+        _d5="$(dep_of "${J4[$_pop]}")"
+        _m="--array=1-${C_MAIN[$_pop]}%${THROTTLE}"; _h="--array=1-${C_HOMOG[$_pop]}%${THROTTLE}"
+        _chip="CHIP_NAME=${CHIP_NAME},CHIP_SNPS_TPL=${CHIP_SNPS_TPL}"
+        _j=$(submit "stage5_wgs_main_${_pop}"   "${_m} --mem=64G ${_d5} --export=ALL,${_ex}" ./3b_wgs-rfmix-jointcall_clm.sh)
+        _js="$_j"
+        _j=$(submit "stage5_wgs_homog_${_pop}"  "${_h} --mem=64G ${_d5} --export=ALL,${_ex}" ./3b_homog_wgs-rfmix-jointcall_clm.sh)
+        _js="${_js}:${_j}"
+        _j=$(submit "stage5_chip_main_${_pop}"  "${_m} --mem=64G ${_d5} --export=ALL,${_ex},${_chip}" ./3b_chip_wgs-rfmix-jointcall_clm.sh)
+        _js="${_js}:${_j}"
+        _j=$(submit "stage5_chip_homog_${_pop}" "${_h} --mem=64G ${_d5} --export=ALL,${_ex},${_chip}" ./3b_chip_homog_wgs-rfmix-jointcall_clm.sh)
+        _js="${_js}:${_j}"
+        # FLARE on the SAME grid as the four RFMix arms, so the only thing
+        # differing between the two sweeps is the method. Off with RUN_FLARE=0
+        # if the jar is not installed.
+        if [[ "${RUN_FLARE:-1}" == "1" && -f ./3b_flare_wgs-jointcall_clm.sh ]]; then
+            _j=$(submit "stage5_flare_wgs_${_pop}"        "${_m} --mem=32G ${_d5} --export=ALL,${_ex}" ./3b_flare_wgs-jointcall_clm.sh)
+            _js="${_js}:${_j}"
+            _j=$(submit "stage5_flare_wgs_homog_${_pop}"  "${_h} --mem=32G ${_d5} --export=ALL,${_ex},PANELS_TO_RUN=NAT_HOMOG" ./3b_flare_wgs-jointcall_clm.sh)
+            _js="${_js}:${_j}"
+            _j=$(submit "stage5_flare_chip_${_pop}"       "${_m} --mem=32G ${_d5} --export=ALL,${_ex},${_chip}" ./3b_flare_wgs-jointcall_clm.sh)
+            _js="${_js}:${_j}"
+            _j=$(submit "stage5_flare_chip_homog_${_pop}" "${_h} --mem=32G ${_d5} --export=ALL,${_ex},${_chip},PANELS_TO_RUN=NAT_HOMOG" ./3b_flare_wgs-jointcall_clm.sh)
+            _js="${_js}:${_j}"
+        else
+            echo "  (RUN_FLARE=0 or script absent -- FLARE arms not submitted)"
+        fi
+        J5[$_pop]="$_js"
     else
-        _d6="$(dep_of "")"
+        echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
     fi
-    _sf=0; [[ -n "$J5e" || ( -z "$J5a" && "${RUN_FLARE:-1}" == "1" ) ]] && _sf=1
-    J6=$(submit "stage6_finalize" "${_d6} --export=ALL,SCORE_FLARE=${_sf},CHIP_NAME=${CHIP_NAME}" ./finalize_pilot.sbatch)
-else
-    echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
-fi
+
+    # ------------------------------------------------------------ STAGE 6
+    # Accuracy + verify + commit + push. finalize_pilot.sbatch has its own
+    # gates (every (track, panel, chr) combo wrote .done + .Lat3 + .classes,
+    # no 2-class .classes, per-chr coverage), then runs accuracy_v2.R and
+    # pushes results/accuracy_pilot*${_sfx}/. FLARE is scored when it was
+    # submitted (SCORE_FLARE), so the tables carry RFMix and FLARE side by side.
+    echo
+    echo "============ STAGE 6: accuracy + push for ${_pop} ============"
+    J6[$_pop]=""
+    if want 6; then
+        if [[ -n "${J5[$_pop]}" ]]; then _d6="--dependency=afterok:${J5[$_pop]}"
+        else _d6="$(dep_of "")"; fi
+        if [[ -n "$_prev6" ]]; then
+            if [[ "$_d6" == --dependency=* ]]; then _d6="${_d6},afterany:${_prev6}"
+            else _d6="--dependency=afterany:${_prev6}"; fi
+        fi
+        _sf=0
+        if [[ "${RUN_FLARE:-1}" == "1" ]] && { [[ -z "${J5[$_pop]}" ]] || [[ "${J5[$_pop]}" == *:*:*:*:* ]]; }; then _sf=1; fi
+        J6[$_pop]=$(submit "stage6_finalize_${_pop}" "${_d6} --export=ALL,SCORE_FLARE=${_sf},CHIP_NAME=${CHIP_NAME},${_ex}" \
+                    ./finalize_pilot.sbatch)
+        _prev6="${J6[$_pop]}"
+    else
+        echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
+    fi
+done
 
 # ---------------------------------------------------------------- summary
 echo
@@ -599,17 +626,13 @@ row () { [[ -n "$2" ]] && printf '  %-32s = %s\n' "$1" "$2" || printf '  %-32s  
 row "stage 1 (SGDP prep)"        "$J1"
 row "stage 2 (rebuild panel)"    "$J2"
 row "stage 2b (KING dedup)"      "$J2B"
-row "stage 3 (homog filter)"     "$J3"
-row "stage 4 (simulate)"         "$J4"
-row "stage 5a (WGS main sweep)"  "$J5a"
-row "stage 5b (WGS HOMOG fork)"  "$J5b"
-row "stage 5c (chip main sweep)" "$J5c"
-row "stage 5d (chip HOMOG fork)" "$J5d"
-row "stage 5e (FLARE WGS)"        "$J5e"
-row "stage 5f (FLARE WGS HOMOG)"  "$J5f"
-row "stage 5g (FLARE chip)"       "$J5g"
-row "stage 5h (FLARE chip HOMOG)" "$J5h"
-row "stage 6 (accuracy + push)"  "$J6"
+row "stage 3 (4a global K=7)"    "$J3"
+row "stage 3 (4a lai3way K=5)"   "$J3L"
+for _pop in "${COHORT_LIST[@]}"; do
+    row "stage 4 (simulate ${_pop})"          "${J4[$_pop]}"
+    row "stage 5 (8 arrays ${_pop})"          "${J5[$_pop]//:/ }"
+    row "stage 6 (accuracy + push ${_pop})"   "${J6[$_pop]}"
+done
 if [[ "$STOP_STAGE" -lt 6 ]]; then
     echo
     echo "PARTIAL SUBMIT. Queue the rest once the stage scripts are ready:"

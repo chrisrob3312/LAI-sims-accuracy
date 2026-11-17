@@ -89,11 +89,25 @@ ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/
 GMAP_DIR="${GMAP_DIR:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/resources/gmap_hg38}"
 GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.hg38.gmap.txt}"
 
-# Simulation model
+# Simulation model -- one cohort per submission (17 Nov):
+#   Brazilian-like  ADMIX_POP=Brasa   GEN=12  NAT .15 / EUR .60 / AFR .25   TRACKS_TO_RUN=NAT
+#   Mexican-like    ADMIX_POP=MexLike GEN=16  NAT .50 / EUR .45 / AFR .05   TRACKS_TO_RUN=NATMXB
+# as the August pilot paired them (Brazilian-like = HGDP-NAT donors, Mexican-like
+# = HGDP-NAT + MXB donors) -- but August ran both tracks off Brasa.dat, so its
+# "Mexican-like" cohort had Brazilian proportions and 12 generations.
+# Brasa.dat / Brasa.sample.txt are Jessica's, in ${PROJECT_ROOT}/02_simulations/.
+# A cohort with no file there takes the repo copy (simulation_models/), which is
+# how MexLike runs without a manual copy step.
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
-GEN="${GEN:-12}"                    # generations (matches .dat file)
+GEN="${GEN:-12}"                    # generations (must match the .dat's last line; checked below)
+REPO_MODELS="${REPO_MODELS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/simulation_models}"
 DAT_FILE="${DAT_FILE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.dat}"
 SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.sample.txt}"
+[[ ! -s "$DAT_FILE" && -s "${REPO_MODELS}/${ADMIX_POP}.dat" ]] && DAT_FILE="${REPO_MODELS}/${ADMIX_POP}.dat"
+[[ ! -s "$SAMPLE_TEMPLATE" && -s "${REPO_MODELS}/${ADMIX_POP}.sample.txt" ]] && SAMPLE_TEMPLATE="${REPO_MODELS}/${ADMIX_POP}.sample.txt"
+# Donor tracks to simulate (each one a full admix-simu run).
+TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"
+TRACKS_TO_RUN="${TRACKS_TO_RUN//+/ }"    # the driver joins tracks with + (sbatch --export splits on commas)
 
 # Outputs
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/02_simulations}"
@@ -114,6 +128,44 @@ GMAP=$(printf "$GMAP_TPL" "$CHR")
 [[ -d "$ADMIXSIMU_DIR"   ]] || { echo "ERROR: missing $ADMIXSIMU_DIR"; exit 1; }
 [[ -s "$DAT_FILE"        ]] || { echo "ERROR: missing $DAT_FILE (admix-simu config)"; exit 1; }
 [[ -s "$SAMPLE_TEMPLATE" ]] || { echo "ERROR: missing $SAMPLE_TEMPLATE"; exit 1; }
+for _t in $TRACKS_TO_RUN; do
+    case "$_t" in NAT|NATMXB) ;; *) echo "ERROR: TRACKS_TO_RUN has '${_t}' (NAT or NATMXB)"; exit 1 ;; esac
+done
+
+# ---------------------------------------------------------------------------
+# THE .dat MUST DESCRIBE THE MODEL THIS RUN IS LABELLED AS. Nothing downstream
+# reads the .dat: 3b passes GEN to RFMix (-G) and FLARE, the output folders
+# are named gen${GEN}, and the scorer pairs truth and calls by those names. A
+# MexLike run submitted with GEN=12, or pointed at Brasa.dat, would simulate
+# one model and label it another, silently. admix-simu's format (README, "Dat
+# file"): line 1 = <haplotypes> <admixed label> <source labels...>; each later
+# line = <generation> <p_admixed> <p_source...>, summing to 1. The first
+# line's pulse happens at generation 1 and the population then mixes with
+# itself up to the generation on the LAST line -- so "12 0 0.15 0.60 0.25" is
+# a 12-generation pulse model, the same as "1 0 0.15 0.60 0.25" + "12 1 0 0 0".
+# ---------------------------------------------------------------------------
+echo "[$(date +%T)] admix-simu model ${ADMIX_POP}: ${DAT_FILE}"
+sed 's/^/    /' "$DAT_FILE"
+_dat_err=$(awk -v gen="$GEN" -v tpl="$SAMPLE_TEMPLATE" '
+    NF == 0 { next }
+    ++n == 1 { nhap = $1
+               if ($3 != "NAT" || $4 != "EUR" || $5 != "AFR" || NF != 5) { print "header sources must be NAT EUR AFR (2b passes -NAT -EUR -AFR), got: " $0; bad = 1 }
+               next }
+    { s = 0; for (i = 2; i <= NF; i++) s += $i
+      if (NF != 5 || s < 0.999 || s > 1.001) { print "line " n " (" $0 ") needs 4 proportions summing to 1, sums to " s; bad = 1 }
+      if (n == 2 && $2 != 0) { print "the first generation line must have p_admixed = 0 (admix-simu README)"; bad = 1 }
+      last = $1 }
+    END { while ((getline l < tpl) > 0) if (++t > 2 && l ~ /[^ \t]/) rows++
+          if (n < 2) { print "no generation line"; bad = 1 }
+          else if (last != gen) { print "last generation line is " last " but GEN=" gen; bad = 1 }
+          if (nhap != 2 * rows) { print "header simulates " nhap " haplotypes but " tpl " lists " rows " individuals (" 2 * rows " haplotypes)"; bad = 1 }
+          exit bad }' "$DAT_FILE")
+if [[ -n "$_dat_err" ]]; then
+    echo "ERROR: ${DAT_FILE} does not match ADMIX_POP=${ADMIX_POP} GEN=${GEN}:"
+    sed 's/^/       /' <<< "$_dat_err"
+    exit 1
+fi
+echo "[$(date +%T)] model OK: GEN=${GEN} = the .dat's last generation; $(awk 'NR > 2 && NF' "$SAMPLE_TEMPLATE" | wc -l) individuals; tracks: ${TRACKS_TO_RUN}"
 
 # ---------------------------------------------------------------------------
 # DONOR <-> REFERENCE DISJOINTNESS CHECK.
@@ -138,13 +190,15 @@ done
 sort -u -o "$DONOR_UNION" "$DONOR_UNION"
 
 # Reference sets: every reference_ids/*_rfmix.txt (the curated lists, and the
-# <pop>_homog_rfmix.txt lists 4a writes there for the HOMOG arms), plus the
-# homogeneous panel 4a built for THIS run -- only the current K's list. The
-# same folder keeps older ones: July's K=5 homog_5pop_samples.txt was built
-# before 4a excluded donors and holds 102 of them, which stopped job 3754844
-# although no arm reads it.
-HOMOG_K="${HOMOG_K:-7}"
-HOMOG_LIST_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
+# amr_homog_rfmix.txt 4a writes there for the HOMOG arms), plus the
+# homogeneous panel 4a built for THIS pipeline -- the 3-way simulation's own,
+# HOMOG_SET=lai3way (K=5, 04_homogeneity_panel/lai3way_k5/homog_5pop_samples.txt).
+# The K=7 global panel serves the benchmark, not these arms. Older lists stay
+# on disk and are not read: July's K=5 homog_5pop_samples.txt in
+# 04_homogeneity_panel/ was built before 4a excluded donors and holds 102 of
+# them, which stopped job 3754844 although no arm reads it.
+HOMOG_K="${HOMOG_K:-5}"
+HOMOG_LIST_DIR="${HOMOG_LIST_DIR:-${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}/lai3way_k${HOMOG_K}}"
 HOMOG_CUR="${HOMOG_LIST_DIR}/homog_${HOMOG_K}pop_samples.txt"
 : > "$REF_SRC"
 for f in "${REFS}"/*_rfmix.txt "$HOMOG_CUR"; do
@@ -223,6 +277,16 @@ fi
 WORKDIR="${OUTDIR}/${ADMIX_POP}/gen${GEN}"
 mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR"
+
+# The simulated individuals' IDs, which every 3b arm keeps with --admixed_keep
+# (3b's NOTREF_FILE). It was a hand-made file in the legacy pipeline
+# (awk '{print $2}' Brasa.sample > Brasa.notref, then deleting the header in
+# an editor), so it lived only in this folder -- and the publication reset
+# moves this folder aside. Written here, from the template, by every task
+# (same content; temp + rename, so concurrent tasks cannot interleave).
+awk 'NR > 2 && NF {print $2}' "$SAMPLE_TEMPLATE" > "${ADMIX_POP}.notref.${CHR}.$$"
+mv "${ADMIX_POP}.notref.${CHR}.$$" "${ADMIX_POP}.notref"
+cp "$DAT_FILE" "${ADMIX_POP}.dat.${CHR}.$$" && mv "${ADMIX_POP}.dat.${CHR}.$$" "${ADMIX_POP}.dat.used"
 
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
@@ -366,9 +430,22 @@ run_admix_simu () {
     rm "${prefix}.tmp_geno" "${prefix}.tmp_snp"
 
     cp "$SAMPLE_TEMPLATE" "${track}.${ADMIX_POP}.chr${CHR}.sample"
+
+    # The simulated .haps must hold exactly the template's individuals: the
+    # .sample is a copy of the template, not read from the simulation, so a
+    # mismatch here would pair the wrong haplotypes with every ID downstream.
+    local ncol nrow
+    ncol=$(head -1 "${track}.${ADMIX_POP}.chr${CHR}.haps" | awk '{print NF}')
+    nrow=$(awk 'NR > 2 && NF' "${track}.${ADMIX_POP}.chr${CHR}.sample" | wc -l)
+    if [[ "$ncol" -ne $((5 + 2 * nrow)) ]]; then
+        echo "ERROR: [chr${CHR}] [$track] ${track}.${ADMIX_POP}.chr${CHR}.haps has ${ncol} columns;"
+        echo "       5 + 2 x ${nrow} individuals in the .sample = $((5 + 2 * nrow))."
+        exit 1
+    fi
 }
 
-run_admix_simu NAT
-run_admix_simu NATMXB
+for _t in $TRACKS_TO_RUN; do
+    run_admix_simu "$_t"
+done
 
 echo "[$(date +%T)] [chr${CHR}] # Complete. Outputs in $WORKDIR"

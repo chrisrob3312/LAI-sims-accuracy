@@ -79,8 +79,23 @@ different sets, so the lists are kept apart:
 
 | project | references | donors / test genomes | rule set |
 |---|---|---|---|
-| 3-way NAT/EUR/AFR LAI accuracy simulation (rerun of Jessica Honorato-Mauer's design; RFMix + FLARE, WGS + GSA chip) | top-level `*_rfmix.txt`: 1KG IBS (EUR), 1KG YRI (AFR), the NAT lists, and `amr_homog_rfmix.txt` (July's K=5 AMR panel + AMR samples new since July, from 4a) | `*_simulation.txt` (1KG IBS, 1KG YRI, HGDP NAT, MXB) | references and donors disjoint, never first-degree relatives; 1KG allowed. Originals in `rerun_jessicaH_3way_lai_sim/` |
-| genotyping-harmonization / imputation benchmark (Nextflow) and the global panel | the K=7 panel (`lai_ref_panel_samples.k7.tsv`, Q >= 0.94, central high-Q anchors), split by `run_benchmark_cohort.sh` | no 1KG donor and no real 1KG test genome (1KG is in the imputation panels) | contract threshold 0.94 (`plan_simset.R` must match). The 6 Jul HGDP anchor lists are in `benchmark_hgdp_anchors_jul06/` |
+| 3-way NAT/EUR/AFR LAI accuracy simulation (rerun of Jessica Honorato-Mauer's design; RFMix + FLARE, WGS + GSA chip, 22 chromosomes; two cohorts, below) | top-level `*_rfmix.txt`: 1KG IBS (EUR), 1KG YRI (AFR), the NAT lists, and `amr_homog_rfmix.txt` (July's K=5 AMR panel + AMR samples new since July that pass a K=5 run at Q >= 0.94: 4a `HOMOG_SET=lai3way`, July's anchors, MEN/OCE left out) | `*_simulation.txt` (1KG IBS, 1KG YRI, HGDP NAT, MXB) | references and donors disjoint, never first-degree relatives; 1KG allowed. Originals in `rerun_jessicaH_3way_lai_sim/` |
+| genotyping-harmonization / imputation benchmark (Nextflow) and the global panel | the K=7 panel (4a `HOMOG_SET=global`: `lai_ref_panel_samples.k7.tsv`, every sample, Q >= 0.94, central high-Q anchors), split by `run_benchmark_cohort.sh` | donors and real test genomes from HGDP, Almarri, SGDP and MXB; never 1KG (1KG is in the imputation panels) | contract threshold 0.94 (`plan_simset.R` must match). The 6 Jul anchor lists (July's K=5 anchors) are in `genotype_harmonization_benchmark_testing_anchor_list_20260706/` |
+
+*The 3-way simulation's two cohorts (17 Nov).* As the August pilot paired
+them -- but August ran both off `Brasa.dat`, so its "Mexican-like" cohort had
+Brazilian proportions and 12 generations:
+
+| cohort | `ADMIX_POP` | model (`.dat`) | gen | NAT donors (track) | results |
+|---|---|---|---|---|---|
+| Brazilian-like | `Brasa` | NAT .15 / EUR .60 / AFR .25 (Jessica's, `02_simulations/Brasa.dat` on the cluster) | 12 | HGDP NAT (`NAT`) | `results/accuracy_pilot*/` |
+| Mexican-like | `MexLike` | NAT .50 / EUR .45 / AFR .05 (`simulation_models/MexLike.dat`) | 16 | HGDP NAT + 25 MXB (`NATMXB`) | `results/accuracy_pilot*_MexLike/` |
+
+Both: 60 haplotypes (30 individuals), panels NAT_HGDP, +PEL, +PEL+EAS,
++25 MXB, +50 MXB (Brazilian-like only: the Mexican-like cohort's MXB donors
+would be in the reference) and the AMR homogeneous panel. The driver's
+`COHORTS` (default `Brasa:12:NAT MexLike:16:NATMXB`) sets them; 2b checks each
+`.dat` against its `GEN` and writes the `.notref` 3b reads.
 
 *IDs of reference samples used to generate admixed haplotypes and RFMix Reference:*
 
@@ -97,12 +112,12 @@ eur_rfmix.txt - 1KG IBS IDs (74) used as the EUR RFMix / FLARE reference in ever
 3-way arm. Restored on 17 Nov 2026 to the design (Jessica's 77-ID IBS list in
 rerun_jessicaH_3way_lai_sim/, as July's panel used it: the other 3 were relatives July's
 panel did not contain). From 6 Jul to 17 Nov it held HGDP French, Orcadian,
-Sardinian and Russian anchors (benchmark_hgdp_anchors_jul06/).
+Sardinian and Russian anchors (genotype_harmonization_benchmark_testing_anchor_list_20260706/).
 
 afr_rfmix.txt - 1KG YRI IDs (72) used as the AFR RFMix / FLARE reference in every
 3-way arm. Restored on 17 Nov 2026 the same way (77-ID YRI list; 5 relatives not
 in July's panel). From 6 Jul to 17 Nov it held HGDP Yoruba, Mandenka and Bantu
-anchors (benchmark_hgdp_anchors_jul06/).
+anchors (genotype_harmonization_benchmark_testing_anchor_list_20260706/).
 
 sas_rfmix.txt - HGDP Central/South Asian IDs (Balochi, Brahui, Makrani, Sindhi).
 HGDP00029 (Brahui) and HGDP00150 (Makrani), Koenig removals, were dropped on

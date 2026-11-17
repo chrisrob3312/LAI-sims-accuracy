@@ -6,8 +6,11 @@ reference_ids/amr_homog_rfmix.txt.
 
 Decided 17 Nov 2026: the 3-way pipeline keeps July's K=5 homogeneity calls
 and adds the AMR samples that are NEW since July -- SGDP, the restored HGDP
-samples, the 1KG relatives now kept in the panel -- where the current run
-calls them homogeneous. So:
+samples, the 1KG relatives now kept in the panel -- where a K=5 run judged as
+July's was calls them homogeneous: 4a HOMOG_SET=lai3way (July's anchors, MEN /
+OCE / no-super-pop samples left out, Q >= 0.94). Not the K=7 global run:
+"should not judge new amr homog by k=7, that's not consistent with earlier
+work". So:
 
   base  = July's K=5 table (reference_ids/lai_ref_panel_samples.tsv),
           super_pop AMR and included == 1 (88 samples: MXB force-included,
@@ -22,8 +25,8 @@ A sample that WAS in July's table keeps July's call; the current run is used
 only for samples July never saw.
 
   python3 -I scripts/build-3way-amr-homog.py --base reference_ids/lai_ref_panel_samples.tsv \\
-      --table <04_homogeneity_panel>/lai_ref_panel_samples.k7.tsv \\
-      --exclude <04_homogeneity_panel>/admixture_k7/simulation_donors.all.txt \\
+      --table <04_homogeneity_panel>/lai3way_k5/lai_ref_panel_samples.k5.tsv \\
+      --exclude <04_homogeneity_panel>/lai3way_k5/admixture_k5/simulation_donors.all.txt \\
       --out reference_ids/amr_homog_rfmix.3way.txt
 """
 import argparse

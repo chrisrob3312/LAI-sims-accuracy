@@ -148,7 +148,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | when | command | writes? |
 |---|---|---|
 | before submitting | `bash scripts/preflight-rebuild.sh` — every tool, input and setting the chain needs; exit = number of FAILs | no |
-| once, before the first chained run | `bash scripts/reset-publication-outputs.sh` — moves the previous `02_simulations` / `03_rfmix` / `03_flare` gen12 trees aside and writes `rebuild_epoch`. The RFMix and FLARE arms reuse any output they find, whatever its age, so without this the old pilot would be skipped over as done and re-scored; the driver refuses to chain them until `--check` passes | moves (never deletes) |
+| once, before the first chained run | `bash scripts/reset-publication-outputs.sh` — moves the previous `02_simulations` / `03_rfmix` / `03_flare` trees of every cohort (`COHORTS`, default `Brasa:12:NAT MexLike:16:NATMXB`) aside and writes `rebuild_epoch`. The RFMix and FLARE arms reuse any output they find, whatever its age, so without this the old pilot would be skipped over as done and re-scored; the driver refuses to chain them until `--check` passes | moves (never deletes) |
 | plan | `DRY_RUN=1 bash submit_panel_rebuild.sh` | no |
 | submit / re-submit after any failure | `bash submit_panel_rebuild.sh` | queues jobs |
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
@@ -418,7 +418,7 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    kept in `reference_ids/rerun_jessicaH_3way_lai_sim/`, named `backup_pre_koenig/` until 17 Nov). `eur_rfmix.txt` and
    `afr_rfmix.txt` now hold those lists exactly as July's panel used them
    (74 IBS, 72 YRI: the other 8 IDs were relatives July's panel did not
-   contain); the HGDP lists are in `reference_ids/benchmark_hgdp_anchors_jul06/` (they serve the harmonization benchmark's non-1KG needs). The
+   contain); the 6 Jul lists (HGDP EUR/AFR/EAS/SAS, MXB AMR) are in `reference_ids/genotype_harmonization_benchmark_testing_anchor_list_20260706/` -- July's K=5 run used them as its supervised anchors, and the benchmark's pool is HGDP, Almarri, SGDP and MXB (never 1KG). The
    donors (IBS, YRI) stay disjoint from them and, with
    `scripts/donor-switch-plan.py`, unrelated to them. The four RFMix arms now
    key their cached reference haplotypes (`IBS_1KG_chrN.haps` ...) by the
@@ -426,8 +426,9 @@ QC → soft-union logic with **2 inputs** (HGDP+1KG + MXB). Now **4 inputs**.
    `eas_rfmix` / `sas_rfmix` stay the 6 Jul lists: no 3-way arm reads them.
 
    *2b's donor/reference check* reads every `reference_ids/*_rfmix.txt`
-   (with 4a's `<pop>_homog_rfmix.txt`) and this run's
-   `04_homogeneity_panel/homog_${HOMOG_K}pop_samples.txt` (K=7 from 17 Nov). Job 3754844
+   (with 4a's `amr_homog_rfmix.txt`) and the 3-way simulation's own
+   homogeneous panel, `04_homogeneity_panel/lai3way_k5/homog_5pop_samples.txt`
+   (4a `HOMOG_SET=lai3way`, from 17 Nov; `HOMOG_K` / `HOMOG_LIST_DIR`). Job 3754844
    (16 Nov 2026) failed 22/22 because it also read July's K=5
    `homog_5pop_samples.txt`, built before 4a excluded donors: 102 of the 116
    donors are in it, although no arm reads that list. `verify-rebuild.sh`
@@ -695,6 +696,30 @@ African component: San, Ju'hoan and Khomani 1.00, Mbuti 0.39-0.77, Masai 0.32,
 Dinka 0.31, LWK 0.29 (0 of 97 LWK homogeneous). At K=7 there is one component
 per named super-pop and no OTH; 4a brings OTH back only when K exceeds the
 named super-pops.
+
+**Two homogeneity panels, one script (17 Nov): `HOMOG_SET`.** The 3-way
+NAT/EUR/AFR LAI simulation and the genotype-harmonization benchmark need
+different panels, and the 3-way one must be judged the way July judged it,
+not by the K=7 run:
+
+| | `HOMOG_SET=global` (default) | `HOMOG_SET=lai3way` |
+|---|---|---|
+| for | the benchmark, the global panel | the 3-way simulation's HOMOG arms |
+| K, super-pops | 7: EUR AFR AMR EAS SAS OCE MEN | 5: EUR AFR AMR EAS SAS |
+| samples | every panel sample | MEN, OCE and no-super-pop samples left out of the missingness rule, the LD prune and both fits |
+| anchors | discovered: central and high-Q (≥ 0.94) | July's (`assigned` column of `reference_ids/lai_ref_panel_samples.tsv` = the 6 Jul lists: HGDP EUR 49, AFR 46, EAS 50, SAS 48; MXB 50), kept in the fit when a relative pair has to lose one |
+| homogeneous | Q ≥ 0.94 and argmax = label | the same |
+| writes | `04_homogeneity_panel/*.k7.*`, `reference_ids/<sp>_homog_rfmix.k7.txt`, `homog_7pop/` BCFs | `04_homogeneity_panel/lai3way_k5/`, and `reference_ids/amr_homog_rfmix.txt` = July's AMR panel + AMR samples new since July that pass here, minus donors and their relatives |
+
+Both use the same rule (each super-pop ≤ 7% missing, each cohort ≤ 15%,
+measured on the set's own samples; no global MAF; LD on the unrelated fit set;
+relatives projected). lai3way also drops sites with no minor allele among its
+fitted samples (`--mac 1`, not a frequency floor): 1c's soft-union keeps OCE
+and MEN singletons, which are invariant without those samples. The two jobs
+share 1e's KING table and one concatenated input
+(`04_homogeneity_panel/admixture_input/`, built under a lock; a current concat
+left in `admixture_k*/` is adopted by hard link). The driver submits both;
+stages 4-6 wait on lai3way, the benchmark on global.
 
 **Pruning on the unrelated set (17 Nov).** The LD prune used every sample
 until 17 Nov, so 638 relatives and 153 duplicate copies entered every r2; it
@@ -973,6 +998,16 @@ accepts a differently-shaped history **without complaining** and simulates the
 wrong demography. `--dat-only` prints all thirteen `.dat` files and exits,
 needing no panel, conda env or Slurm context.
 
+The format itself is settled (admix-simu README, "Dat file", read 17 Nov):
+the first generation line is a pulse at generation 1 and must have
+p_admixed = 0; the population then mixes with itself up to the generation on
+the LAST line. So Jessica's one-line `Brasa.dat` (`12 0 0.15 0.60 0.25`) and
+6b's two-line form (`1 0 p...` then `G 1 0 0 0`) describe the same
+G-generation pulse model, and the README's own example says so. What stays
+worth checking is the output: `validate-simset-tracts.py --hanc2` reads one
+2b truth file and reports the generations its tract lengths imply
+(`verify-rebuild.sh` runs it on chr22 of each cohort).
+
 ### Did it simulate what we planned?
 
 Three things must agree, and `cohort-ancestry-summary.py` names the failing
@@ -1200,7 +1235,7 @@ sbatch 6e_cohort_kinship_clm.sh                # 1 job, genome-wide
 | **Step 11** — tables, checksums, provenance | not built |
 | **Affy 6.0 / 500K site lists** | need a GRCh38 vendor manifest **and** an Affymetrix reader |
 | **GSA v2.0** | needs its vendor GRCh38 A1 manifest |
-| **`.dat` generation-line format** | assumption; validated from output, not from the format spec |
+| **`.dat` generation-line format** | settled from the admix-simu README (17 Nov); still checked from output |
 | **6d / 6e bcftools pipelines** | untested against real data (orientation logic *is* unit-tested) |
 | **FLARE invocation** | untested against the real jar |
 | **SAS decision** | deferred to real counts: reduce n, accept reuse and report N_eff, or control-only |
