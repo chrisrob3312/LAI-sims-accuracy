@@ -228,14 +228,21 @@ export NUMEXPR_NUM_THREADS=1
 extract_haps () {
     local label="$1" keep_file="$2"
     local out="${WORKDIR}/${label}_chr${CHR}"
-    # Extract .haps only if not already cached (expensive plink2 pass).
-    if [[ ! -s "${out}.haps" ]]; then
+    # Extract .haps only if cached FOR THIS LIST (expensive plink2 pass). The
+    # cache is keyed by the keep list's contents, not just its label: when a
+    # reference list changes (eur_rfmix.txt / afr_rfmix.txt went back to 1KG
+    # IBS / YRI on 17 Nov) the old haplotypes must not be reused under the
+    # same IBS_1KG / YRI_1KG name.
+    local want; want=$(awk 'NF {print $1}' "$keep_file" | sort -u | md5sum | cut -c1-32)
+    if [[ ! -s "${out}.haps" || "$(cat "${out}.keep.md5" 2>/dev/null)" != "$want" ]]; then
+        rm -f "${out}.haps" "${out}.sample" "${out}.keep.md5"
         plink2 --bcf "$PANEL" \
                --keep <(awk '{print 0, $1}' "$keep_file") \
                --export haps \
                --threads "$THREADS" \
                --out "$out" \
                > "${out}.plink.log" 2>&1
+        echo "$want" > "${out}.keep.md5"
     fi
 
     # Rebuild .sample in SHAPEIT 7-column format UNCONDITIONALLY. Older cached

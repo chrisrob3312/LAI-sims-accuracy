@@ -41,18 +41,24 @@
 #SBATCH --mail-user=Christina.magyar@bcm.edu
 
 # ============================================================================
-# DESCRIPTION -- K=8 homogeneity panel: 7 named super-pops + empirical OTH.
+# DESCRIPTION -- K=7 homogeneity panel: the 7 named super-pops.
 # ============================================================================
 # K-parametric companion to 4a_build_homogeneity_panel_clm.sh (K=5). Default
-# K=8: the 7 named super-pops (AFR AMR EAS EUR MEN OCE SAS) plus OTH, a cluster
-# the data forms that is not one of them.
+# K=7 (from 17 Nov): AFR AMR EAS EUR MEN OCE SAS. At K=8 the eighth cluster
+# (OTH) had 2 anchors and became a second African component in the supervised
+# fit (San 1.00, Mbuti 0.4-0.8, LWK 0.29), so it is dropped; K above the
+# number of named super-pops brings OTH back as the leftover cluster.
 #
-#   0. MARKERS. Concat the 22 phased chromosomes; restrict to the sites 1c
-#      found adequately called in EVERY cohort x super-pop group and overall
-#      (ADMIX_SITE_FILTER); LD-prune 500 50 0.1 over all samples. No global
-#      MAF floor (ADMIX_PRUNE_MAF): every site already has MAF >= 0.005 in at
-#      least one super-pop (1c's soft-union). PRUNE_ONLY=1 stops here and
-#      reports the marker count, so the ADMIXTURE run time is known first.
+#   0. MARKERS. Concat the 22 phased chromosomes. Site list (ADMIX_SITE_SOURCE
+#      =4a): 4a measures, on 1c's PRE-phasing soft-union, which sites have
+#      every super-pop <= 7% missing and every cohort overall <= 15%
+#      (scripts/admix-site-list.sh), and restricts to them. LD-prune 500 50 0.1
+#      on the UNRELATED fit set only (relatives and duplicate copies inflate
+#      r2). No global MAF floor (ADMIX_PRUNE_MAF): every site already has
+#      MAF >= 0.005 in at least one super-pop (1c's soft-union).
+#      PRUNE_ONLY=1 stops here and reports the marker count and expected
+#      hours; a count that would not fit in ADMIX_MAX_HOURS stops the job
+#      before the fits rather than at the time limit.
 #
 #   FIT SET (FIT_UNRELATED=1): the panel keeps relatives, ADMIXTURE assumes
 #      none. Both runs below are FITTED on an unrelated subset (1e's duplicate
@@ -66,8 +72,9 @@
 #     Unsupervised ADMIXTURE at K. For each cluster, rank every eligible
 #     sample by its loading and NAME the cluster from its top ANCHOR_CAP at
 #     Q >= ANCHOR_MIN_Q (plurality metadata super-pop, purity >=
-#     ANCHOR_NAME_PURITY; the stronger claim wins a contested super-pop; one
-#     unnamed cluster becomes OTH). Then CHOOSE the anchors (ANCHOR_SELECT):
+#     ANCHOR_NAME_PURITY; the stronger claim wins a contested super-pop; when
+#     K exceeds the named super-pops, one unnamed cluster becomes OTH). Then
+#     CHOOSE the anchors (ANCHOR_SELECT):
 #     central (default) = of the samples at Q >= ANCHOR_MIN_Q that carry the
 #     cluster's super-pop label, the ANCHOR_CAP with the best combined rank of
 #     Q (highest) and distance to the group's median in the top ANCHOR_PCS
@@ -85,8 +92,12 @@
 #     Rerun only when the anchors (the .pop) or the bed changed.
 #
 #   STAGE C (homogeneity filter + refinement evidence):
-#     included = 1 iff supervised max_Q >= the tiered threshold AND the
-#     supervised argmax super-pop matches the sample's assigned super-pop.
+#     included = 1 iff supervised max_Q >= HOMOG_THRESHOLD (0.94 for every
+#     super-pop from 17 Nov) AND the supervised argmax super-pop matches the
+#     sample's assigned super-pop. Publishes <sp>_homog_rfmix.k${K}.txt, and
+#     amr_homog_rfmix.txt for the 3-way LAI HOMOG arms = July's K=5 AMR panel
+#     plus the AMR samples new since July that pass here, minus donors and
+#     their relatives (scripts/build-3way-amr-homog.py).
 #     Emits population_cluster_meanQ.k${K}.tsv (mean unsupervised Q per
 #     POPULATION per cluster) and [refine] lines for populations whose argmax
 #     disagrees with their label or that fail to concentrate.
@@ -124,18 +135,19 @@ SAMPLE_GROUPS="${SAMPLE_GROUPS:-${PROJECT_ROOT}/sample_groups.tsv}"
 MXB_POPINFO="${MXB_POPINFO:-${REPO_DIR}/reference_ids/MXB50genomes_popinfo.tsv}"
 REFS="${REFS:-${REPO_DIR}/reference_ids}"
 
-# K=7. Two DISTINCT thresholds (do not conflate):
-#   ANCHOR_MIN_Q   = floor to QUALIFY as a discovered anchor in stage A
-#                    (unsupervised cluster-Q). Looser so small/clinal OCE/MEN
-#                    yield enough training exemplars.
-#   ANCHOR_CAP     = max anchors kept per super-pop (top-N by Q). Matches
+# Two DISTINCT thresholds (do not conflate), both 0.94 for EVERY super-pop
+# from 17 Nov -- one number for all, between the 0.93 the under-represented
+# groups had and the 0.95 the rest had:
+#   ANCHOR_MIN_Q   = floor to be an anchor CANDIDATE in stage A (unsupervised
+#                    cluster-Q, and the candidate must carry the cluster's
+#                    super-pop label).
+#   ANCHOR_CAP     = max anchors kept per super-pop. Matches
 #                    build-anchors-from-koenig.py (cap 50).
-#   HOMOG_THRESHOLD= floor for FINAL inclusion in stage C (0.93, matching the
-#                    committed K=5 panel -- kept deliberately below 0.95 so
-#                    under-represented super-pops retain enough members)
-#                    (supervised Q). This is the published homogeneity cut.
-K="${K:-8}"
-ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.93}"
+#   HOMOG_THRESHOLD= floor for FINAL inclusion in stage C (supervised Q).
+#                    This is the published homogeneity cut.
+# K = 7 named super-pops (see DESCRIPTION for why not 8).
+K="${K:-7}"
+ANCHOR_MIN_Q="${ANCHOR_MIN_Q:-0.94}"
 ANCHOR_CAP="${ANCHOR_CAP:-50}"
 # A COUNT floor to go with the Q floor. ANCHOR_MIN_Q stops an ADMIXED sample
 # from becoming an anchor; this stops a super-pop's whole prior from resting on
@@ -163,7 +175,7 @@ ANCHOR_FLOOR_FATAL="${ANCHOR_FLOOR_FATAL:-0}"
 # apply a stricter floor to the deeply sampled super-pops, which can meet it.
 ANCHOR_MIN_Q_STRICT="${ANCHOR_MIN_Q_STRICT:-}"
 ANCHOR_STRICT_SUPERPOPS="${ANCHOR_STRICT_SUPERPOPS:-EUR,EAS,AFR}"
-HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.93}"
+HOMOG_THRESHOLD="${HOMOG_THRESHOLD:-0.94}"
 
 # WHICH ANCHORS: highest Q AND central to the super-pop (decided 16 Nov).
 #
@@ -201,28 +213,18 @@ case "$ANCHOR_SELECT" in central|top_q) ;; *)
     echo "ERROR: ANCHOR_SELECT must be central or top_q, got '${ANCHOR_SELECT}'" >&2; exit 1 ;;
 esac
 
-# TIERED homogeneity cut. HOMOG_THRESHOLD above is the FLOOR and the default
-# for any super-pop not named here; HOMOG_THRESHOLD_STRICT applies to the
-# groups that have enough samples to afford it.
+# Homogeneity cut: ONE number for every super-pop from 17 Nov (0.94).
 #
-# WHY TWO NUMBERS. The cut trades purity against panel size, and the two sides
-# of that trade are not symmetric across super-pops. EUR, EAS, AFR and SAS
-# are richly sampled in HGDP+1KG, so 0.95 costs them little and buys cleaner
-# reference haplotypes. AMR, OCE and MEN are not: at 0.95 they lose members
-# the panel cannot spare, and a thin reference panel for exactly the
-# ancestries whose local-ancestry calls are hardest is the failure this whole
-# project is measuring. So the under-represented groups sit at 0.93.
-#
-# SAS joined the strict tier on 16 Nov: the K=8 run put 321 SAS samples in
-# the panel at 0.93 (1KG ITU 98, STU 110, GIH 70, PJL 26, BEB 7, plus SGDP
-# south Indians), so it can afford the stricter cut.
-#
-# This is a deliberate asymmetry and it belongs in the methods: the panel is
-# not "samples above one Q", it is "samples above a per-super-pop Q", and the
-# per-super-pop counts and cut are printed in the stage C log and carried in
-# homog_composition.k${K}.tsv.
-HOMOG_THRESHOLD_STRICT="${HOMOG_THRESHOLD_STRICT:-0.95}"
-HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-EUR,EAS,AFR,SAS}"
+# Until then it was tiered -- 0.95 for the richly sampled EUR/EAS/AFR (and SAS
+# from 16 Nov), 0.93 for AMR/OCE/MEN so the thin ancestries kept members. 0.94
+# for all is the compromise: the under-represented groups lose the few
+# samples between 0.93 and 0.94, and every super-pop meets the same standard.
+# The tier mechanism stays: HOMOG_STRICT_SUPERPOPS=EUR,EAS,AFR
+# HOMOG_THRESHOLD_STRICT=0.95 restores a stricter cut for the named ones.
+# The cut acts in stage C only, so changing it later re-runs minutes of
+# work, not the ADMIXTURE fits.
+HOMOG_THRESHOLD_STRICT="${HOMOG_THRESHOLD_STRICT:-${HOMOG_THRESHOLD}}"
+HOMOG_STRICT_SUPERPOPS="${HOMOG_STRICT_SUPERPOPS:-}"
 
 # SGDP candidate pools (from scripts/fetch-sgdp-anchors.py). Used as exemplars
 # for cluster labeling + as the pool OCE/MEN anchors are discovered from.
@@ -270,13 +272,23 @@ ANCHOR_COHORT_WARN="${ANCHOR_COHORT_WARN:-0.8}"
 PANEL_EXCLUDE="${PANEL_EXCLUDE:-${REFS}/panel_exclude_ids.txt}"
 DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 
-# ADMIXTURE MARKER FILTER -- per cohort x super-pop missingness, then overall.
+# ADMIXTURE MARKER FILTER -- every super-pop <= 7% missing, every cohort <= 15%.
 #
-# 1c writes, per chromosome, the soft-union sites at which every cohort x
-# super-pop group (HGDP1KG_EUR, SGDP_AFR, MXB_AMR, ALMARRI_MEN, ...) is at most
-# ADMIX_GROUP_MAXMISS missing and the whole panel at most ADMIX_TOTAL_MAXMISS,
-# both measured on the PRE-phasing genotypes. 4a restricts the ADMIXTURE marker
-# set to those sites before the MAF filter and LD pruning.
+# THE RULE (17 Nov): at each soft-union site, every super-pop -- its cohorts
+# pooled -- is at most ADMIX_SUPERPOP_MAXMISS (0.07) missing, and every cohort
+# (HGDP1KG, MXB, SGDP, ALMARRI) -- its super-pops pooled -- at most
+# ADMIX_COHORT_MAXMISS (0.15), measured on the PRE-phasing genotypes of 1c's
+# published soft-union. ADMIX_SITE_SOURCE=4a (default): 4a computes these lists
+# itself, per chromosome, with scripts/admix-site-list.sh, into
+# admixture_k${K}/admix_sites/, stamped with the rule, and restricts the
+# ADMIXTURE marker set to them before LD pruning.
+#
+# ADMIX_SITE_SOURCE=1c reads 1c's own lists instead. Those apply the 12 Nov
+# rule -- each cohort x super-pop group <= 15%, panel <= 7% -- which read the
+# two numbers the wrong way round. They stay on disk (1c is not re-run: the
+# rule only decides which markers ADMIXTURE reads, and changing 1c re-phases).
+# On chr22: 1c's rule kept 279,155 of 367,930 sites; "every super-pop <= 7%"
+# alone kept 286,901 (scripts/admix-rule-compare.sh).
 #
 # Why here and not with --geno: SHAPEIT5 fills every missing genotype, so the
 # phased panel 4a reads has none left to filter. And why per group: a cohort
@@ -289,6 +301,27 @@ DUP_DROP="${DUP_DROP:-${REFS}/panel_duplicate_drop_ids.txt}"
 # RFMix and simulation donors keeps the full soft-union (and with it the
 # population-specific variants the soft-union exists to keep).
 ADMIX_SITE_FILTER="${ADMIX_SITE_FILTER:-1}"
+ADMIX_SITE_SOURCE="${ADMIX_SITE_SOURCE:-4a}"
+ADMIX_SUPERPOP_MAXMISS="${ADMIX_SUPERPOP_MAXMISS:-0.07}"
+ADMIX_COHORT_MAXMISS="${ADMIX_COHORT_MAXMISS:-0.15}"
+ADMIX_MISS_MIN_N="${ADMIX_MISS_MIN_N:-5}"
+ADMIX_SITE_JOBS="${ADMIX_SITE_JOBS:-8}"        # chromosomes measured at once
+case "$ADMIX_SITE_SOURCE" in 4a|1c) ;; *)
+    echo "ERROR: ADMIX_SITE_SOURCE must be 4a or 1c, got '${ADMIX_SITE_SOURCE}'" >&2; exit 1 ;;
+esac
+
+# PRUNE_ON_FIT=1 (default): LD is measured on the unrelated ADMIXTURE fit set
+# only. Until 17 Nov the prune ran over all samples, so 638 relatives and 153
+# duplicate copies of the same people entered every r2 -- a family or a person
+# counted twice makes markers look more correlated than they are in the
+# population. The bed is still made for every sample (relatives are projected).
+PRUNE_ON_FIT="${PRUNE_ON_FIT:-1}"
+
+# ADMIX_MAX_HOURS -- the job stops BEFORE the fits, with the count and the
+# resubmit line, when the pruned marker count implies more than this many hours
+# for the two ADMIXTURE fits (the job limit is 72 h). Set ADMIX_MAX_SNPS to
+# thin, or raise this to accept the time.
+ADMIX_MAX_HOURS="${ADMIX_MAX_HOURS:-60}"
 
 # ADMIX_PRUNE_MAF -- an extra GLOBAL minor-allele-frequency floor before LD
 # pruning. Empty (the default) = none. Every candidate site already passed
@@ -327,12 +360,24 @@ case "$ADMIX_INPUT" in
     softunion) ADMIX_TPL="${PHASED_DIR}/merged_chr%s.softunion.bcf" ;;
     *)         echo "ERROR: ADMIX_INPUT must be phased or softunion, got '${ADMIX_INPUT}'" >&2; exit 1 ;;
 esac
-# 1c's per-chromosome lists by default. scripts/admix-rule-compare.sh writes the
-# same lists under other versions of the missingness rule, from the published
-# pre-phasing soft-union; point this at one to change the rule without
-# re-running 1c (or re-phasing): ADMIX_SITES_TPL=<out>/<rule>/merged_chr%s.admix_sites.bed
-ADMIX_SITES_TPL="${ADMIX_SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
+# Where the per-chromosome site lists are: 4a's own (ADMIX_SITE_SOURCE=4a) or
+# 1c's. Any other folder of lists can be named directly, e.g. one written by
+# scripts/admix-rule-compare.sh: ADMIX_SITES_TPL=<out>/<rule>/merged_chr%s.admix_sites.bed
+ADMIX_SITES_4A_DIR="${HOMOG_DIR}/admix_sites_4a"     # the rule does not depend on K
+if [[ "$ADMIX_SITE_SOURCE" == "4a" ]]; then
+    ADMIX_SITES_TPL="${ADMIX_SITES_TPL:-${ADMIX_SITES_4A_DIR}/merged_chr%s.admix_sites.bed}"
+else
+    ADMIX_SITES_TPL="${ADMIX_SITES_TPL:-${PHASED_DIR}/merged_chr%s.admix_sites.bed}"
+fi
 SUPERPOPS="EUR AFR AMR EAS SAS OCE MEN"
+# OTH -- the leftover cluster -- exists only when K exceeds the named super-pops.
+N_NAMED=$(wc -w <<< "$SUPERPOPS")
+WANT_OTH=0; [[ "$K" -gt "$N_NAMED" ]] && WANT_OTH=1
+if [[ "$K" -lt "$N_NAMED" ]]; then
+    echo "ERROR: K=${K} is below the ${N_NAMED} named super-pops (${SUPERPOPS}); supervised" >&2
+    echo "       ADMIXTURE needs one label per component. Use K >= ${N_NAMED}." >&2
+    exit 1
+fi
 
 # DISCOVERED anchor outputs, written by STAGE A, consumed by STAGE B only.
 #
@@ -346,7 +391,8 @@ SUPERPOPS="EUR AFR AMR EAS SAS OCE MEN"
 # reads; they move here too so a *_rfmix.txt name always means "curated".
 anchors_for () { echo "${REFS}/$(echo "$1" | tr 'A-Z' 'a-z')_anchors.k${K}.txt"; }
 
-# OTH = the empirical leftover cluster at K=8 (no metadata candidate pool).
+# OTH = the empirical leftover cluster when K exceeds the named super-pops (no
+# metadata candidate pool). Not written, required or labelled at K=7.
 OTH_ANCHORS="${OTH_ANCHORS:-${REFS}/oth_anchors.k${K}.txt}"
 
 set -euo pipefail
@@ -369,8 +415,10 @@ export PATH="${CONDA_PREFIX}/bin:${PATH}"
 # ---------------------------------------------------------------------------
 # Verify required inputs.
 # ---------------------------------------------------------------------------
-echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}${ANCHOR_MIN_Q_STRICT:+ (strict ${ANCHOR_MIN_Q_STRICT} for ${ANCHOR_STRICT_SUPERPOPS})}  ANCHOR_CAP=${ANCHOR_CAP}  ANCHOR_FLOOR=${ANCHOR_FLOOR}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD} (${HOMOG_THRESHOLD_STRICT} for ${HOMOG_STRICT_SUPERPOPS})"
-echo "[$(date +%T)] ANCHOR_SELECT=${ANCHOR_SELECT}$([[ "$ANCHOR_SELECT" == central ]] && echo " (PCs ${ANCHOR_PCS}, PCA MAF ${ANCHOR_PCA_MAF}, centre Q >= ${ANCHOR_CENTER_MIN_Q})")  ADMIX_PRUNE_MAF=${ADMIX_PRUNE_MAF:-none}  ADMIX_MAX_SNPS=${ADMIX_MAX_SNPS:-none}  PRUNE_ONLY=${PRUNE_ONLY}"
+echo "[$(date +%T)] K=${K}  ANCHOR_MIN_Q=${ANCHOR_MIN_Q}${ANCHOR_MIN_Q_STRICT:+ (strict ${ANCHOR_MIN_Q_STRICT} for ${ANCHOR_STRICT_SUPERPOPS})}  ANCHOR_CAP=${ANCHOR_CAP}  ANCHOR_FLOOR=${ANCHOR_FLOOR}  HOMOG_THRESHOLD=${HOMOG_THRESHOLD}${HOMOG_STRICT_SUPERPOPS:+ (${HOMOG_THRESHOLD_STRICT} for ${HOMOG_STRICT_SUPERPOPS})}"
+echo "[$(date +%T)] ANCHOR_SELECT=${ANCHOR_SELECT}$([[ "$ANCHOR_SELECT" == central ]] && echo " (PCs ${ANCHOR_PCS}, PCA MAF ${ANCHOR_PCA_MAF}, centre Q >= ${ANCHOR_CENTER_MIN_Q})")  ADMIX_PRUNE_MAF=${ADMIX_PRUNE_MAF:-none}  ADMIX_MAX_SNPS=${ADMIX_MAX_SNPS:-none}  PRUNE_ONLY=${PRUNE_ONLY}  PRUNE_ON_FIT=${PRUNE_ON_FIT}  ADMIX_MAX_HOURS=${ADMIX_MAX_HOURS}"
+echo "[$(date +%T)] ADMIXTURE sites: filter=${ADMIX_SITE_FILTER} source=${ADMIX_SITE_SOURCE}$([[ "$ADMIX_SITE_SOURCE" == 4a ]] && echo " (every super-pop <= ${ADMIX_SUPERPOP_MAXMISS} missing, every cohort <= ${ADMIX_COHORT_MAXMISS}, margins of n >= ${ADMIX_MISS_MIN_N})")  lists: ${ADMIX_SITES_TPL}"
+echo "[$(date +%T)] OTH cluster: $([[ "$WANT_OTH" == 1 ]] && echo "yes (K=${K} > ${N_NAMED} named)" || echo "none (K=${K} = the ${N_NAMED} named super-pops)")"
 echo "[$(date +%T)] verifying inputs"
 for CHR in {1..22}; do
     F="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
@@ -380,14 +428,29 @@ for CHR in {1..22}; do
     F="$(printf "$ADMIX_TPL" "$CHR")"
     [[ -s "$F" ]] || { echo "ERROR: missing ADMIXTURE input $F (ADMIX_INPUT=${ADMIX_INPUT})" >&2; exit 1; }
 done
-if [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
+if [[ "$ADMIX_SITE_FILTER" == "1" && "$ADMIX_SITE_SOURCE" == "4a" ]]; then
+    for CHR in {1..22}; do
+        for F in "${PHASED_DIR}/merged_chr${CHR}.softunion.bcf" "${PHASED_DIR}/merged_chr${CHR}.softunion.bcf.recipe" \
+                 "${PHASED_DIR}/mxb_lifted.chr${CHR}.bcf"; do
+            [[ -s "$F" ]] || {
+                echo "ERROR: missing $F" >&2
+                echo "       4a measures the ADMIXTURE site rule on 1c's published pre-phasing" >&2
+                echo "       soft-union (PHASE_MODE=chunked publishes it). Set ADMIX_SITE_SOURCE=1c" >&2
+                echo "       to use 1c's own lists (the 12 Nov rule) instead." >&2
+                exit 1; }
+        done
+    done
+    for F in "${REPO_DIR}/scripts/admix-site-list.sh" "${REPO_DIR}/scripts/admix-site-margins.py" \
+             "${REPO_DIR}/scripts/build-missingness-groups.py"; do
+        [[ -s "$F" ]] || { echo "ERROR: missing $F (REPO_DIR=${REPO_DIR} is not the repo?)" >&2; exit 1; }
+    done
+elif [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
     for CHR in {1..22}; do
         F="$(printf "$ADMIX_SITES_TPL" "$CHR")"
         [[ -s "$F" ]] || {
             echo "ERROR: missing ADMIXTURE site list $F" >&2
-            echo "       1c writes it (per-cohort x super-pop missingness on the" >&2
-            echo "       pre-phasing soft-union). Re-run the current 1c, or set" >&2
-            echo "       ADMIX_SITE_FILTER=0 to use every soft-union site." >&2
+            echo "       (ADMIX_SITE_SOURCE=${ADMIX_SITE_SOURCE}). Set ADMIX_SITE_SOURCE=4a to measure" >&2
+            echo "       the lists here, or ADMIX_SITE_FILTER=0 to use every soft-union site." >&2
             exit 1; }
     done
 fi
@@ -439,6 +502,56 @@ fi
 EXTRACT_SITES=()
 PRUNE_INPUTS=("$CONCAT")
 ADMIX_SITES_ALL="${ADM_DIR}/admix_sites.all.bed"
+if [[ "$ADMIX_SITE_FILTER" == "1" && "$ADMIX_SITE_SOURCE" == "4a" ]]; then
+    # Measure the rule per chromosome on 1c's pre-phasing soft-union. A list is
+    # reused only if it is newer than its inputs AND was made under this rule
+    # by this code (its .recipe stamp).
+    mkdir -p "$ADMIX_SITES_4A_DIR"
+    SITE_RECIPE="superpop<=${ADMIX_SUPERPOP_MAXMISS} cohort<=${ADMIX_COHORT_MAXMISS} min_n=${ADMIX_MISS_MIN_N} code=$(cat \
+        "${REPO_DIR}/scripts/admix-site-list.sh" "${REPO_DIR}/scripts/admix-site-margins.py" \
+        "${REPO_DIR}/scripts/build-missingness-groups.py" | md5sum | cut -c1-12)"
+    SITE_TODO=()
+    for CHR in {1..22}; do
+        B="$(printf "$ADMIX_SITES_TPL" "$CHR")"
+        if newer_than "$B" "${PHASED_DIR}/merged_chr${CHR}.softunion.bcf" "$SAMPLE_GROUPS" "$SGDP_MANIFEST" \
+               ${PANEL_EXCLUDE:+"$PANEL_EXCLUDE"} \
+           || [[ "$(cat "${B}.recipe" 2>/dev/null)" != "$SITE_RECIPE" ]]; then
+            SITE_TODO+=("$CHR")
+        fi
+    done
+    if [[ ${#SITE_TODO[@]} -gt 0 ]]; then
+        echo "[$(date +%T)] ADMIXTURE site lists: measuring chr ${SITE_TODO[*]} (${ADMIX_SITE_JOBS} at a time): ${SITE_RECIPE}"
+        site_list_one () {
+            local chr="$1" b
+            b="$(printf "$ADMIX_SITES_TPL" "$chr")"
+            rm -f "$b" "${b}.recipe"
+            bash "${REPO_DIR}/scripts/admix-site-list.sh" "$chr" "$b" > "${b}.log" 2>&1 || return 1
+            echo "$SITE_RECIPE" > "${b}.recipe"
+        }
+        export -f site_list_one
+        export ADMIX_SITES_TPL REPO_DIR SITE_RECIPE PROJECT_ROOT PHASED_DIR SAMPLE_GROUPS SGDP_MANIFEST \
+               ADMIX_SUPERPOP_MAXMISS ADMIX_COHORT_MAXMISS ADMIX_MISS_MIN_N
+        export EXCLUDE_IDS="$PANEL_EXCLUDE"
+        if ! printf '%s\n' "${SITE_TODO[@]}" | xargs -P "$ADMIX_SITE_JOBS" -I{} bash -c 'site_list_one "$1"' _ {}; then
+            echo "ERROR: the ADMIXTURE site list failed for:" >&2
+            for CHR in "${SITE_TODO[@]}"; do
+                B="$(printf "$ADMIX_SITES_TPL" "$CHR")"
+                [[ -s "${B}.recipe" ]] && continue
+                echo "------ chr${CHR}: ${B}.log" >&2; cat "${B}.log" >&2
+            done
+            exit 1
+        fi
+    else
+        echo "[$(date +%T)] ADMIXTURE site lists: all 22 current under this rule -- reusing ${ADMIX_SITES_4A_DIR}"
+    fi
+    echo "[$(date +%T)] per chromosome: soft-union positions -> kept (every super-pop <= ${ADMIX_SUPERPOP_MAXMISS}, every cohort <= ${ADMIX_COHORT_MAXMISS})"
+    for CHR in {1..22}; do
+        B="$(printf "$ADMIX_SITES_TPL" "$CHR")"
+        awk -v c="$CHR" '/^# records=/ { for (i = 2; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+                          printf "    chr%-3s %10d -> %10d (%5.1f%%)\n", c, v["positions"], v["positions_kept"],
+                                 v["positions"] ? 100 * v["positions_kept"] / v["positions"] : 0 }' "${B}.summary.tsv"
+    done
+fi
 if [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
     SITE_LIST=()
     for CHR in {1..22}; do SITE_LIST+=("$(printf "$ADMIX_SITES_TPL" "$CHR")"); done
@@ -452,8 +565,8 @@ if [[ "$ADMIX_SITE_FILTER" == "1" ]]; then
         echo "tpl=${ADMIX_SITES_TPL}" > "${ADMIX_SITES_ALL}.recipe"
     fi
     echo "[$(date +%T)] ADMIXTURE marker filter ON: $(wc -l < "$ADMIX_SITES_ALL") soft-union" \
-         "sites pass the per-cohort x super-pop and overall missingness rule" \
-         "(thresholds and per-group counts: $(printf "$ADMIX_SITES_TPL" N | sed 's/\.bed$//').summary.tsv)"
+         "sites pass the missingness rule (source ${ADMIX_SITE_SOURCE}; per-chromosome lists and" \
+         "summaries: $(printf "$ADMIX_SITES_TPL" N)*)"
     EXTRACT_SITES=(--extract bed1 "$ADMIX_SITES_ALL")
     PRUNE_INPUTS+=("$ADMIX_SITES_ALL")
 else
@@ -461,105 +574,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. plink2 import + LD-prune, over all samples jointly (as in July).
-# ---------------------------------------------------------------------------
-PRUNED="${ADM_DIR}/lai_ref"
-PRUNE_RECIPE="ld=500,50,0.1 maf=${ADMIX_PRUNE_MAF:-none} thin=${ADMIX_MAX_SNPS:-none} sitefilter=${ADMIX_SITE_FILTER} sites=${ADMIX_SITES_TPL} input=${ADMIX_INPUT}"
-MAF_ARG=()
-[[ -n "$ADMIX_PRUNE_MAF" ]] && MAF_ARG=(--maf "$ADMIX_PRUNE_MAF")
-if newer_than "${PRUNED}.bed" "${PRUNE_INPUTS[@]}" \
-   || [[ "$(cat "${PRUNED}.recipe" 2>/dev/null)" != "$PRUNE_RECIPE" ]]; then
-    echo "[$(date +%T)] plink2 LD-prune: ${PRUNE_RECIPE}"
-    [[ -s "${PRUNED}.recipe" ]] && echo "[$(date +%T)]   (previous pruned set: $(cat "${PRUNED}.recipe"))"
-    rm -f "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "${PRUNED}.recipe" "${ADM_DIR}/lai_ref.prune."* \
-          "${PRUNED}.unthinned".{bed,bim,fam,log}
-    plink2 --bcf "$CONCAT" --threads "$THREADS" \
-           --set-missing-var-ids '@:#[b38]' ${EXTRACT_SITES[@]+"${EXTRACT_SITES[@]}"} \
-           ${MAF_ARG[@]+"${MAF_ARG[@]}"} --indep-pairwise 500 50 0.1 --out "${ADM_DIR}/lai_ref.prune"
-    _MADE="$PRUNED"; [[ -n "$ADMIX_MAX_SNPS" ]] && _MADE="${PRUNED}.unthinned"
-    plink2 --bcf "$CONCAT" --threads "$THREADS" \
-           --set-missing-var-ids '@:#[b38]' \
-           --extract "${ADM_DIR}/lai_ref.prune.prune.in" \
-           --max-alleles 2 --snps-only just-acgt \
-           --make-bed --out "$_MADE"
-    if [[ -n "$ADMIX_MAX_SNPS" ]]; then
-        if [[ $(wc -l < "${_MADE}.bim") -gt "$ADMIX_MAX_SNPS" ]]; then
-            echo "[$(date +%T)] thinning $(wc -l < "${_MADE}.bim") pruned SNPs to ${ADMIX_MAX_SNPS} at random (seed 20261116)"
-            plink2 --bfile "$_MADE" --threads "$THREADS" --thin-count "$ADMIX_MAX_SNPS" --seed 20261116 \
-                   --make-bed --out "$PRUNED"
-        else
-            for ext in bed bim fam; do mv "${_MADE}.${ext}" "${PRUNED}.${ext}"; done
-        fi
-        rm -f "${PRUNED}.unthinned".{bed,bim,fam,log}
-    fi
-    echo "$PRUNE_RECIPE" > "${PRUNED}.recipe"
-    echo "[$(date +%T)] pruned: $(wc -l < "${PRUNED}.bim") SNPs, $(wc -l < "${PRUNED}.fam") samples"
-else
-    echo "[$(date +%T)] LD-pruned bed newer than its inputs and made under this rule -- reusing" \
-         "${PRUNED}.bed ($(wc -l < "${PRUNED}.bim") SNPs; ${PRUNE_RECIPE})"
-fi
-
-# The pruned markers by minor allele count over every panel sample, and the
-# ADMIXTURE time that number implies. With no global MAF floor the markers
-# include variants common in one super-pop and rare overall -- and, in a
-# super-pop as small as OCE (55 samples), single copies: MAF >= 0.005 of 110
-# alleles is one allele. This table shows how many of each there are.
-MAC_BINS="${PRUNED}.mac_bins.tsv"
-if newer_than "$MAC_BINS" "${PRUNED}.bed" "${PRUNED}.bim"; then
-    plink2 --bfile "$PRUNED" --threads "$THREADS" --freq counts --out "${PRUNED}.mac"
-    awk 'NR == 1 { for (i = 1; i <= NF; i++) h[$i] = i; next }
-         { a = $h["ALT_CTS"]; n = $h["OBS_CT"]; m = (a < n - a) ? a : n - a; f = m / n
-           b = (m <= 1) ? "1_MAC_1" : (m <= 5) ? "2_MAC_2-5" : (f < 0.005) ? "3_MAC_6+_MAF<0.005" \
-             : (f < 0.01) ? "4_MAF_0.005-0.01" : (f < 0.05) ? "5_MAF_0.01-0.05" : "6_MAF>=0.05"
-           c[b]++; t++ }
-         END { print "bin\tSNPs\tpct"; for (k in c) printf "%s\t%d\t%.1f\n", k, c[k], 100 * c[k] / t }' \
-        "${PRUNED}.mac.acount" | { read -r _h; echo "$_h"; sort; } > "${MAC_BINS}.partial"
-    mv "${MAC_BINS}.partial" "$MAC_BINS"
-fi
-echo "[$(date +%T)] pruned markers by minor allele count over all $(wc -l < "${PRUNED}.fam") samples (${MAC_BINS}):"
-sed 's/^/    /' "$MAC_BINS"
-_NSNP=$(wc -l < "${PRUNED}.bim")
-echo "[$(date +%T)] expected ADMIXTURE time, both fits: about $(( (_NSNP * 503 / 352550 + 30) / 60 )) h" \
-     "(scaled from 8 h 23 min for 352,550 markers and 3,766 fitted samples on 16 threads, 16 Nov)"
-if [[ "$PRUNE_ONLY" == "1" ]]; then
-    echo "[$(date +%T)] PRUNE_ONLY=1: stopping before the ADMIXTURE fits. The pruned set is kept"
-    echo "[$(date +%T)] and the next run reuses it while the rule (${PRUNE_RECIPE}) is unchanged."
-    exit 0
-fi
-
-# ---------------------------------------------------------------------------
-# 2b. ADMIXTURE FIT SET. The panel keeps relatives (only duplicates are
-#     removed, by 1e), but ADMIXTURE assumes unrelated individuals: a family
-#     enters the likelihood as several draws of what is largely one genome and
-#     pulls the allele frequencies toward it -- and the rebuild puts ~600
-#     HGDP+1KG relatives (mostly 1KG parent-child families) back in the panel.
-#     So both ADMIXTURE runs are FITTED on an unrelated subset and every
-#     relative is PROJECTED onto the fitted allele frequencies (admixture -P):
-#     relatives still get a Q, can still be homogeneous and still enter the
-#     panel, but do not shape the clusters. (Standard for ADMIXTURE and PCA:
-#     fit on unrelated, project the rest.)
-#     Fit set: 1e's duplicate copies out, then greedily the sample with the
-#     most remaining relatives at KING >= FIT_KINSHIP (0.0884, second degree --
-#     gnomAD's "related") until no such pair is left among the fitted.
-#     FIT_UNRELATED=0 fits on every sample (the July/November behaviour).
-#     Per-sample record: admixture_fit_set.k${K}.tsv (fit / projected, why).
+# ADMIXTURE FIT SET. The panel keeps relatives (only duplicates are removed,
+# by 1e), but ADMIXTURE assumes unrelated individuals: a family enters the
+# likelihood as several draws of what is largely one genome and pulls the
+# allele frequencies toward it -- and the rebuild puts ~600 HGDP+1KG relatives
+# (mostly 1KG parent-child families) back in the panel. So both ADMIXTURE runs
+# are FITTED on an unrelated subset and every relative is PROJECTED onto the
+# fitted allele frequencies (admixture -P): relatives still get a Q, can still
+# be homogeneous and still enter the panel, but do not shape the clusters.
+# (Standard for ADMIXTURE and PCA: fit on unrelated, project the rest.)
+# Fit set: 1e's duplicate copies out, then greedily the sample with the most
+# remaining relatives at KING >= FIT_KINSHIP (0.0884, second degree -- gnomAD's
+# "related") until no such pair is left among the fitted.
+# FIT_UNRELATED=0 fits on every sample (the July/November behaviour).
+# The same set is used for LD pruning (PRUNE_ON_FIT, step 2).
 # ---------------------------------------------------------------------------
 FIT_UNRELATED="${FIT_UNRELATED:-1}"
 FIT_KINSHIP="${FIT_KINSHIP:-0.0884}"
 KING_KIN0="${KING_KIN0:-${HOMOG_DIR}/king/king.kin0}"
-FIT_LIST="${ADM_DIR}/admixture_fit.keep"          # FID IID rows of lai_ref.fam
-PROJ_LIST="${ADM_DIR}/admixture_projected.keep"
-FIT_TABLE="${ADM_DIR}/admixture_fit_set.k${K}.tsv"
-FIT_BED="${ADM_DIR}/lai_ref_fit"; PROJ_BED="${ADM_DIR}/lai_ref_proj"
 if [[ "$FIT_UNRELATED" == "1" ]] && newer_than "$KING_KIN0" "${PHASED_LIST[@]}"; then
     echo "ERROR: ${KING_KIN0} is missing or older than the phased panel." >&2
     echo "       4a fits ADMIXTURE on unrelated samples chosen from 1e's KING table:" >&2
     echo "       run 1e first, or set FIT_UNRELATED=0 to fit on every sample." >&2
     exit 1
 fi
-echo "[$(date +%T)] ADMIXTURE fit set (FIT_UNRELATED=${FIT_UNRELATED}, KING >= ${FIT_KINSHIP} from ${KING_KIN0})"
-python3 -I - "${PRUNED}.fam" "$KING_KIN0" "$FIT_KINSHIP" "$FIT_UNRELATED" "$DUP_DROP" \
-    "${FIT_LIST}.new" "${PROJ_LIST}.new" "${FIT_TABLE}.new" <<'PYEOF'
+# fit_set <.fam-like sample file> <fit out> <projected out> <table out>:
+# writes "FID IID" rows (as given) of the fitted and the projected samples.
+fit_set () {
+python3 -I - "$1" "$KING_KIN0" "$FIT_KINSHIP" "$FIT_UNRELATED" "$DUP_DROP" "$2" "$3" "$4" <<'PYEOF'
 import sys
 from collections import defaultdict
 fam_f, kin_f, thr, fit_on, dup_f, fit_out, proj_out, table_out = sys.argv[1:9]
@@ -616,6 +658,110 @@ n_dup = len(removed) - n_rel
 print(f"  pairs at KING >= {thr} within the panel: {n_pairs}; fitted {len(iid) - len(removed)}, "
       f"projected {len(removed)} ({n_rel} relatives, {n_dup} duplicate copies)", file=sys.stderr)
 PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# 2. plink2 import + LD-prune on the unrelated fit set (PRUNE_ON_FIT=1), then
+#    the bed for EVERY sample on the kept markers.
+# ---------------------------------------------------------------------------
+PRUNED="${ADM_DIR}/lai_ref"
+PRUNE_KEEP_ARG=(); _keep_md5=all
+if [[ "$PRUNE_ON_FIT" == "1" && "$FIT_UNRELATED" == "1" ]]; then
+    PRUNE_KEEP="${ADM_DIR}/ld_prune_unrelated.iid"
+    bcftools query -l "$CONCAT" | awk '{print $1, $1, 0, 0, 0, -9}' > "${ADM_DIR}/concat_samples.fam"
+    echo "[$(date +%T)] LD-prune sample set: the unrelated ADMIXTURE fit set (KING >= ${FIT_KINSHIP} from ${KING_KIN0})"
+    fit_set "${ADM_DIR}/concat_samples.fam" "${PRUNE_KEEP}.fit" "${PRUNE_KEEP}.proj" "${PRUNE_KEEP}.table"
+    # "0 IID": the form the 3b arms --keep a --bcf import with (no FID on import).
+    awk '{print 0, $2}' "${PRUNE_KEEP}.fit" > "$PRUNE_KEEP"
+    PRUNE_KEEP_ARG=(--keep "$PRUNE_KEEP")
+    _keep_md5=$(md5sum < "$PRUNE_KEEP" | cut -c1-12)
+    echo "[$(date +%T)]   $(wc -l < "$PRUNE_KEEP") of $(wc -l < "${ADM_DIR}/concat_samples.fam") samples measure LD"
+fi
+PRUNE_RECIPE="ld=500,50,0.1 maf=${ADMIX_PRUNE_MAF:-none} thin=${ADMIX_MAX_SNPS:-none} sitefilter=${ADMIX_SITE_FILTER} sites=${ADMIX_SITES_TPL} input=${ADMIX_INPUT} ldsamples=${_keep_md5}"
+MAF_ARG=()
+[[ -n "$ADMIX_PRUNE_MAF" ]] && MAF_ARG=(--maf "$ADMIX_PRUNE_MAF")
+if newer_than "${PRUNED}.bed" "${PRUNE_INPUTS[@]}" \
+   || [[ "$(cat "${PRUNED}.recipe" 2>/dev/null)" != "$PRUNE_RECIPE" ]]; then
+    echo "[$(date +%T)] plink2 LD-prune: ${PRUNE_RECIPE}"
+    [[ -s "${PRUNED}.recipe" ]] && echo "[$(date +%T)]   (previous pruned set: $(cat "${PRUNED}.recipe"))"
+    rm -f "${PRUNED}.bed" "${PRUNED}.bim" "${PRUNED}.fam" "${PRUNED}.recipe" "${ADM_DIR}/lai_ref.prune."* \
+          "${PRUNED}.unthinned".{bed,bim,fam,log}
+    plink2 --bcf "$CONCAT" --threads "$THREADS" \
+           --set-missing-var-ids '@:#[b38]' ${EXTRACT_SITES[@]+"${EXTRACT_SITES[@]}"} \
+           ${PRUNE_KEEP_ARG[@]+"${PRUNE_KEEP_ARG[@]}"} \
+           ${MAF_ARG[@]+"${MAF_ARG[@]}"} --indep-pairwise 500 50 0.1 --out "${ADM_DIR}/lai_ref.prune"
+    _MADE="$PRUNED"; [[ -n "$ADMIX_MAX_SNPS" ]] && _MADE="${PRUNED}.unthinned"
+    plink2 --bcf "$CONCAT" --threads "$THREADS" \
+           --set-missing-var-ids '@:#[b38]' \
+           --extract "${ADM_DIR}/lai_ref.prune.prune.in" \
+           --max-alleles 2 --snps-only just-acgt \
+           --make-bed --out "$_MADE"
+    if [[ -n "$ADMIX_MAX_SNPS" ]]; then
+        if [[ $(wc -l < "${_MADE}.bim") -gt "$ADMIX_MAX_SNPS" ]]; then
+            echo "[$(date +%T)] thinning $(wc -l < "${_MADE}.bim") pruned SNPs to ${ADMIX_MAX_SNPS} at random (seed 20261116)"
+            plink2 --bfile "$_MADE" --threads "$THREADS" --thin-count "$ADMIX_MAX_SNPS" --seed 20261116 \
+                   --make-bed --out "$PRUNED"
+        else
+            for ext in bed bim fam; do mv "${_MADE}.${ext}" "${PRUNED}.${ext}"; done
+        fi
+        rm -f "${PRUNED}.unthinned".{bed,bim,fam,log}
+    fi
+    echo "$PRUNE_RECIPE" > "${PRUNED}.recipe"
+    echo "[$(date +%T)] pruned: $(wc -l < "${PRUNED}.bim") SNPs, $(wc -l < "${PRUNED}.fam") samples"
+else
+    echo "[$(date +%T)] LD-pruned bed newer than its inputs and made under this rule -- reusing" \
+         "${PRUNED}.bed ($(wc -l < "${PRUNED}.bim") SNPs; ${PRUNE_RECIPE})"
+fi
+
+# The pruned markers by minor allele count over every panel sample, and the
+# ADMIXTURE time that number implies. With no global MAF floor the markers
+# include variants common in one super-pop and rare overall -- and, in a
+# super-pop as small as OCE (55 samples), single copies: MAF >= 0.005 of 110
+# alleles is one allele. This table shows how many of each there are.
+MAC_BINS="${PRUNED}.mac_bins.tsv"
+if newer_than "$MAC_BINS" "${PRUNED}.bed" "${PRUNED}.bim"; then
+    plink2 --bfile "$PRUNED" --threads "$THREADS" --freq counts --out "${PRUNED}.mac"
+    awk 'NR == 1 { for (i = 1; i <= NF; i++) h[$i] = i; next }
+         { a = $h["ALT_CTS"]; n = $h["OBS_CT"]; m = (a < n - a) ? a : n - a; f = m / n
+           b = (m <= 1) ? "1_MAC_1" : (m <= 5) ? "2_MAC_2-5" : (f < 0.005) ? "3_MAC_6+_MAF<0.005" \
+             : (f < 0.01) ? "4_MAF_0.005-0.01" : (f < 0.05) ? "5_MAF_0.01-0.05" : "6_MAF>=0.05"
+           c[b]++; t++ }
+         END { print "bin\tSNPs\tpct"; for (k in c) printf "%s\t%d\t%.1f\n", k, c[k], 100 * c[k] / t }' \
+        "${PRUNED}.mac.acount" | { read -r _h; echo "$_h"; sort; } > "${MAC_BINS}.partial"
+    mv "${MAC_BINS}.partial" "$MAC_BINS"
+fi
+echo "[$(date +%T)] pruned markers by minor allele count over all $(wc -l < "${PRUNED}.fam") samples (${MAC_BINS}):"
+sed 's/^/    /' "$MAC_BINS"
+_NSNP=$(wc -l < "${PRUNED}.bim")
+_HOURS=$(( (_NSNP * 503 * K / 8 / 352550 + 30) / 60 ))
+echo "[$(date +%T)] expected ADMIXTURE time, both fits at K=${K}: about ${_HOURS} h" \
+     "(scaled from 8 h 23 min for 352,550 markers, 3,766 fitted samples, K=8, 16 threads on 16 Nov)"
+if [[ "$PRUNE_ONLY" == "1" ]]; then
+    echo "[$(date +%T)] PRUNE_ONLY=1: stopping before the ADMIXTURE fits. The pruned set is kept"
+    echo "[$(date +%T)] and the next run reuses it while the rule (${PRUNE_RECIPE}) is unchanged."
+    exit 0
+fi
+if [[ "$_HOURS" -gt "$ADMIX_MAX_HOURS" ]]; then
+    _FIT=$(( ADMIX_MAX_HOURS * 60 * 352550 * 8 / (503 * K) ))
+    echo "ERROR: ${_NSNP} pruned markers imply about ${_HOURS} h of ADMIXTURE, over ADMIX_MAX_HOURS=${ADMIX_MAX_HOURS}" >&2
+    echo "       (the job limit is 72 h). Stopping BEFORE the fits rather than at the limit." >&2
+    echo "       The pruned set is kept. Resubmit with one of:" >&2
+    echo "         ADMIX_MAX_SNPS=${_FIT}   random thin (seed 20261116) to what fits in ${ADMIX_MAX_HOURS} h" >&2
+    echo "         ADMIX_MAX_HOURS=${_HOURS}  accept the time (a fit cut off by the limit loses all its progress;" >&2
+    echo "                             a finished unsupervised fit is reused by the resubmission)" >&2
+    exit 8
+fi
+
+# ---------------------------------------------------------------------------
+# 2b. The fit set on the pruned bed (the same samples LD was measured on; see
+#     ADMIXTURE FIT SET above). Per-sample record: admixture_fit_set.k${K}.tsv.
+# ---------------------------------------------------------------------------
+FIT_LIST="${ADM_DIR}/admixture_fit.keep"          # FID IID rows of lai_ref.fam
+PROJ_LIST="${ADM_DIR}/admixture_projected.keep"
+FIT_TABLE="${ADM_DIR}/admixture_fit_set.k${K}.tsv"
+FIT_BED="${ADM_DIR}/lai_ref_fit"; PROJ_BED="${ADM_DIR}/lai_ref_proj"
+echo "[$(date +%T)] ADMIXTURE fit set (FIT_UNRELATED=${FIT_UNRELATED}, KING >= ${FIT_KINSHIP} from ${KING_KIN0})"
+fit_set "${PRUNED}.fam" "${FIT_LIST}.new" "${PROJ_LIST}.new" "${FIT_TABLE}.new"
 # Replace only on change: these files' timestamps decide what is re-run below.
 for f in "$FIT_LIST" "$PROJ_LIST" "$FIT_TABLE"; do
     if [[ -f "$f" ]] && cmp -s "${f}.new" "$f"; then rm -f "${f}.new"; else mv "${f}.new" "$f"; fi
@@ -744,14 +890,15 @@ python3 -I - "${PRUNED}.fam" "${UNSUP_DIR}/lai_ref.${K}.Q" "$K" "$ANCHOR_MIN_Q" 
     "$SAMPLE_GROUPS" "$MXB_POPINFO" "$SGDP_MANIFEST" "$ALMARRI_META" "$PANEL_EXCLUDE" "$ANCHOR_INELIG" \
     "$REFS" "$SUPERPOPS" "$OTH_ANCHORS" "$DISCOVERY_TABLE" \
     "$ANCHOR_SELECT" "${PCA_PREFIX}.eigenvec" "${PCA_PREFIX}.eigenval" "$ANCHOR_CENTER_MIN_Q" \
-    "$GNOMAD_META" "$ANCHOR_TABLE" <<'PYEOF'
+    "$GNOMAD_META" "$ANCHOR_TABLE" "$WANT_OTH" <<'PYEOF'
 import sys, re, csv, math
 from collections import Counter
 
 (fam_f, qu_f, K, thresh, cap, strict_q, strict_sps, purity_min, cohort_warn,
  groups_f, mxb_f, sgdp_f, almarri_f, excl_f, dup_f, refs, superpops,
  oth_out, table_out, select, evec_f, eval_f, center_min_q, gnomad_f,
- anchor_table_out) = sys.argv[1:26]
+ anchor_table_out, want_oth) = sys.argv[1:27]
+want_oth = want_oth == "1"
 K = int(K); thresh = float(thresh); cap = int(cap)
 strict_q = float(strict_q) if strict_q else None
 strict_sps = {x for x in strict_sps.replace(",", " ").split() if x}
@@ -975,7 +1122,7 @@ for r in sorted((r for r in rows if r["top"] and r["plur"] != "NA" and r["purity
         taken[r["plur"]] = r["c"]; name[r["c"]] = r["plur"]
 unnamed = [r for r in rows if r["c"] not in name]
 oth = None
-if unnamed:
+if unnamed and want_oth:       # only when K exceeds the named super-pops
     best = max(unnamed, key=lambda r: (len(r["passing"]), r["mean_top"]))
     if best["top"]:
         oth = best["c"]; name[oth] = "OTH"
@@ -1062,14 +1209,17 @@ if oth is not None:
     oth_top, note = choose(oth, "OTH", None, rows[oth]["passing"])
     write(oth_out, oth_top)
     report("OTH", oth, oth_top, note, oth_out)
-else:
+elif want_oth:
     write(oth_out, [])
     print(f"[discover] OTH: no unnamed cluster with anchors -> empty {oth_out}", file=sys.stderr)
+else:
+    print(f"[discover] OTH: none at K={K} (one cluster per named super-pop)", file=sys.stderr)
 left = [r["c"] for r in unnamed if r["c"] != oth]
 if left:
-    print(f"[discover] NOTE: {len(left)} more unnamed cluster(s) {left}. Supervised K={K} needs "
+    print(f"[discover] NOTE: {len(left)} unnamed cluster(s) {left}. Supervised K={K} needs "
           f"K distinct labels, so a super-pop will be missing and 4a stops below. The table "
-          f"above says why each cluster went unnamed.", file=sys.stderr)
+          f"above says why each cluster went unnamed (e.g. two clusters claiming one super-pop).",
+          file=sys.stderr)
 with open(anchor_table_out, "w") as g:
     g.write("cluster\tname\tsample\tcohort\tpop\tmeta_super_pop\tQ\tdist_to_centre\t"
             "rank_Q\trank_dist\trank_sum\tselected\n")
@@ -1092,9 +1242,13 @@ for SP in $SUPERPOPS; do
     printf '[%s]   %-4s %4d  %s\n' "$(date +%T)" "$SP" "$N" "$(basename "$F")"
     [[ "$N" -eq 0 ]] && EMPTY_LABELS="${EMPTY_LABELS} ${SP}"
 done
-N_OTH=$(awk 'NF' "$OTH_ANCHORS" 2>/dev/null | wc -l)
-printf '[%s]   %-4s %4d  %s\n' "$(date +%T)" "OTH" "$N_OTH" "$(basename "$OTH_ANCHORS")"
-[[ "$N_OTH" -eq 0 ]] && EMPTY_LABELS="${EMPTY_LABELS} OTH"
+N_OTH=0
+if [[ "$WANT_OTH" == "1" ]]; then
+    N_OTH=$(awk 'NF' "$OTH_ANCHORS" 2>/dev/null | wc -l)
+    printf '[%s]   %-4s %4d  %s\n' "$(date +%T)" "OTH" "$N_OTH" "$(basename "$OTH_ANCHORS")"
+    [[ "$N_OTH" -eq 0 ]] && EMPTY_LABELS="${EMPTY_LABELS} OTH"
+fi
+LABELS_SP="$SUPERPOPS"; [[ "$WANT_OTH" == "1" ]] && LABELS_SP="$SUPERPOPS OTH"
 if [[ -n "$EMPTY_LABELS" ]]; then
     echo "ERROR: no anchors discovered for:${EMPTY_LABELS}" >&2
     echo "       ADMIXTURE --supervised needs all ${K} labels populated." >&2
@@ -1117,7 +1271,7 @@ mkdir -p "$(dirname "$ANCHOR_SUMMARY")"
     printf 'super_pop	n_anchors	min_Q_floor	cap	below_count_floor
 '
     THIN=""
-    for SP in $SUPERPOPS OTH; do
+    for SP in $LABELS_SP; do
         if [[ "$SP" == "OTH" ]]; then F="$OTH_ANCHORS"; else F="$(anchors_for "$SP")"; fi
         N=$(awk 'NF' "$F" 2>/dev/null | wc -l)
         # The strict floor applies only if ANCHOR_MIN_Q_STRICT is set.
@@ -1164,11 +1318,11 @@ fi
 POP_FILE="${PRUNED}.pop"
 echo "[$(date +%T)] build supervised .pop file (K=${K})"
 # Label order fixes the ADMIXTURE Q column order, so it must be deterministic:
-# the SUPERPOPS order, then OTH.
+# the SUPERPOPS order, then OTH (only when K exceeds the named super-pops).
 POP_SPEC="${ADM_DIR}/pop_spec.tsv"
 : > "$POP_SPEC"
 for SP in $SUPERPOPS; do printf '%s\t%s\n' "$SP" "$(anchors_for "$SP")" >> "$POP_SPEC"; done
-printf 'OTH\t%s\n' "$OTH_ANCHORS" >> "$POP_SPEC"
+[[ "$WANT_OTH" == "1" ]] && printf 'OTH\t%s\n' "$OTH_ANCHORS" >> "$POP_SPEC"
 python3 - "${PRUNED}.fam" "${POP_FILE}.new" "$POP_SPEC" <<'PYEOF'
 import sys
 from collections import defaultdict
@@ -1753,7 +1907,13 @@ awk -F'\t' '
 # producer always finishes. This is a diagnostic print -- it must not be able
 # to abort the stage it is reporting on.
 
-awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_${K}pop_samples.txt"
+awk -F'\t' 'NR>1 && $NF==1 {print $1}' "$SAMPLES_TSV" > "${HOMOG_DIR}/homog_${K}pop_samples.txt.new"
+# Replaced only on change: its timestamp decides whether the 22 homog BCFs are rebuilt.
+if [[ -f "${HOMOG_DIR}/homog_${K}pop_samples.txt" ]] && cmp -s "${HOMOG_DIR}/homog_${K}pop_samples.txt.new" "${HOMOG_DIR}/homog_${K}pop_samples.txt"; then
+    rm -f "${HOMOG_DIR}/homog_${K}pop_samples.txt.new"
+else
+    mv "${HOMOG_DIR}/homog_${K}pop_samples.txt.new" "${HOMOG_DIR}/homog_${K}pop_samples.txt"
+fi
 
 # ---------------------------------------------------------------------------
 # Composition breakdown: how many homogeneous samples each super-pop has, and
@@ -1806,6 +1966,14 @@ echo "  per-super_pop ID lists -> ${HOMOG_DIR}/homog_${K}pop_by_superpop/"
 # Versioned copies are written first and never overwritten, so each K keeps
 # its own list. The unversioned name the 3b scripts read is then updated, with
 # the previous contents preserved beside it.
+#
+# AMR IS DIFFERENT (17 Nov): the 3b HOMOG arms are the 3-way NAT/EUR/AFR LAI
+# pipeline, which keeps July's K=5 homogeneity calls and adds the AMR samples
+# that are new since July and homogeneous now (scripts/build-3way-amr-homog.py,
+# minus every donor, donor's relative, duplicate and exclusion). So
+# amr_homog_rfmix.txt gets that list; amr_homog_rfmix.k${K}.txt keeps this
+# run's own. HOMOG_3WAY_BASE= (empty) publishes this run's AMR list instead.
+HOMOG_3WAY_BASE="${HOMOG_3WAY_BASE-${REFS}/lai_ref_panel_samples.tsv}"
 for _SP in $SUPERPOPS; do
     _src="${HOMOG_DIR}/homog_${K}pop_by_superpop/${_SP}_homog_samples.txt"
     [[ -s "$_src" ]] || continue
@@ -1814,17 +1982,26 @@ for _SP in $SUPERPOPS; do
     cp "$_src" "$_ver"
     _n=$(awk 'NF' "$_ver" | wc -l)
     echo "  ${_SP} homogeneous -> $(basename "$_ver") (${_n})"
+    _pub="$_ver"; _what="the K=${K} set"
+    if [[ "$_SP" == "AMR" && -n "$HOMOG_3WAY_BASE" ]]; then
+        [[ -s "$HOMOG_3WAY_BASE" ]] || { echo "ERROR: HOMOG_3WAY_BASE ${HOMOG_3WAY_BASE} missing" >&2; exit 1; }
+        python3 -I "${REPO_DIR}/scripts/build-3way-amr-homog.py" --base "$HOMOG_3WAY_BASE" \
+            --table "$SAMPLES_TSV" --exclude "$SIM_DONORS" --out "${REFS}/amr_homog_rfmix.3way.txt" \
+            | sed 's/^/    /'
+        _pub="${REFS}/amr_homog_rfmix.3way.txt"; _what="the 3-way set (July K=5 + new since July)"
+        _n=$(awk 'NF' "$_pub" | wc -l)
+    fi
 
     _cur="${REFS}/${_lc}_homog_rfmix.txt"
     if [[ "${UPDATE_HOMOG_RFMIX:-1}" == "1" ]]; then
-        if [[ -s "$_cur" ]] && ! cmp -s "$_cur" "$_ver"; then
+        if [[ -s "$_cur" ]] && ! cmp -s "$_cur" "$_pub"; then
             _bak="${_cur%.txt}.superseded.txt"
             cp "$_cur" "$_bak"
             echo "    previous $(basename "$_cur") ($(awk 'NF' "$_cur" | wc -l) ids)"
             echo "    preserved as $(basename "$_bak")"
         fi
-        cp "$_ver" "$_cur"
-        echo "    $(basename "$_cur") updated to the K=${K} set (${_n})"
+        cp "$_pub" "$_cur"
+        echo "    $(basename "$_cur") updated to ${_what} (${_n})"
     fi
 done
 echo "  NOTE: the 3b HOMOG forks read reference_ids/<sp>_homog_rfmix.txt at RUN"
@@ -1838,9 +2015,11 @@ HOMOG_KEEP="${HOMOG_DIR}/homog_${K}pop_samples.txt"
 for CHR in {1..22}; do
     SRC="${PHASED_DIR}/merged_chr${CHR}.shapeit5_phased.softunion_maf005.bcf"
     DST="${HOMOG_SUB}/merged_chr${CHR}.homog_${K}pop.bcf"
-    if [[ -s "$DST" && -s "${DST}.csi" ]]; then continue; fi
-    bcftools view "$SRC" -S "$HOMOG_KEEP" --force-samples --threads "$THREADS" -Ob -o "$DST"
-    bcftools index "$DST"
+    # Rebuilt when the sample list changed (it is only rewritten on change).
+    if [[ -s "$DST" && -s "${DST}.csi" && "$DST" -nt "$HOMOG_KEEP" && "$DST" -nt "$SRC" ]]; then continue; fi
+    bcftools view "$SRC" -S "$HOMOG_KEEP" --force-samples --threads "$THREADS" -Ob -o "${DST}.partial"
+    bcftools index "${DST}.partial"
+    mv "${DST}.partial.csi" "${DST}.csi"; mv "${DST}.partial" "$DST"
 done
 
 echo "[$(date +%T)] DONE."
@@ -1850,6 +2029,6 @@ for SP in $SUPERPOPS; do
     F="$(anchors_for "$SP")"
     printf '    %-4s %4d  %s\n' "$SP" "$(awk 'NF' "$F" 2>/dev/null | wc -l)" "$F"
 done
-printf '    %-4s %4d  %s\n' "OTH" "$N_OTH" "$OTH_ANCHORS"
+[[ "$WANT_OTH" == "1" ]] && printf '    %-4s %4d  %s\n' "OTH" "$N_OTH" "$OTH_ANCHORS"
 echo "  curated *_rfmix.txt were NOT modified (they are the RFMix reference panels)"
 echo "  homog BCFs       : ${HOMOG_SUB}/merged_chr*.homog_${K}pop.bcf"

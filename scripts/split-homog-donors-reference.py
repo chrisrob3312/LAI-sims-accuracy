@@ -60,7 +60,7 @@ Pass them with --source-split to get those two lists instead.
 
 Usage:
   python3 -I scripts/split-homog-donors-reference.py \\
-      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k7.tsv \\
       --out reference_ids --suffix b2 \\
       --source-split EUR,EAS,AFR
 

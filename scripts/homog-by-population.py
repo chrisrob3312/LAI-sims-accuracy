@@ -20,9 +20,10 @@ the fewest.
 
 Reads what 4a and 1e wrote: the Q table, reference_ids/*_anchors.kK.txt,
 reference_ids/*_simulation.txt, reference_ids/panel_duplicate_drop_ids.txt,
-admixture_kK/donor_relatives.kK.tsv and king/king.kin0. The cuts are 4a's
-defaults (HOMOG_THRESHOLD 0.93, HOMOG_THRESHOLD_STRICT 0.95 for EUR, EAS, AFR
-and, from 16 Nov, SAS); pass --cut SP=Q to match a run made with others.
+admixture_kK/donor_relatives.kK.tsv and king/king.kin0. The cut is 4a's
+default, 0.94 for every super-pop from 17 Nov (before: 0.95 for EUR/EAS/AFR,
+and SAS from 16 Nov; 0.93 for the rest); --cut SP=Q matches a run made with
+others, e.g. --k 8 --cut EUR=0.95 --cut AMR=0.93 for the 16 Nov K=8 table.
 
   python3 -I scripts/homog-by-population.py
   python3 -I scripts/homog-by-population.py --table <tsv> --refs reference_ids --homog <04_homogeneity_panel>
@@ -39,7 +40,7 @@ ROOT = os.environ.get("PROJECT_ROOT",
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--k", type=int, default=8)
+    ap.add_argument("--k", type=int, default=7)
     ap.add_argument("--homog", default=os.path.join(ROOT, "04_homogeneity_panel"))
     ap.add_argument("--table", default="", help="default: <homog>/lai_ref_panel_samples.k<K>.tsv")
     ap.add_argument("--refs", default="reference_ids")
@@ -47,7 +48,7 @@ def main():
     a = ap.parse_args()
     tsv = a.table or os.path.join(a.homog, f"lai_ref_panel_samples.k{a.k}.tsv")
 
-    cut = {"EUR": 0.95, "EAS": 0.95, "AFR": 0.95, "SAS": 0.95}   # 4a's tiers; every other super-pop 0.93
+    cut = {}                                                      # 4a's cut: 0.94 for every super-pop
     for c in a.cut:
         sp, q = c.split("=", 1)
         cut[sp.upper()] = float(q)
@@ -109,7 +110,7 @@ def main():
         pops = sorted(p for (s, p) in by if s == sp)
         if not pops:
             continue
-        t = cut.get(sp, 0.93)
+        t = cut.get(sp, 0.94)
         allr = [r for p in pops for r in by[(sp, p)]]
         print(f"\n== {sp} (cut used here {t}): {len(allr)} samples,"
               f" {sum(r['included'] == '1' for r in allr)} in the panel,"

@@ -2,7 +2,7 @@
 # ============================================================================
 # run_benchmark_cohort.sh  --  idempotent driver for the benchmark cohort
 #
-# Runs the cohort build from the K=8 Q table to a transfer-ready set. Every
+# Runs the cohort build from the K=7 Q table to a transfer-ready set. Every
 # stage checks whether its own output is already present AND current before
 # doing anything, so re-running after a failure, a timeout or a fix costs only
 # the stages that still need doing. Nothing is deleted without --force.
@@ -43,7 +43,7 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
-K="${K:-8}"
+K="${K:-7}"
 PANEL_TSV="${PANEL_TSV:-${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv}"
 KING_TSV="${KING_TSV:-${HOMOG_DIR}/king/king.kin0}"
 REFS="${REFS:-${REPO_DIR}/reference_ids}"

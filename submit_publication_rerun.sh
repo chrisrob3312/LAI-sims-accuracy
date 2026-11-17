@@ -12,8 +12,10 @@
 #   Stage 2: Re-ingest TGP+HGDP source WITHOUT dropping the 60 keep-list
 #            samples that were previously filtered as "related" + merge
 #            with SGDP + rephase (sbatch 1c_phasing-jointcall_clm.sh)
-#   Stage 3: K=8 homogeneity filter with SGDP anchor discovery,
-#            unsupervised->supervised ADMIXTURE, Q>=0.93
+#   Stage 3: K=7 homogeneity filter: 4a's own ADMIXTURE site list (every
+#            super-pop <= 7% missing, every cohort <= 15%), LD prune on the
+#            unrelated set, unsupervised -> central high-Q anchors (Q >= 0.94)
+#            -> supervised ADMIXTURE, homogeneous at Q >= 0.94
 #            (sbatch 4a_build_homogeneity_panel_kN_clm.sh)
 #   Stage 4: Re-simulate admixed cohorts (sbatch 2b_simulation_clm.sh)
 #   Stage 5: Full RFMix sweep — WGS main + HOMOG fork, chip main + HOMOG fork
@@ -402,20 +404,21 @@ else
 fi
 
 # ---------------------------------------------------------------- STAGE 3
-# K=8 homogeneity filter with SGDP anchor DISCOVERY.
-#   STAGE A: unsupervised ADMIXTURE K=8 -> discover anchors from the
-#            unsupervised Q (candidates sorted by cluster-Q, kept if
-#            >= ANCHOR_MIN_Q = 0.93, capped at ANCHOR_CAP = 50).
-#   STAGE B: supervised ADMIXTURE K=8 with the full 8-way prior.
-#   STAGE C: included iff supervised max_Q >= HOMOG_THRESHOLD (0.93) AND the
-#            supervised argmax cluster == the assigned super-pop.
-# Writes k8 outputs (admixture_k8/, homog_8pop/, lai_ref_panel_samples.k8.tsv)
-# and never clobbers the proven K=5 outputs.
-#
-# KNOWN GAP as of this revision: stage A discovers anchors for OCE, MEN and
-# OTH only; EUR/AFR/AMR/EAS/SAS still use the pre-existing *_rfmix.txt
-# exemplar lists rather than being discovered the same way. Uniform discovery
-# across all 7 candidate pools is the agreed design and is not in yet.
+# K=7 homogeneity filter (4a_build_homogeneity_panel_kN_clm.sh; K=7 from 17 Nov).
+#   MARKERS: 4a's own site list from the pre-phasing soft-union (every
+#            super-pop <= 7% missing, every cohort <= 15%), no global MAF, LD
+#            pruned on the unrelated fit set; stops before the fits if the
+#            marker count would not finish inside ADMIX_MAX_HOURS.
+#   STAGE A: unsupervised ADMIXTURE K=7; per cluster, anchors = the 50 with the
+#            best rank of Q (>= 0.94, carrying the cluster's label) plus
+#            distance to the group's centre in PC space.
+#   STAGE B: supervised ADMIXTURE K=7.
+#   STAGE C: included iff supervised max_Q >= 0.94 (every super-pop) AND the
+#            supervised argmax == the assigned super-pop. Publishes
+#            amr_homog_rfmix.txt for the 3-way HOMOG arms = July's K=5 AMR
+#            panel + AMR samples new since July that pass, minus donors.
+# Writes k7 outputs (admixture_k7/, homog_7pop/, lai_ref_panel_samples.k7.tsv)
+# and never clobbers the K=5 or K=8 outputs.
 #
 # THIS MATTERS AT SUBMIT TIME, NOT AT RUN TIME. sbatch takes a COPY of the
 # batch script when the job is queued, and the job runs that copy -- editing
@@ -426,7 +429,7 @@ fi
 # So either fix 4a before submitting stage 3, or submit stage 1 on its own
 # (START_STAGE=1) and submit stages 2-6 later with AFTER_JOB=<stage1 jobid>.
 echo
-echo "============ STAGE 3: homogeneity filter (K=8 + SGDP discovery) ============"
+echo "============ STAGE 3: homogeneity filter (K=${K:-7}, 4a) ============"
 # ----------------------------------------------------------------- STAGE 2B
 # KING de-duplication, BETWEEN the merge and ADMIXTURE.
 #
@@ -491,15 +494,11 @@ if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
     echo
     echo "============ STAGE 3B: benchmark donor/reference split ============"
     if [[ -n "$J3" ]]; then
-        echo "  stage 3 is queued as ${J3}; the split needs its output, so run"
-        echo "  this once stage 3 completes (it takes seconds, no sbatch needed):"
+        echo "  stage 3 is queued as ${J3}; the benchmark cohort needs its output, so"
+        echo "  once stage 3 completes run (the split takes seconds; 6b-6e are arrays):"
         echo
-        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
-        echo "      --panel ${PROJECT_ROOT}/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\"
-        echo "      --out reference_ids --suffix a  --mode lai"
-        echo "    python3 -I scripts/split-homog-donors-reference.py \\"
-        echo "      --panel ${PROJECT_ROOT}/04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\"
-        echo "      --out reference_ids --suffix b2 --mode benchmark"
+        echo "    ./run_benchmark_cohort.sh --dry-run"
+        echo "    ./run_benchmark_cohort.sh"
         echo
         echo "  Nothing downstream in THIS chain waits on it."
     fi

@@ -7,7 +7,7 @@
 # the rebuild epoch), then checks on what it wrote. Each check is PASS, WARN or
 # FAIL with the numbers behind it; a stage with no output yet says "not yet".
 #   0 SGDP download   1 SGDP prep   2 MXB lift   3 Almarri   4 1c merge
-#   5 chunks   6 ligate   7 KING   8 4a K=8   9 simulation / RFMix / FLARE / scoring
+#   5 chunks   6 ligate   7 KING   8 4a K=7   9 simulation / RFMix / FLARE / scoring
 #
 # Run from the repo checkout inside the shapeit5 env:
 #   bash scripts/verify-rebuild.sh
@@ -24,7 +24,7 @@ LOGDIR="${LOGDIR:-${PROJECT_ROOT}/logs}"
 SGDP_RAW_DIR="${SGDP_RAW_DIR:-${PROJECT_ROOT}/00_sgdp_raw/vcf_variants}"
 CHUNKS_TSV="${CHUNKS_TSV:-${REPO_DIR}/resources/b38_chunks.tsv}"
 FIXREF_MODE="${FIXREF_MODE:-flip-all}"
-ADMIX_POP="${ADMIX_POP:-Brasa}"; GEN="${GEN:-12}"; K="${K:-8}"
+ADMIX_POP="${ADMIX_POP:-Brasa}"; GEN="${GEN:-12}"; K="${K:-7}"
 # 1c's HGDP+1KG drop list (related_outliers.txt): same default as 1c.
 OUTLIERS="${OUTLIERS:-/storage/atkinson/shared_resources/reference/ReferencePanels/TGP_HGDP_jointcall/processed_data/sample_map_files/related_outliers.txt}"
 # Simulation donors and the reference lists the RFMix / FLARE arms read.

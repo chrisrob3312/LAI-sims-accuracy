@@ -31,7 +31,7 @@ up across them, so each population is solved exactly: every non-related
 subset of each family, then a knapsack over families for the target count.
 
   python3 -I scripts/donor-switch-plan.py \\
-      --table <04_homogeneity_panel>/lai_ref_panel_samples.k8.tsv \\
+      --table <04_homogeneity_panel>/lai_ref_panel_samples.k7.tsv (or .k8) \\
       --kin <04_homogeneity_panel>/king/king.kin0 --refs reference_ids --out-dir results/donor_plan
 
 Writes <out-dir>/<list>.proposed.txt (current donors kept first, in their
@@ -157,7 +157,7 @@ def main():
     chg = open(os.path.join(a.out_dir, "donor_plan_changes.tsv"), "w")
     summ.write("list\tpop\tdonors\tcandidates\trelative_free_candidates\tcurrent_cost\tcurrent_with_relative\t"
                "current_related_pairs\tbest_cost\tkept\treplaced\tnote\n")
-    chg.write("list\tpop\taction\tsample\trelatives_kept_out\n")
+    chg.write("list\tpop\taction\tsample\trelatives_kept_out\treason\n")
     print(f"\ncost = relatives kept out of the reference (duplicate drops and named exclusions not counted)")
     print(f"{'list':22s} {'pop':16s} {'donors':>6s} {'cands':>5s} {'relfree':>7s} {'cost now':>8s} "
           f"{'best':>4s} {'kept':>4s} {'swap':>4s}  note")
@@ -178,7 +178,19 @@ def main():
             cur_set = set(cur)
             cands = {s for s in panel if pop[s] == p and s not in drop and s not in curated
                      and s not in near_curated and donor_of.get(s, name) == name}
-            outside = [s for s in cur if s not in cands]
+            # A current donor that is a drop, in a curated reference list or a
+            # first-degree relative of one MUST go: 2b refuses it.
+            forced = {}
+            for s in cur:
+                if s in drop:
+                    forced[s] = "duplicate drop or named exclusion"
+                elif s in curated:
+                    forced[s] = f"in {curated[s]}"
+                elif s in near_curated:
+                    r = sorted(x for x in rel[s] if x in curated)
+                    forced[s] = f"relative of {r[0]} ({curated[r[0]]})" + (f" +{len(r) - 1}" if len(r) > 1 else "")
+            # Anything else ineligible (a donor in another list) stays as is.
+            outside = [s for s in cur if s not in cands and s not in forced]
             # A donor kept as is still rules out its relatives as fellow donors.
             cands -= set().union(*(rel[s] for s in outside)) if outside else set()
             # Families: candidates and their relatives, joined through any shared relative.
@@ -201,19 +213,22 @@ def main():
             cur_with = sum(1 for s in cur if rel[s] & countable)
             cur_pairs = sum(1 for x, y in combinations(cur, 2) if y in rel[x])
             note = []
+            if forced:
+                note.append(f"{len(forced)} current donor(s) must be replaced (in or related to a curated "
+                            f"reference list, or a drop)")
             if outside:
-                note.append(f"{len(outside)} current donor(s) not eligible as candidates "
-                            f"(e.g. {outside[0]}: in/related to a curated list, or a drop) -- kept as is")
+                note.append(f"{len(outside)} current donor(s) in another list -- kept as is")
             target = len(cur) - len(outside)
             sol = solve(families, target)
             if sol is None:
-                note.append(f"no {target}-donor set without related donors exists; current kept")
+                note.append(f"NO {target}-donor set from {p} without related donors or curated-list conflicts "
+                            f"exists; current kept -- resolve by hand")
                 chosen = list(cur)
                 best_cost, kept = cur_cost, len(cur)
             else:
                 best_cost, kept, chosen = sol
                 chosen = [s for s in cur if s in set(chosen)] + sorted(set(chosen) - cur_set) + outside
-            if sol is not None and cost_of(chosen) >= cur_cost and not cur_pairs:
+            if sol is not None and cost_of(chosen) >= cur_cost and not cur_pairs and not forced:
                 chosen = list(cur)
                 note.append("current set already as good")
             chosen_set = set(chosen)
@@ -222,9 +237,11 @@ def main():
             new_cost = cost_of(chosen)
             proposal.extend(chosen)
             for s in out_ids:
-                chg.write(f"{name}\t{p}\tout\t{s}\t{','.join(sorted(rel[s] & countable)) or '-'}\n")
+                chg.write(f"{name}\t{p}\tout\t{s}\t{','.join(sorted(rel[s] & countable)) or '-'}\t"
+                          f"{forced.get(s, 'swapped to keep fewer relatives out')}\n")
             for s in in_ids:
-                chg.write(f"{name}\t{p}\tin\t{s}\t{','.join(sorted(rel[s] & countable)) or '-'}\n")
+                chg.write(f"{name}\t{p}\tin\t{s}\t{','.join(sorted(rel[s] & countable)) or '-'}\t"
+                          f"{'relative-free' if not (rel[s] & countable) else 'fewest relatives kept out'}\n")
             summ.write(f"{name}\t{p}\t{len(cur)}\t{len(cands)}\t{free}\t{cur_cost}\t{cur_with}\t{cur_pairs}\t"
                        f"{new_cost}\t{len(cur) - len(out_ids)}\t{len(in_ids)}\t{'; '.join(note)}\n")
             print(f"{name:22s} {p:16s} {len(cur):6d} {len(cands):5d} {free:7d} {cur_cost:8d} "

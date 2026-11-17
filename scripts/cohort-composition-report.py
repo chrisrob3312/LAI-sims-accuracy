@@ -24,7 +24,7 @@ harmless for SASEUR when the truth is the reverse.
 
 Usage:
   python3 -I scripts/cohort-composition-report.py \\
-      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k7.tsv \\
       --refs  reference_ids --suffix b2 \\
       --out   results/cohort_composition.txt
 """

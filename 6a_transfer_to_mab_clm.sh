@@ -59,15 +59,15 @@ REFS="${REFS:-${REPO_DIR}/reference_ids}"
 
 # K for the multi-K homogeneity panel (4a_build_homogeneity_panel_kN_clm.sh).
 # The K=5 quadrants are kept for back-compat; the K-panel quadrants are new.
-K="${K:-8}"
+K="${K:-7}"
 
 # The full panel is HGDP+1KG+MXB+SGDP once the publication rerun has run, so
 # it ships under a name that says so rather than the bare "all_samples".
 # Override to "all_samples" to keep the legacy remote path.
 ALL_SAMPLES_SUBDIR="${ALL_SAMPLES_SUBDIR:-1KG-HGDP_MXB_SGDP_all_samples_combined}"
-# The homogeneous panel carries exactly the 7 NAMED super-pops -- OTH (the
-# leftover K=8 cluster) is deliberately excluded by 4a, since a mixture of
-# leftovers is not a reference ancestry.
+# The homogeneous panel carries exactly the 7 NAMED super-pops (K=7 from 17 Nov;
+# at K=8 the leftover OTH cluster was excluded by 4a, since a mixture of
+# leftovers is not a reference ancestry).
 HOMOG_K_SUBDIR="${HOMOG_K_SUBDIR:-homog_${K}pop_7superpop}"
 
 SAMPLES_TSV="${HOMOG_DIR}/lai_ref_panel_samples.tsv"

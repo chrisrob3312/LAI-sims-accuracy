@@ -63,7 +63,7 @@ HG19_DIR="${HG19_DIR:-${PROJECT_ROOT}/05_panel_hg19}"
 # K for the multi-K homogeneity panel (4a_build_homogeneity_panel_kN_clm.sh).
 # The hg19 copy of that panel is what the mab-side genotyping pipeline needs
 # for supervised ADMIXTURE and FLARE; 5a previously only lifted homog_5pop.
-K="${K:-8}"
+K="${K:-7}"
 CHAIN="${CHAIN:-/storage/atkinson/shared_resources/reference/genetic_maps/liftover/hg38ToHg19.over.chain.gz}"
 HG19_FA="${HG19_FA:-/storage/atkinson/shared_resources/reference/reference_genomes/hg19/hg19.fa}"
 PICARD_XMX="${PICARD_XMX:-48g}"

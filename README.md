@@ -85,12 +85,16 @@ afr_simulation.txt - 1KG YRI population IDs used for simulation
 
 amr_rfmix.txt - HGDP AMR population IDs used as RFMix reference
 
-eur_rfmix.txt - HGDP European IDs (French, Orcadian, Sardinian, Russian) used as RFMix reference
+eur_rfmix.txt - 1KG IBS IDs (74) used as the EUR RFMix / FLARE reference in every
+3-way arm. Restored on 17 Nov 2026 to the design (Jessica's 77-ID IBS list in
+backup_pre_koenig/, as July's panel used it: the other 3 were relatives July's
+panel did not contain). From 6 Jul to 17 Nov it held HGDP French, Orcadian,
+Sardinian and Russian anchors (backup_koenig_jul06/).
 
-afr_rfmix.txt - HGDP African IDs (Mandenka, Yoruba, Bantu) used as RFMix reference.
-HGDP00621 (Bedouin) and HGDP01270 (Mozabite), Koenig 2024 ancestry-outlier
-removals absent from phased_haplotypes_v2, were replaced on 14 Nov 2026 by
-HGDP00933 and HGDP00934 (Yoruba; in the panel, on no list, no recorded relative).
+afr_rfmix.txt - 1KG YRI IDs (72) used as the AFR RFMix / FLARE reference in every
+3-way arm. Restored on 17 Nov 2026 the same way (77-ID YRI list; 5 relatives not
+in July's panel). From 6 Jul to 17 Nov it held HGDP Yoruba, Mandenka and Bantu
+anchors (backup_koenig_jul06/).
 
 sas_rfmix.txt - HGDP Central/South Asian IDs (Balochi, Brahui, Makrani, Sindhi).
 HGDP00029 (Brahui) and HGDP00150 (Makrani), Koenig removals, were dropped on

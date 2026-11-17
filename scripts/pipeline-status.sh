@@ -22,6 +22,7 @@ PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_P
 LOG="${LOG:-${PROJECT_ROOT}/logs}"
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
+K="${K:-7}"   # 4a's K (7 from 17 Nov)
 U="${USER}"
 
 hr () { printf '%s\n' "------------------------------------------------------------------"; }
@@ -125,7 +126,7 @@ stage_row "1c prep (chunked)"   "1c_phase"
 stage_row "phase chunks"        "1b_chunk"
 stage_row "ligate"              "1b_ligat"
 stage_row "KING dedup"          "1e_king"
-stage_row "4a ADMIXTURE K=8"    "4a_homog"
+stage_row "4a ADMIXTURE K=${K}"    "4a_homog"
 stage_row "2b simulate"         "2b_simu"
 stage_row "RFMix WGS"           "3b_rfmix"
 stage_row "RFMix WGS homog"     "3b_homog"
@@ -265,36 +266,30 @@ else
 fi
 
 # 4. ADMIXTURE / the file everything downstream reads
-if [[ -s "${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv" ]]; then
-    tot=$(awk 'NR>1' "${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv" | wc -l)
-    inc=$(awk -F'\t' 'NR>1 && $NF==1' "${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv" | wc -l)
-    printf ' %-34s %s\n' "K=8 panel table" "ok (${tot} samples, ${inc} homogeneous)"
+if [[ -s "${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv" ]]; then
+    tot=$(awk 'NR>1' "${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv" | wc -l)
+    inc=$(awk -F'\t' 'NR>1 && $NF==1' "${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv" | wc -l)
+    printf ' %-34s %s\n' "K=${K} panel table" "ok (${tot} samples, ${inc} homogeneous)"
     printf ' %-34s %s\n' "  -> benchmark split" "READY to run (see below)"
 else
-    printf ' %-34s %s\n' "K=8 panel table" "not started"
+    printf ' %-34s %s\n' "K=${K} panel table" "not started"
 fi
 
 # 5. homog list freshness -- the arm that silently used a K=5 list
-if [[ -s reference_ids/amr_homog_rfmix.k8.txt ]]; then
-    printf ' %-34s %s\n' "homog AMR list (K=8)" \
-      "ok ($(awk 'NF' reference_ids/amr_homog_rfmix.k8.txt | wc -l) ids)"
+if [[ -s reference_ids/amr_homog_rfmix.k${K}.txt ]]; then
+    printf ' %-34s %s\n' "homog AMR list (K=${K})" \
+      "ok ($(awk 'NF' reference_ids/amr_homog_rfmix.k${K}.txt | wc -l) ids)"
 elif [[ -s reference_ids/amr_homog_rfmix.txt ]]; then
     printf ' %-34s %s\n' "homog AMR list" \
       "still K=5 ($(awk 'NF' reference_ids/amr_homog_rfmix.txt | wc -l) ids) -- 4a has not run"
 fi
 hr
 echo
-if [[ -s "${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv" ]]; then
+if [[ -s "${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv" ]]; then
 cat <<EOF
- NEXT: stage 3 is done, so the benchmark split can run now (seconds):
-   python3 -I scripts/split-homog-donors-reference.py \\
-     --panel ${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv \\
-     --out reference_ids --suffix a  --mode lai
-   python3 -I scripts/split-homog-donors-reference.py \\
-     --panel ${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv \\
-     --out reference_ids --suffix b2 --mode benchmark
-   python3 -I scripts/cohort-composition-report.py \\
-     --panel ${HOMOG_DIR}/lai_ref_panel_samples.k8.tsv \\
-     --refs reference_ids --suffix b2 --out results/cohort_composition.txt
+ NEXT: stage 3 is done, so the benchmark cohort can be built (the split takes seconds):
+   ./run_benchmark_cohort.sh --dry-run      # what it would do
+   ./run_benchmark_cohort.sh                # check, split, assemble, report, preflight,
+                                            # then 6b/6c, 6d, 6e and the final verify
 EOF
 fi

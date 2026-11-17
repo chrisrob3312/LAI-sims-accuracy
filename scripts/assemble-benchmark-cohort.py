@@ -40,7 +40,7 @@ reproduces the plan document's literal reading.
 
 Usage:
   python3 -I scripts/assemble-benchmark-cohort.py \\
-      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv \\
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k7.tsv \\
       --refs  reference_ids --suffix b2 \\
       --out   results/benchmark_cohort
 """
@@ -563,7 +563,7 @@ def main():
     L = []
     w = L.append
     w("=" * 72)
-    w(" BENCHMARK COHORT -- composition after ADMIXTURE K=8")
+    w(" BENCHMARK COHORT -- composition after 4a's ADMIXTURE (K=7 from 17 Nov)")
     w("=" * 72)
     w(f" panel       {a.panel}")
     w(f" split       {a.refs} (suffix {a.suffix})")
@@ -594,7 +594,7 @@ def main():
     w("")
     w(" real_homogeneous  top Q >= threshold and argmax == assigned super-pop")
     w(" real_admixed      naturally admixed, or argmax disagrees with the label")
-    w(" real_unassigned   OTH, the empirical leftover cluster at K=8 -- no")
+    w(" real_unassigned   OTH, the leftover cluster when 4a runs above K=7 -- no")
     w("                   reference ancestry fits, so it is neither homogeneous")
     w("                   nor admixed between named components. These are the")
     w("                   multiracial-like individuals a real diverse cohort")

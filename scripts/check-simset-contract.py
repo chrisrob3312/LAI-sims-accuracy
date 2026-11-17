@@ -31,7 +31,7 @@ Usage:
       --individuals results/benchmark_cohort_simset_individuals.tsv \\
       --refs reference_ids --suffix bench \\
       --king 04_homogeneity_panel/king/king.kin0 \\
-      --panel 04_homogeneity_panel/lai_ref_panel_samples.k8.tsv
+      --panel 04_homogeneity_panel/lai_ref_panel_samples.k7.tsv
 """
 import argparse
 import os
@@ -127,7 +127,7 @@ def main():
                     help="king.kin0 from 1e (REPORT_FLOOR 0.0442 is enough "
                          "for the role rule; 7.identity needs unfiltered)")
     ap.add_argument("--panel", default="",
-                    help="lai_ref_panel_samples.k8.tsv, for top_fraction")
+                    help="lai_ref_panel_samples.k7.tsv, for top_fraction")
     ap.add_argument("--threshold", type=float, default=CONTRACT_THRESHOLD)
     ap.add_argument("--role-kinship", type=float, default=0.177)
     a = ap.parse_args()

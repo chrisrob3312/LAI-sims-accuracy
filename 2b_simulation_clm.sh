@@ -143,7 +143,7 @@ sort -u -o "$DONOR_UNION" "$DONOR_UNION"
 # same folder keeps older ones: July's K=5 homog_5pop_samples.txt was built
 # before 4a excluded donors and holds 102 of them, which stopped job 3754844
 # although no arm reads it.
-HOMOG_K="${HOMOG_K:-8}"
+HOMOG_K="${HOMOG_K:-7}"
 HOMOG_LIST_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 HOMOG_CUR="${HOMOG_LIST_DIR}/homog_${HOMOG_K}pop_samples.txt"
 : > "$REF_SRC"
