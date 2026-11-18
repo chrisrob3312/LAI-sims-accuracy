@@ -935,26 +935,44 @@ def main():
         _uncovered = sorted({anc_group(pop_of.get(x, "NA")) for x in don}
                             - _ref_pops)
         if _uncovered:
-            _msg = (f"{len(_uncovered)} population(s) have donors but no "
-                    f"reference sample: {', '.join(_uncovered[:8])}"
-                    + (" ..." if len(_uncovered) > 8 else ""))
+            # Each gap with the population's donor count: the methods have
+            # to say which donor lineages the reference does not carry.
+            _ndon = defaultdict(int)
+            for x in don:
+                _ndon[anc_group(pop_of.get(x, "NA"))] += 1
+            def _fmt(gs):
+                return (", ".join(f"{g} ({_ndon[g]})" for g in gs[:8])
+                        + (" ..." if len(gs) > 8 else ""))
             if sp in rmpp_named and min_per_pop == 0:
                 # Named with 0: the coverage pull was declined on purpose
-                # (EUR, 18 Nov -- its donors are too few to spend). Still
-                # printed, because the methods have to say which donor
-                # lineages the reference does not carry.
-                decided.append((sp, _msg + f"  (kept as donors: "
-                                           f"--ref-min-per-pop {sp}=0)"))
+                # (EUR, 18 Nov -- its donors are too few to spend).
+                decided.append((sp, f"{len(_uncovered)} population(s) have donors "
+                                    f"but no reference sample: {_fmt(_uncovered)}  "
+                                    f"(kept as donors: --ref-min-per-pop {sp}=0)"))
             elif min_per_pop == 0:
-                problems.append((sp, _msg + "  (--ref-min-per-pop pulls a few back)"))
-            elif len(don) <= args.donor_floor:
-                problems.append((sp, _msg + f"  (not pulled: {len(don)} donors, "
-                                            f"at or under the donor floor of "
-                                            f"{args.donor_floor})"))
+                problems.append((sp, f"{len(_uncovered)} population(s) have donors "
+                                     f"but no reference sample: {_fmt(_uncovered)}  "
+                                     f"(--ref-min-per-pop pulls a few back)"))
             else:
-                problems.append((sp, _msg + "  (not pulled: a population with "
-                                            f"{min_per_pop} or fewer samples, or "
-                                            "relatives kept together)"))
+                # The coverage rule ran and these are its own limits, not open
+                # questions (18 Nov: they had been listed under NEEDS A
+                # DECISION): it never takes a population's last donors, never
+                # takes the super-pop under the donor floor, and never splits
+                # relatives across roles. Reported, not a failure.
+                small = [g for g in _uncovered if _ndon[g] <= min_per_pop]
+                rest = [g for g in _uncovered if _ndon[g] > min_per_pop]
+                if small:
+                    decided.append((sp, f"{len(small)} population(s) with "
+                                        f"{min_per_pop} or fewer donors keep them "
+                                        f"all, so no reference sample: {_fmt(small)}  "
+                                        f"(the coverage rule never takes a "
+                                        f"population's last donors)"))
+                if rest:
+                    _why = (f"donors at the floor of {args.donor_floor}"
+                            if len(don) <= args.donor_floor
+                            else "relatives kept together in one role")
+                    decided.append((sp, f"{len(rest)} population(s) not pulled "
+                                        f"({_why}): {_fmt(rest)}"))
         cr, cd = defaultdict(int), defaultdict(int)
         for s in ref:
             cr[pop_of[s]] += 1

@@ -244,7 +244,7 @@ def main():
                          "they are an experimental-design decision that gets "
                          "revisited -- LAT3 is 300 rather than the contract "
                          "table's 600 because NAT N_eff saturates on the DONOR "
-                         "pool, so the extra 400 individuals cost 19% of the "
+                         "pool, so the extra 400 individuals cost 19%% of the "
                          "imputation budget for about 8 effective genomes. "
                          "Falls back to the built-in table when absent.")
     ap.add_argument("--design", choices=DESIGNS, default="paired-builds",

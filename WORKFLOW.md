@@ -894,7 +894,16 @@ coverage and left EUR exactly at the floor of 15 donors; EUR donors are scarce
 enough that they stay donors. The split still names the EUR lineages the
 reference then lacks, under "decided already", so the methods can state them.
 A super-pop named in the terms is a decision and its gaps do not fail the
-step; super-pops on `default` still go under "NEEDS A DECISION".
+step.
+
+The gaps the rule cannot fill are its own limits, not open questions, so they
+are reported under "decided already" with each population's donor count
+(18 Nov; they had been listed under NEEDS A DECISION): a population of 3 or
+fewer donors keeps them all (Dinka, Luo, ≠Khomani San, Chane, Mixe, Mixtec,
+Zapotec, Cambodian, Hezhen, Thai, Xibo, Mongola, Yemenite Jew at K=7), the
+donor floor, and relatives kept together. Only a split with no coverage rule at
+all (`--ref-min-per-pop 0`, which `--mode lai` uses) still lists its gaps as a
+decision.
 
 `--ref-min 25` (18 Nov) is the smallest reference for a group whose reference
 comes from its own pool -- MEN above all -- when the pool allows it with the
