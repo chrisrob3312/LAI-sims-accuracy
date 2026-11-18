@@ -86,7 +86,12 @@ REF_MIN="${REF_MIN:-25}"
 # worth. 0 is the strict contract reading. Coverage is counted on
 # ANCESTRY GROUPS (reference_ids/population_aliases.tsv), not raw labels, so
 # HGDP Yoruba is not reported as a gap when 1000 Genomes YRI is in the panel.
-REF_MIN_PER_POP="${REF_MIN_PER_POP:-3}"
+# Per super-pop since 18 Nov: EUR=0 keeps EUR's few non-1KG genomes as donors
+# (with 3 the K=8 preview moved 3 of 18 to the reference, leaving exactly 15).
+# The split still prints which EUR lineages the reference then lacks, under
+# "decided already", for the methods. A super-pop named here is a decision,
+# so its gaps do not fail the step; 'default' ones still do.
+REF_MIN_PER_POP="${REF_MIN_PER_POP:-default=3,EUR=0}"
 # The model table. Sizes are an experimental-design decision that gets
 # revisited, so they live in a file rather than in the assembler's code.
 # LAT3 is 300 there, not the contract table's 600: NAT N_eff saturates on the

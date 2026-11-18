@@ -30,10 +30,12 @@
 # 72 h, and no --time-min: with --time-min Slurm may START the job with any
 # limit down to that floor to backfill it, and an ADMIXTURE fit cut off part
 # way loses all of its progress. Two fits took 8 h 23 min on 352,550 markers
-# (16 Nov); without the global MAF floor the pruned set is ~3.2 M markers
-# (17 Nov: ~33 h per fit at K=7, ~22 h at K=5), so the drivers run each set as
-# two jobs, one fit each (ADMIX_STOP_AFTER=unsup, then the full run), with
-# --mem=48G. PRUNE_ONLY=1 prints the count and the expected hours.
+# (16 Nov, MAF 0.01); with no global MAF floor the pruned set was ~3.2 M
+# markers (17 Nov: ~33 h per fit at K=7, ~22 h at K=5). From 18 Nov the floor
+# is 0.005 (fewer than 958,622 markers, so roughly 10 h per fit or less). The
+# drivers still run each set as two jobs, one fit each (ADMIX_STOP_AFTER=unsup,
+# then the full run), with --mem=48G. PRUNE_ONLY=1 prints the count and the
+# expected hours.
 #SBATCH --time=72:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
@@ -75,8 +77,9 @@
 #      every super-pop <= 7% missing and every cohort overall <= 15%
 #      (scripts/admix-site-list.sh), and restricts to them. LD-prune 500 50 0.1
 #      on the UNRELATED fit set only (relatives and duplicate copies inflate
-#      r2). No global MAF floor (ADMIX_PRUNE_MAF): every site already has
-#      MAF >= 0.005 in at least one super-pop (1c's soft-union).
+#      r2), after a global MAF floor of 0.005 on that set (ADMIX_PRUNE_MAF,
+#      18 Nov; every site already has MAF >= 0.005 in at least one super-pop,
+#      1c's soft-union).
 #      PRUNE_ONLY=1 stops here and reports the marker count and expected
 #      hours; a count that would not fit in ADMIX_MAX_HOURS stops the job
 #      before the fits rather than at the time limit.
@@ -405,24 +408,40 @@ ADMIX_MAX_HOURS="${ADMIX_MAX_HOURS:-60}"
 # projection onto it) and stop. The drivers run every 4a set as TWO jobs: this
 # one, then the full run, which reuses the unsupervised fit and runs discovery
 # and the supervised fit. Each job then carries ONE fit against the 72 h limit
-# instead of two. Without a global MAF floor the pruned set is ~3.2 million
-# markers (17 Nov: 3,196,141 at K=7, about 34 h per fit), so two fits in one
-# job would not fit; a split loses nothing -- no thinning, the same rule.
+# instead of two. Without a global MAF floor the pruned set was ~3.2 million
+# markers (17 Nov: 3,196,141 at K=7, about 33 h per fit), so two fits in one
+# job would not fit. With the 0.005 floor (18 Nov) they likely would, but the
+# split costs nothing -- no thinning, the same rule -- and keeps each job short.
 # The time guard counts only the fits THIS job will run.
 ADMIX_STOP_AFTER="${ADMIX_STOP_AFTER:-}"
 case "$ADMIX_STOP_AFTER" in ""|unsup) ;; *)
     echo "ERROR: ADMIX_STOP_AFTER must be empty or unsup, got '${ADMIX_STOP_AFTER}'" >&2; exit 1 ;;
 esac
 
-# ADMIX_PRUNE_MAF -- an extra GLOBAL minor-allele-frequency floor before LD
-# pruning. Empty (the default) = none. Every candidate site already passed
-# 1c's soft-union rule -- MAF >= LAI_MAF (0.005) in at least one super-pop of
-# >= MIN_SUBPOP_N samples -- and the missingness rule above. A global floor on
-# top removes exactly the variants that are common in one super-pop and rare
-# in the panel as a whole, i.e. the ones that tell the under-represented
-# ancestries apart: on 16 Nov `--maf 0.01` removed 11,285,750 of the
-# 18,880,026 sites the missingness rule kept.
-# Set ADMIX_PRUNE_MAF=0.01 to reproduce the 16 Nov marker set.
+# ADMIX_PRUNE_MAF -- a GLOBAL minor-allele-frequency floor applied before the
+# LD prune, measured on the samples that measure LD (the unrelated fit set).
+# 0.005 from 18 Nov for both sets; "none" or 0 = no floor. Every candidate
+# site already passed 1c's soft-union rule -- MAF >= LAI_MAF (0.005) in at
+# least one super-pop of >= MIN_SUBPOP_N samples -- and the missingness rule
+# above, so a global floor removes the variants common in one super-pop and
+# rare in the panel as a whole. Where it has been:
+#   16 Nov  0.01  removed 11,285,750 of the 18,880,026 sites the missingness
+#                 rule kept; 352,550 pruned markers (K=8; set ADMIX_PRUNE_MAF=
+#                 0.01 to reproduce).
+#   17 Nov  none  3,196,141 pruned markers at K=7, 70% of them MAF < 0.005
+#                 overall (lai_ref.mac_bins.tsv); ~33 h per fit (~22 h at K=5).
+#   18 Nov  0.005 between the two (decided 18 Nov): a variant needs about 37
+#                 copies among ~3,700 fitted samples. The 17 Nov set held
+#                 958,622 markers at MAF >= 0.005 overall; expect fewer after
+#                 the re-prune, because the 500-VARIANT window then spans more
+#                 genome (0.01 kept 352,550 where the unfloored set held
+#                 506,129 at >= 0.01). Variants rare in the whole panel are
+#                 also where call-set differences between the merged sources
+#                 show most.
+#   The cost: a variant private to the smallest group needs a high frequency
+#   there to pass -- about a third of OCE's ~55 samples' alleles.
+# A minor allele COUNT floor is not the lever: no marker of the 17 Nov K=7 set
+# had a minor allele count under 6, so --mac 3 would remove nothing.
 #
 # ADMIX_MAX_SNPS -- optional random thin (fixed seed) of the pruned markers to
 # at most this many, if their number makes ADMIXTURE too slow. Empty = none.
@@ -432,7 +451,8 @@ esac
 #
 # The rule is stamped in lai_ref.recipe and a pruned set made under another
 # rule is rebuilt, never reused: the timestamps alone cannot see a rule change.
-ADMIX_PRUNE_MAF="${ADMIX_PRUNE_MAF:-}"
+ADMIX_PRUNE_MAF="${ADMIX_PRUNE_MAF:-0.005}"
+case "$ADMIX_PRUNE_MAF" in none|0|0.0) ADMIX_PRUNE_MAF="" ;; esac
 ADMIX_MAX_SNPS="${ADMIX_MAX_SNPS:-}"
 PRUNE_ONLY="${PRUNE_ONLY:-0}"
 
@@ -986,10 +1006,11 @@ else
 fi
 
 # The pruned markers by minor allele count over every panel sample, and the
-# ADMIXTURE time that number implies. With no global MAF floor the markers
-# include variants common in one super-pop and rare overall -- and, in a
-# super-pop as small as OCE (55 samples), single copies: MAF >= 0.005 of 110
-# alleles is one allele. This table shows how many of each there are.
+# ADMIXTURE time that number implies. Without a global MAF floor the markers
+# included variants common in one super-pop and rare overall (17 Nov: 70% under
+# MAF 0.005 overall). With the 0.005 floor, bins 1-2 must be empty and bin 3
+# nearly so (the floor is measured on the unrelated fit set, this table over
+# every sample of the run); the table is the check that the floor was applied.
 MAC_BINS="${PRUNED}.mac_bins.tsv"
 if newer_than "$MAC_BINS" "${PRUNED}.bed" "${PRUNED}.bim"; then
     plink2 --bfile "$PRUNED" --threads "$THREADS" --freq counts --out "${PRUNED}.mac"

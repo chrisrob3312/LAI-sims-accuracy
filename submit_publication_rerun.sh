@@ -465,9 +465,11 @@ if want 3; then
     # ONE ADMIXTURE FIT PER JOB. Each set is two jobs: ADMIX_STOP_AFTER=unsup
     # (the unsupervised fit), then the full run, which reuses it and runs
     # discovery and the supervised fit. Without a global MAF floor the pruned
-    # set is ~3.2 million markers -- about 33 h per fit at K=7, 22 h at K=5
+    # set was ~3.2 million markers -- about 33 h per fit at K=7, 22 h at K=5
     # (17 Nov PRUNE_ONLY runs) -- so both fits in one 72 h job would not fit.
-    # 48 GB: ADMIXTURE holds the genotypes of ~3,800 samples x 3.2 M markers.
+    # With 4a's MAF 0.005 floor (18 Nov) they likely would; the split stays
+    # because it costs nothing. 48 GB was sized for ~3,800 samples x 3.2 M
+    # markers and is generous now.
     _m4a="--mem=48G"
     J3U=$(submit "stage3_homog_global_k7_unsup" \
           "$(dep_of "${J2B:-$J2}") ${_m4a} --export=ALL,HOMOG_SET=global,ADMIX_STOP_AFTER=unsup" \

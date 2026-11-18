@@ -93,9 +93,10 @@ E. DE-DUPLICATION + ANCESTRY PANEL
       scripts/admix-site-list.sh, 22 chromosomes in parallel, stamped)
     - fit set: unrelated (1e duplicate copies out, then one of each pair at
       KING >= 0.0884); relatives projected (admixture -P) in both runs below
-    - LD prune 500 50 0.1 on the fit set only, no global MAF floor (sites
-      already MAF >= 0.005 in a super-pop); stops BEFORE the fits if the marker
-      count implies more than ADMIX_MAX_HOURS (60) of ADMIXTURE
+    - LD prune 500 50 0.1 on the fit set only, after a global MAF >= 0.005
+      floor on that set (18 Nov; sites were already MAF >= 0.005 in some
+      super-pop); stops BEFORE the fits if the marker count implies more than
+      ADMIX_MAX_HOURS (60) of ADMIXTURE
     - unsupervised ADMIXTURE K=7; PCA of the fit set (top 10 PCs)
     - data-first discovery: each cluster named from its top 50 at Q >= 0.94;
       anchors = 50 with the best rank of Q + distance to the group's centre
@@ -154,6 +155,7 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
 | after 1c (again after the site report) | `bash scripts/merge-sites-collect.sh` — gathers 1c's per-chromosome site tables (per stage and cohort: records, unique, why a cohort lacks a panel record; which cohort combinations carry each record; the fill check by super-pop; soft-union and ADMIXTURE-site rules; per-chromosome totals) and, when the site report exists, per-cohort summaries of it (present / absent / allele mismatch, missingness, pairwise allele-frequency histograms, 1-Mb bins) into `results/merge_sites/*.tsv` + `MANIFEST.tsv`, to commit and plot off the cluster. It also writes `variant_accounting{,_genome,_loglines}.tsv` (scripts/variant-accounting.py): variants kept and lost at every step, per chromosome and genome-wide -- each cohort's release and prep (liftover rejects, masked sites), what each file brings to the merge, the union, plink2 site QC, the two position drops, the soft-union, the ADMIXTURE list, phased and RFMix input, 4a's candidates and LD-pruned SNPs -- every number with its source (a file's record count, a 1c table, or the stage's own log line). Seconds without the site report; `sbatch` it after the site report (~27M records) | `results/merge_sites/` only |
 | after 4a | `python3 -I scripts/homog-by-population.py` — 4a's homogeneous panel per super-pop and population: n, in the panel, how many would pass at the cut given here (`--cut SAS=0.95` on a table built at 0.93), how many have no first-degree relative, why the rest are not in (donor or donor's relative / duplicate / strongest component another super-pop / below the cut), strongest-component counts, mean supervised Q per component, anchors per population; each cluster's anchors by cohort/population; for every population with simulation donors: relative-free count, donors with a relative, relatives they keep out | no |
+| after 4a | `python3 -I scripts/homog-cut-preview.py [--k 8] [--cuts 0.90,0.92,0.94]` — per super-pop and cut: homogeneous samples split into donor-eligible / reference-only (1KG, server-panel ids) / held (LAI simulation donors and relatives, `included=0`), the mean `1 − share` of each donor pool, the samples each lower cut adds by population with their strongest other component, and how many sit under the lowest cut; the table's `included` count beside them as a check | no |
 | after 4a | `python3 -I scripts/donor-switch-plan.py --table <lai_ref_panel_samples.k7.tsv, or .k8> --kin <king.kin0> --refs reference_ids --out-dir results/donor_plan` — per donor list and population, the same-size donor set from the same population that keeps the fewest relatives out of the reference (relative-free first, then both parents of a trio), never two related donors, never a curated-reference member or relative (a current donor who is one MUST be replaced: 2b refuses it), keeping as many current donors as possible; writes `<list>.proposed.txt`, `donor_plan_summary.tsv`, `donor_plan_changes.tsv`. Proposals only: copying one into `reference_ids/` is a separate step, and 4a must rerun before 2b | no |
 | after 4a (4a runs it) | `python3 -I scripts/build-3way-amr-homog.py --base reference_ids/lai_ref_panel_samples.tsv --table <lai_ref_panel_samples.k7.tsv> --exclude <admixture_k7/simulation_donors.all.txt> --out <list>` -- the AMR reference of the 3-way HOMOG arms: July's K=5 AMR homogeneous samples still in the panel, plus AMR samples new since July (SGDP, restored HGDP, 1KG relatives) homogeneous in this run, minus donors, their relatives, duplicates and exclusions; reports what was kept, dropped and added | writes only the list |
 | inside 4a | `bash scripts/admix-site-list.sh <chr> <out.bed>` -- one chromosome's ADMIXTURE site list under the 17 Nov rule (every super-pop <= 7%, every cohort <= 15%), from 1c's pre-phasing soft-union, groups rebuilt as 1c built them; `--groups` writes only the groups | writes only its outputs |
@@ -541,19 +543,30 @@ of sites. `KING_INPUT=softunion` reads the pre-phasing genotypes instead.
 2. restrict to 1c's ADMIXTURE site list (`--extract bed1`), then
    `plink2 --indep-pairwise 500 50 0.1` over all samples at once →
    `--max-alleles 2 --snps-only just-acgt --make-bed` → `admixture_k8/lai_ref`.
-   **No global MAF floor from 16 Nov** (`ADMIX_PRUNE_MAF`, default none): every
-   site already passed the soft-union rule, MAF ≥ 0.005 in at least one
-   super-pop, and a global floor removes exactly the variants common in one
-   super-pop and rare overall. Until 16 Nov the prune ran with `--maf 0.01`
-   (as July did): 528,876 SNPs in November without the site list; 352,550 on
-   16 Nov, when `--maf 0.01` removed 11,285,750 of the 18,880,026 sites the
-   missingness rule kept. The rule is stamped in `lai_ref.recipe`; a pruned set
-   made under another rule is rebuilt. `lai_ref.mac_bins.tsv` counts the
-   markers by minor allele count (a super-pop as small as OCE, 55 samples,
-   passes MAF ≥ 0.005 with a single copy). `PRUNE_ONLY=1` stops after this
-   step and prints the count and the expected ADMIXTURE hours (both fits took
-   8 h 23 min on 352,550 markers); `ADMIX_MAX_SNPS=<n>` thins at random
-   (seed 20261116) if the count is too slow to fit.
+   **Global MAF floor 0.005 from 18 Nov** (`ADMIX_PRUNE_MAF`; `none` turns it
+   off), measured on the unrelated fit set in the same plink2 call as the
+   prune. Every site already passed the soft-union rule (MAF ≥ 0.005 in at
+   least one super-pop), so a global floor removes the variants common in one
+   super-pop and rare overall. Where it has been:
+
+   | date | global floor | pruned markers | per fit |
+   |---|---|---|---|
+   | July, until 16 Nov | `--maf 0.01` | 528,876 (Nov, no site list); 352,550 on 16 Nov (K=8), when it removed 11,285,750 of 18,880,026 sites | both fits 8 h 23 min |
+   | 17 Nov | none | 3,196,141 (K=7), 70% of them MAF < 0.005 overall | ~33 h (K=7), ~22 h (K=5) |
+   | **18 Nov** | **`--maf 0.005`** | fewer than the 958,622 of the 17 Nov set at MAF ≥ 0.005: the 500-*variant* window spans more genome once rare sites are gone (0.01 kept 352,550 where the unfloored set held 506,129 at ≥ 0.01) | roughly 10 h or less; `PRUNE_ONLY=1` gives the number |
+
+   0.005 is between the two: a variant needs about 37 copies among ~3,700
+   fitted samples, so a variant private to OCE (~55 samples) needs roughly a
+   third of OCE's alleles. Rare-overall variants are also where call-set
+   differences between the merged sources show most. A count floor is not the
+   lever: no marker of the 17 Nov K=7 set had a minor allele count under 6, so
+   `--mac 3` would remove nothing. The rule is stamped in `lai_ref.recipe`; a
+   pruned set made under another rule is rebuilt. `lai_ref.mac_bins.tsv`
+   counts the markers by minor allele count over every sample of the run --
+   with the floor, bins 1-2 must be empty and bin 3 nearly so (the floor is
+   measured on the unrelated fit set). `PRUNE_ONLY=1` stops after this step
+   and prints the count and the expected ADMIXTURE hours; `ADMIX_MAX_SNPS=<n>`
+   thins at random (seed 20261116) if the count is too slow to fit.
 3. **fit set** (from 12 Nov 2026, with relatives kept in the panel):
    ADMIXTURE assumes unrelated individuals, so both runs are fitted on an
    unrelated subset -- 1e's duplicate copies out, then greedily the sample
@@ -713,16 +726,19 @@ the expanded panel rather than taken by name as July's were:
 | writes | `04_homogeneity_panel/*.k7.*`, `reference_ids/<sp>_homog_rfmix.k7.txt`, `homog_7pop/` BCFs | `04_homogeneity_panel/lai3way_k5/`, and `reference_ids/amr_homog_rfmix.txt` = July's AMR panel + every AMR sample homogeneous here (`HOMOG_3WAY_MODE=union`; `keep-july` adds only samples July never saw, `current` uses this run alone), minus donors and their relatives |
 
 **One ADMIXTURE fit per job (17 Nov).** With no global MAF floor the LD-pruned
-set is ~3.2 million markers (K=7: 3,196,141 of 19,164,602 sites after the
+set was ~3.2 million markers (K=7: 3,196,141 of 19,164,602 sites after the
 missingness rule; 70% of them rare overall but ≥ 0.005 in some super-pop), so
 the 17 Nov PRUNE_ONLY runs estimated ~33 h per fit at K=7 and ~22 h at K=5 —
 two fits in one job (67 h at K=7) would not fit the 72 h limit. The drivers
 therefore run each set as two jobs: `ADMIX_STOP_AFTER=unsup` (the unsupervised
 fit and its projection), then the full run, which reuses it. The time guard
-counts only the fits the job itself will run.
+counts only the fits the job itself will run. With the 0.005 floor (18 Nov)
+both fits would probably fit in one job; the split is kept because it costs
+nothing and keeps each job short.
 
 Both use the same rule (each super-pop ≤ 7% missing, each cohort ≤ 15%,
-measured on the set's own samples; no global MAF; LD on the unrelated fit set;
+measured on the set's own samples; global MAF ≥ 0.005 on the set's unrelated
+fit set, 18 Nov; LD on the unrelated fit set;
 relatives projected). lai3way also drops sites with no minor allele among its
 fitted samples (`--mac 1`, not a frequency floor): 1c's soft-union keeps OCE
 and MEN singletons, which are invariant without those samples. The two jobs
@@ -847,12 +863,19 @@ related to a donor is left out of it.
 
 ### Sub-population coverage, on ancestry GROUPS not labels
 
-`--ref-min-per-pop 3` guarantees three reference samples per uncovered
-population, because 1KG carries none of the deeply divergent lineages: no
-Biaka, Mbuti, San or Mandenka in AFR, no Basque, Sardinian or Orcadian in EUR,
-none of the HGDP minority populations in EAS. It never takes a super-pop's
-donors below the donor floor (15), and never moves a sample whose relative is
-a donor.
+`--ref-min-per-pop default=3,EUR=0` guarantees three reference samples per
+uncovered population, because 1KG carries none of the deeply divergent
+lineages: no Biaka, Mbuti, San or Mandenka in AFR, none of the HGDP minority
+populations in EAS. It never takes a super-pop's donors below the donor floor
+(15), and never moves a sample whose relative is a donor.
+
+**EUR is exempt (18 Nov).** With 3, the K=8 preview moved 3 of EUR's 18
+non-1KG genomes into the reference for Basque/Sardinian/Orcadian-type
+coverage and left EUR exactly at the floor of 15 donors; EUR donors are scarce
+enough that they stay donors. The split still names the EUR lineages the
+reference then lacks, under "decided already", so the methods can state them.
+A super-pop named in the terms is a decision and its gaps do not fail the
+step; super-pops on `default` still go under "NEEDS A DECISION".
 
 `--ref-min 25` (18 Nov) is the smallest reference for a group whose reference
 comes from its own pool -- MEN above all -- when the pool allows it with the
@@ -873,6 +896,25 @@ rule). OCE, reference-only, keeps its own sizing so it still has test genomes.
 > aliased** — treating an isolate as covered by a neighbour defeats the check.
 > The 1000 Genomes American populations are listed as **not** equivalent to
 > Indigenous American ones.
+
+### How the cut sizes the donor pool (`scripts/homog-cut-preview.py`, 18 Nov)
+
+Read-only. For each super-pop and each cut (default 0.90, 0.92, 0.94) it
+counts who 4a would call homogeneous and splits them into donor-eligible,
+reference-only (1KG or a server-panel id) and **held** — the LAI simulation
+donors and their relatives, which 4a writes as `included=0` in both sets and
+which the benchmark split therefore never sees. It lists the samples each
+lower cut adds, by population, with their strongest other component, and the
+mean `1 − share` of each pool: the part of a donor's genome the simulation
+labels with the wrong ancestry. At the table's own cut, donor + reference must
+equal the table's `included` count (the check on the script itself).
+
+0.94 is one number on both sides — anchors, the homogeneous panel, the split,
+`plan_simset.R --threshold` and the contract's "donors are homogeneous: ≥ 0.94"
+(`donors.tsv` has no `top_fraction`, so intake cannot check it). A looser
+donor cut for a thin group would be a documented exception made on both
+sides, and the samples it adds are today `real_admixed` test genomes, so
+they would leave the test pool.
 
 ### The suffix trap
 Both modes write `<sp>_reference_<suffix>.txt`. **Run them with the same

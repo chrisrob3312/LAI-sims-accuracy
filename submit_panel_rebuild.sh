@@ -324,7 +324,8 @@ J_1E=$(submit 1e_king --dependency=afterok:${J_LG} 1e_king_dedup_clm.sh)
 # Two 4a jobs, side by side (17 Nov): the K=7 global panel for the benchmark,
 # and the K=5 lai3way panel the 3-way simulation's HOMOG arms read.
 # Each as TWO jobs, one ADMIXTURE fit per job (ADMIX_STOP_AFTER=unsup, then the
-# full run): ~3.2 M pruned markers take ~33 h per fit at K=7.
+# full run): ~3.2 M pruned markers took ~33 h per fit at K=7 with no MAF floor;
+# with 4a's 0.005 floor (18 Nov) far less, and the split still costs nothing.
 J_4AU=$(submit 4a_global_k7_unsup --dependency=afterok:${J_1E} --mem=48G \
         --export=ALL,HOMOG_SET=global,ADMIX_STOP_AFTER=unsup 4a_build_homogeneity_panel_kN_clm.sh)
 J_4A=$(submit 4a_global_k7 --dependency=afterok:${J_4AU} --mem=48G --export=ALL,HOMOG_SET=global \

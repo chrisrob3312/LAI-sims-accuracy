@@ -263,7 +263,7 @@ def main():
                          "regionally equivalent populations as covering each "
                          "other -- a judgement about the analysis, so it is "
                          "opt-in.")
-    ap.add_argument("--ref-min-per-pop", type=int, default=0,
+    ap.add_argument("--ref-min-per-pop", default="0",
                     help="guarantee at least this many REFERENCE samples from "
                          "every population that has donors. Exists because "
                          "--ref-share default=0 leaves sub-populations "
@@ -274,7 +274,13 @@ def main():
                          "minority populations. Simulating a donor haplotype "
                          "whose ancestry no reference covers measures the gap, "
                          "not the method. 2 or 3 is usually enough to anchor "
-                         "a lineage; 0 keeps the strict contract behaviour.")
+                         "a lineage; 0 keeps the strict contract behaviour. "
+                         "Either one number for every super-pop, or terms like "
+                         "--ref-share's: 'default=3,EUR=0'. A super-pop NAMED "
+                         "in the terms is a decision already taken: its "
+                         "uncovered populations are reported, not listed "
+                         "under NEEDS A DECISION (EUR=0 since 18 Nov: its "
+                         "donors are too few to spend on coverage).")
     ap.add_argument("--relatedness", default="",
                     help="KING table (1e's king.kin0). Relatives at or above "
                          "--role-kinship are kept TOGETHER in one role. Since "
@@ -309,6 +315,37 @@ def main():
     args = ap.parse_args()
 
     _ = args.source_split  # deprecated; --mode selects the policy
+
+    # --ref-min-per-pop: one number, or per-super-pop terms ('default=3,EUR=0').
+    # NAT is accepted for AMR, as in --ref-share.
+    _sp_alias = {"NAT": "AMR"}
+    rmpp, rmpp_named = {"__default__": 0}, set()
+    for term in str(args.ref_min_per_pop).split(","):
+        term = term.strip()
+        if not term:
+            continue
+        key, val = term.split("=", 1) if "=" in term else ("default", term)
+        key = key.strip()
+        try:
+            n_min = int(val.strip())
+        except ValueError:
+            sys.exit(f"ERROR: --ref-min-per-pop term '{term}': '{val.strip()}' "
+                     f"is not a whole number")
+        if n_min < 0:
+            sys.exit(f"ERROR: --ref-min-per-pop term '{term}' is negative")
+        if key.lower() == "default":
+            rmpp["__default__"] = n_min
+        else:
+            key = _sp_alias.get(key.upper(), key.upper())
+            rmpp[key] = n_min
+            rmpp_named.add(key)
+
+    def ref_min_per_pop_for(sp):
+        return rmpp.get(sp, rmpp["__default__"])
+
+    if str(args.ref_min_per_pop).strip() not in ("", "0"):
+        print(f"[split] ref-min-per-pop: default={rmpp['__default__']}"
+              + "".join(f", {k}={rmpp[k]}" for k in sorted(rmpp_named)))
 
     # Ids that are inside a server panel under another identifier. Only used
     # in benchmark mode; in lai mode no source rule applies at all.
@@ -448,7 +485,7 @@ def main():
                     n_alias += 1
         print(f"[split] population aliases: {n_alias} label(s) grouped "
               f"(confidence '{args.alias_confidence}')")
-    elif args.ref_min_per_pop > 0:
+    elif any(v > 0 for v in rmpp.values()):
         print(f"[split] WARNING: no alias file at {args.pop_aliases}. Gap "
               f"detection will compare raw labels, so the same population "
               f"under two names (YRI / Yoruba) reads as a gap and pulls "
@@ -490,7 +527,7 @@ def main():
               + ("".join(f", {k[0]}@{k[1]}={v}"
                          for k, v in sorted(ref_share_cohort.items()))))
 
-    written, problems, comp_lines = [], [], []
+    written, problems, comp_lines, decided = [], [], [], []
     no_donor_sps = {s.strip().upper() for s in args.no_donor_superpops.split(",")
                     if s.strip()}
     if no_donor_sps:
@@ -751,7 +788,8 @@ def main():
         # measures that gap rather than the method, so --ref-min-per-pop pulls
         # a few back per uncovered population.
         n_pulled = 0
-        if args.ref_min_per_pop > 0:
+        min_per_pop = ref_min_per_pop_for(sp)
+        if min_per_pop > 0:
             r_set, d_set = set(ref_nonkg), set(don)
             pop_of_nk = {r["sample"]: (r["pop"].strip() or "NA") for r in nonkg}
             # COVERAGE IS COUNTED ON THE 1000 GENOMES SIDE TOO.
@@ -770,14 +808,14 @@ def main():
             for x in d_set:
                 by_pop_donor[anc_group(pop_of_nk.get(x, "NA"))].append(x)
             for pop in sorted(by_pop_donor):
-                need = args.ref_min_per_pop - have[pop]
+                need = min_per_pop - have[pop]
                 if need <= 0:
                     continue
                 # Never take a population's LAST donors: a population that
                 # exists only as a handful of samples is more use as donors
                 # for its own component than as an under-powered reference.
                 avail = sorted(by_pop_donor[pop])
-                take = min(need, max(0, len(avail) - args.ref_min_per_pop))
+                take = min(need, max(0, len(avail) - min_per_pop))
                 # Coverage never takes the super-pop's donors below the donor
                 # floor: where donors are that scarce, a donor is worth more
                 # than a lineage's reference coverage (18 Nov).
@@ -852,11 +890,26 @@ def main():
         _uncovered = sorted({anc_group(pop_of.get(x, "NA")) for x in don}
                             - _ref_pops)
         if _uncovered:
-            problems.append((sp, f"{len(_uncovered)} population(s) have donors "
-                                 f"but no reference sample: "
-                                 f"{', '.join(_uncovered[:8])}"
-                                 + (" ..." if len(_uncovered) > 8 else "")
-                                 + "  (--ref-min-per-pop pulls a few back)"))
+            _msg = (f"{len(_uncovered)} population(s) have donors but no "
+                    f"reference sample: {', '.join(_uncovered[:8])}"
+                    + (" ..." if len(_uncovered) > 8 else ""))
+            if sp in rmpp_named and min_per_pop == 0:
+                # Named with 0: the coverage pull was declined on purpose
+                # (EUR, 18 Nov -- its donors are too few to spend). Still
+                # printed, because the methods have to say which donor
+                # lineages the reference does not carry.
+                decided.append((sp, _msg + f"  (kept as donors: "
+                                           f"--ref-min-per-pop {sp}=0)"))
+            elif min_per_pop == 0:
+                problems.append((sp, _msg + "  (--ref-min-per-pop pulls a few back)"))
+            elif len(don) <= args.donor_floor:
+                problems.append((sp, _msg + f"  (not pulled: {len(don)} donors, "
+                                            f"at or under the donor floor of "
+                                            f"{args.donor_floor})"))
+            else:
+                problems.append((sp, _msg + "  (not pulled: a population with "
+                                            f"{min_per_pop} or fewer samples, or "
+                                            "relatives kept together)"))
         cr, cd = defaultdict(int), defaultdict(int)
         for s in ref:
             cr[pop_of[s]] += 1
@@ -912,6 +965,10 @@ def main():
     print(f"[split] disjoint across all super-pops: "
           f"{len(ref_all)} reference, {len(don_all)} donor, 0 shared")
 
+    if decided:
+        print("\n[split] decided already (reported, not a failure):")
+        for sp, note in decided:
+            print(f"  {sp}: {note}")
     if problems:
         print("\n[split] NEEDS A DECISION:")
         for sp, note in problems:
