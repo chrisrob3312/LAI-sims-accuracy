@@ -457,14 +457,28 @@ if want 3 && { want 2 || [[ "${RUN_KING:-}" == "1" ]]; }; then
     J2B=$(submit "stage2b_king_dedup" "$(dep_of "$J2")" ./1e_king_dedup_clm.sh)
 fi
 
-J3=""; J3L=""
+J3=""; J3L=""; J3U=""; J3LU=""
 if want 3; then
     # Both wait on KING when it ran, so 4a reads a finished drop list rather
     # than whatever happens to be on disk.
-    J3=$(submit "stage3_homog_global_k7" "$(dep_of "${J2B:-$J2}") --export=ALL,HOMOG_SET=global" \
+    #
+    # ONE ADMIXTURE FIT PER JOB. Each set is two jobs: ADMIX_STOP_AFTER=unsup
+    # (the unsupervised fit), then the full run, which reuses it and runs
+    # discovery and the supervised fit. Without a global MAF floor the pruned
+    # set is ~3.2 million markers -- about 33 h per fit at K=7, 22 h at K=5
+    # (17 Nov PRUNE_ONLY runs) -- so both fits in one 72 h job would not fit.
+    # 48 GB: ADMIXTURE holds the genotypes of ~3,800 samples x 3.2 M markers.
+    _m4a="--mem=48G"
+    J3U=$(submit "stage3_homog_global_k7_unsup" \
+          "$(dep_of "${J2B:-$J2}") ${_m4a} --export=ALL,HOMOG_SET=global,ADMIX_STOP_AFTER=unsup" \
+          ./4a_build_homogeneity_panel_kN_clm.sh)
+    J3=$(submit "stage3_homog_global_k7" "--dependency=afterok:${J3U} ${_m4a} --export=ALL,HOMOG_SET=global" \
          ./4a_build_homogeneity_panel_kN_clm.sh)
+    J3LU=$(submit "stage3_homog_lai3way_k5_unsup" \
+           "$(dep_of "${J2B:-$J2}") ${_m4a} --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way,ADMIX_STOP_AFTER=unsup" \
+           ./4a_build_homogeneity_panel_kN_clm.sh)
     J3L=$(submit "stage3_homog_lai3way_k5" \
-          "$(dep_of "${J2B:-$J2}") --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way" \
+          "--dependency=afterok:${J3LU} ${_m4a} --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way" \
           ./4a_build_homogeneity_panel_kN_clm.sh)
 else
     echo "  (skipped: START_STAGE=${START_STAGE} STOP_STAGE=${STOP_STAGE})"
@@ -628,8 +642,8 @@ row () { [[ -n "$2" ]] && printf '  %-32s = %s\n' "$1" "$2" || printf '  %-32s  
 row "stage 1 (SGDP prep)"        "$J1"
 row "stage 2 (rebuild panel)"    "$J2"
 row "stage 2b (KING dedup)"      "$J2B"
-row "stage 3 (4a global K=7)"    "$J3"
-row "stage 3 (4a lai3way K=5)"   "$J3L"
+row "stage 3 (4a global K=7)"    "${J3U:+${J3U} (unsup) -> }$J3"
+row "stage 3 (4a lai3way K=5)"   "${J3LU:+${J3LU} (unsup) -> }$J3L"
 for _pop in "${COHORT_LIST[@]}"; do
     row "stage 4 (simulate ${_pop})"          "${J4[$_pop]}"
     row "stage 5 (8 arrays ${_pop})"          "${J5[$_pop]//:/ }"

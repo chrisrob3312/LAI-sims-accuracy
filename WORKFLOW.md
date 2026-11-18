@@ -712,6 +712,15 @@ the expanded panel rather than taken by name as July's were:
 | homogeneous | Q ≥ 0.94 and argmax = label | the same |
 | writes | `04_homogeneity_panel/*.k7.*`, `reference_ids/<sp>_homog_rfmix.k7.txt`, `homog_7pop/` BCFs | `04_homogeneity_panel/lai3way_k5/`, and `reference_ids/amr_homog_rfmix.txt` = July's AMR panel + every AMR sample homogeneous here (`HOMOG_3WAY_MODE=union`; `keep-july` adds only samples July never saw, `current` uses this run alone), minus donors and their relatives |
 
+**One ADMIXTURE fit per job (17 Nov).** With no global MAF floor the LD-pruned
+set is ~3.2 million markers (K=7: 3,196,141 of 19,164,602 sites after the
+missingness rule; 70% of them rare overall but ≥ 0.005 in some super-pop), so
+the 17 Nov PRUNE_ONLY runs estimated ~33 h per fit at K=7 and ~22 h at K=5 —
+two fits in one job (67 h at K=7) would not fit the 72 h limit. The drivers
+therefore run each set as two jobs: `ADMIX_STOP_AFTER=unsup` (the unsupervised
+fit and its projection), then the full run, which reuses it. The time guard
+counts only the fits the job itself will run.
+
 Both use the same rule (each super-pop ≤ 7% missing, each cohort ≤ 15%,
 measured on the set's own samples; no global MAF; LD on the unrelated fit set;
 relatives projected). lai3way also drops sites with no minor allele among its

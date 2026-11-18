@@ -30,8 +30,10 @@
 # 72 h, and no --time-min: with --time-min Slurm may START the job with any
 # limit down to that floor to backfill it, and an ADMIXTURE fit cut off part
 # way loses all of its progress. Two fits took 8 h 23 min on 352,550 markers
-# (16 Nov); without the global MAF floor there are more markers -- run
-# PRUNE_ONLY=1 first, which prints the count and the expected hours.
+# (16 Nov); without the global MAF floor the pruned set is ~3.2 M markers
+# (17 Nov: ~33 h per fit at K=7, ~22 h at K=5), so the drivers run each set as
+# two jobs, one fit each (ADMIX_STOP_AFTER=unsup, then the full run), with
+# --mem=48G. PRUNE_ONLY=1 prints the count and the expected hours.
 #SBATCH --time=72:00:00
 #SBATCH --mem=24G
 #SBATCH --cpus-per-task=16
@@ -398,6 +400,19 @@ PRUNE_ON_FIT="${PRUNE_ON_FIT:-1}"
 # for the two ADMIXTURE fits (the job limit is 72 h). Set ADMIX_MAX_SNPS to
 # thin, or raise this to accept the time.
 ADMIX_MAX_HOURS="${ADMIX_MAX_HOURS:-60}"
+
+# ADMIX_STOP_AFTER=unsup -- run the unsupervised fit (and the relatives'
+# projection onto it) and stop. The drivers run every 4a set as TWO jobs: this
+# one, then the full run, which reuses the unsupervised fit and runs discovery
+# and the supervised fit. Each job then carries ONE fit against the 72 h limit
+# instead of two. Without a global MAF floor the pruned set is ~3.2 million
+# markers (17 Nov: 3,196,141 at K=7, about 34 h per fit), so two fits in one
+# job would not fit; a split loses nothing -- no thinning, the same rule.
+# The time guard counts only the fits THIS job will run.
+ADMIX_STOP_AFTER="${ADMIX_STOP_AFTER:-}"
+case "$ADMIX_STOP_AFTER" in ""|unsup) ;; *)
+    echo "ERROR: ADMIX_STOP_AFTER must be empty or unsup, got '${ADMIX_STOP_AFTER}'" >&2; exit 1 ;;
+esac
 
 # ADMIX_PRUNE_MAF -- an extra GLOBAL minor-allele-frequency floor before LD
 # pruning. Empty (the default) = none. Every candidate site already passed
@@ -990,20 +1005,30 @@ fi
 echo "[$(date +%T)] pruned markers by minor allele count over all $(wc -l < "${PRUNED}.fam") samples (${MAC_BINS}):"
 sed 's/^/    /' "$MAC_BINS"
 _NSNP=$(wc -l < "${PRUNED}.bim")
-# Linear in markers, K and fitted samples, from the one measured run.
-_HOURS=$(( (_NSNP * 503 * K * _NFIT_EST / (8 * 352550 * 3766) + 30) / 60 ))
-echo "[$(date +%T)] expected ADMIXTURE time, both fits at K=${K} on ${_NFIT_EST} fitted samples: about ${_HOURS} h" \
-     "(scaled from 8 h 23 min for 352,550 markers, 3,766 fitted samples, K=8, 16 threads on 16 Nov)"
+# Linear in markers, K and fitted samples, from the one measured run (two fits
+# in 8 h 23 min). Per fit, then times the fits THIS job runs: the unsupervised
+# one unless a current fit is already on disk, the supervised one unless
+# ADMIX_STOP_AFTER=unsup.
+_FIT_MIN=$(( _NSNP * 503 * K * _NFIT_EST / (8 * 352550 * 3766) / 2 ))
+_UQ="${UNSUP_DIR}/fit/lai_ref_fit.${K}.Q"
+_UNSUP_HERE=1; [[ -s "$_UQ" && "$_UQ" -nt "${PRUNED}.bed" ]] && _UNSUP_HERE=0
+_SUP_HERE=1; [[ "$ADMIX_STOP_AFTER" == "unsup" ]] && _SUP_HERE=0
+_NFITS=$(( _UNSUP_HERE + _SUP_HERE ))
+_HOURS=$(( (_FIT_MIN * _NFITS + 30) / 60 ))
+echo "[$(date +%T)] expected ADMIXTURE time at K=${K} on ${_NFIT_EST} fitted samples: about $(( (_FIT_MIN + 30) / 60 )) h per fit" \
+     "(scaled from 8 h 23 min for two fits on 352,550 markers, 3,766 fitted samples, K=8, 16 threads on 16 Nov)"
+echo "[$(date +%T)] this job: unsupervised fit $([[ $_UNSUP_HERE == 1 ]] && echo "to run" || echo "already done -- reused"), supervised fit $([[ $_SUP_HERE == 1 ]] && echo "to run" || echo "next job (ADMIX_STOP_AFTER=unsup)") -> about ${_HOURS} h"
 if [[ "$PRUNE_ONLY" == "1" ]]; then
     echo "[$(date +%T)] PRUNE_ONLY=1: stopping before the ADMIXTURE fits. The pruned set is kept"
     echo "[$(date +%T)] and the next run reuses it while the rule (${PRUNE_RECIPE}) is unchanged."
     exit 0
 fi
 if [[ "$_HOURS" -gt "$ADMIX_MAX_HOURS" ]]; then
-    _FIT=$(( ADMIX_MAX_HOURS * 60 * 352550 * 8 * 3766 / (503 * K * _NFIT_EST) ))
-    echo "ERROR: ${_NSNP} pruned markers imply about ${_HOURS} h of ADMIXTURE, over ADMIX_MAX_HOURS=${ADMIX_MAX_HOURS}" >&2
-    echo "       (the job limit is 72 h). Stopping BEFORE the fits rather than at the limit." >&2
+    _FIT=$(( ADMIX_MAX_HOURS * 60 * 2 * 352550 * 8 * 3766 / (503 * K * _NFIT_EST * _NFITS) ))
+    echo "ERROR: ${_NSNP} pruned markers imply about ${_HOURS} h of ADMIXTURE in this job (${_NFITS} fit(s)), over" >&2
+    echo "       ADMIX_MAX_HOURS=${ADMIX_MAX_HOURS} (the job limit is 72 h). Stopping BEFORE the fits rather than at the limit." >&2
     echo "       The pruned set is kept. Resubmit with one of:" >&2
+    echo "         ADMIX_STOP_AFTER=unsup, then the full run   one fit per job, about $(( (_FIT_MIN + 30) / 60 )) h each (what the drivers do)" >&2
     echo "         ADMIX_MAX_SNPS=${_FIT}   random thin (seed 20261116) to what fits in ${ADMIX_MAX_HOURS} h" >&2
     echo "         ADMIX_MAX_HOURS=${_HOURS}  accept the time (a fit cut off by the limit loses all its progress;" >&2
     echo "                             a finished unsupervised fit is reused by the resubmission)" >&2
@@ -1106,6 +1131,12 @@ fi
 project "${UFIT}/lai_ref_fit.${K}.P" "${UNSUP_DIR}/proj"
 merge_q "${UFIT}/lai_ref_fit.${K}.Q" "${UNSUP_DIR}/proj/lai_ref_proj.${K}.Q" "${UNSUP_DIR}/lai_ref.${K}.Q"
 [[ -s "${UNSUP_DIR}/lai_ref.${K}.Q" ]] || { echo "ERROR: unsupervised ADMIXTURE failed"; exit 1; }
+if [[ "$ADMIX_STOP_AFTER" == "unsup" ]]; then
+    echo "[$(date +%T)] ADMIX_STOP_AFTER=unsup: the unsupervised fit is done (${UFIT}/lai_ref_fit.${K}.Q," \
+         "every sample in ${UNSUP_DIR}/lai_ref.${K}.Q). Stopping; the next 4a run of this set reuses it" \
+         "and runs discovery and the supervised fit."
+    exit 0
+fi
 
 # A projected sample cannot be an anchor: anchors label the supervised FIT.
 ANCHOR_INELIG="${ADM_DIR}/anchor_ineligible.txt"

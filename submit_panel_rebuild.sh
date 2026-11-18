@@ -323,10 +323,16 @@ J_LG=$(submit ligate --array=1-22%${THROTTLE} --dependency=afterok:${J_CH}:${J_C
 J_1E=$(submit 1e_king --dependency=afterok:${J_LG} 1e_king_dedup_clm.sh)
 # Two 4a jobs, side by side (17 Nov): the K=7 global panel for the benchmark,
 # and the K=5 lai3way panel the 3-way simulation's HOMOG arms read.
-J_4A=$(submit 4a_global_k7 --dependency=afterok:${J_1E} --export=ALL,HOMOG_SET=global \
+# Each as TWO jobs, one ADMIXTURE fit per job (ADMIX_STOP_AFTER=unsup, then the
+# full run): ~3.2 M pruned markers take ~33 h per fit at K=7.
+J_4AU=$(submit 4a_global_k7_unsup --dependency=afterok:${J_1E} --mem=48G \
+        --export=ALL,HOMOG_SET=global,ADMIX_STOP_AFTER=unsup 4a_build_homogeneity_panel_kN_clm.sh)
+J_4A=$(submit 4a_global_k7 --dependency=afterok:${J_4AU} --mem=48G --export=ALL,HOMOG_SET=global \
        4a_build_homogeneity_panel_kN_clm.sh)
-J_4L=$(submit 4a_lai3way_k5 --dependency=afterok:${J_1E} --job-name=4a_homog_lai3way --export=ALL,HOMOG_SET=lai3way \
-       4a_build_homogeneity_panel_kN_clm.sh)
+J_4LU=$(submit 4a_lai3way_k5_unsup --dependency=afterok:${J_1E} --mem=48G --job-name=4a_homog_lai3way \
+        --export=ALL,HOMOG_SET=lai3way,ADMIX_STOP_AFTER=unsup 4a_build_homogeneity_panel_kN_clm.sh)
+J_4L=$(submit 4a_lai3way_k5 --dependency=afterok:${J_4LU} --mem=48G --job-name=4a_homog_lai3way \
+       --export=ALL,HOMOG_SET=lai3way 4a_build_homogeneity_panel_kN_clm.sh)
 
 echo "[rebuild] 4a global K=7 = ${J_4A}; 4a lai3way K=5 = ${J_4L}" >&2
 if [[ "$CHAIN_PUBLICATION" == "1" ]]; then
