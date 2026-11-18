@@ -191,6 +191,41 @@ def allocate_stratified(by_pop, n_ref):
     return sorted(ref_ids), sorted(don_ids)
 
 
+HOLDOUT_KEEP = 3          # a population keeps at least this many donors
+HOLDOUT_SEED = "20261118"  # fixed order within a population, independent of ID prefixes
+
+
+def allocate_holdout(cands, k, cap):
+    """k picks across populations, proportional to what each population can
+    give (its candidates, capped at cap[g]) by largest remainder, with NO
+    population forced in (unlike a reference, a 10-genome holdout must not
+    take one from every population). Within a population the order is a
+    seeded hash of the ID, so a holdout is reproducible but not biased towards
+    one cohort's ID prefix (HGDP before LP6005 before S_)."""
+    import hashlib
+    size = {g: min(len(v), cap.get(g, 0)) for g, v in cands.items()}
+    size = {g: n for g, n in size.items() if n > 0}
+    tot = sum(size.values())
+    k = min(k, tot)
+    if k <= 0:
+        return []
+    exact = {g: k * size[g] / tot for g in size}
+    base = {g: int(exact[g]) for g in size}
+    left = k - sum(base.values())
+    for g in sorted(size, key=lambda q: (-(exact[q] - base[q]), -size[q], q)):
+        if left == 0:
+            break
+        if base[g] < size[g]:
+            base[g] += 1
+            left -= 1
+    def order(s):
+        return hashlib.md5((HOLDOUT_SEED + s).encode()).hexdigest()
+    picks = []
+    for g in sorted(base):
+        picks += sorted(cands[g], key=order)[:base[g]]
+    return sorted(picks)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -311,6 +346,18 @@ def main():
                          "no OCE model, so an OCE donor is withheld for "
                          "nothing). Their non-reference samples are left "
                          "unallocated and so stay test-eligible.")
+    ap.add_argument("--test-holdout", default="",
+                    help="homogeneous genomes to take back from the DONORS as "
+                         "real_homogeneous TEST genomes, per super-pop: "
+                         "'AFR=15,EAS=15,EUR=10' (NAT accepted for AMR). With "
+                         "--ref-share default=0 every homogeneous genome "
+                         "outside 1000 Genomes is a donor, which leaves almost "
+                         "no real homogeneous test genome for those groups. "
+                         "Taken stratified over populations, never leaving a "
+                         "population fewer than 3 donors or the super-pop under "
+                         "--donor-floor, and only from donors with no relative "
+                         "anywhere in the pool, so no relative can sit in "
+                         "another role. Empty = none.")
     ap.add_argument("--pool-column", default="included",
                     help="the panel column (1 = in the pool) to split. 4a writes "
                          "`homogeneous` (the shared pool: duplicates and named "
@@ -354,6 +401,31 @@ def main():
     if str(args.ref_min_per_pop).strip() not in ("", "0"):
         print(f"[split] ref-min-per-pop: default={rmpp['__default__']}"
               + "".join(f", {k}={rmpp[k]}" for k in sorted(rmpp_named)))
+
+    # --test-holdout: real homogeneous test genomes taken back from the donors.
+    holdout = {}
+    for term in args.test_holdout.split(","):
+        term = term.strip()
+        if not term:
+            continue
+        if "=" not in term:
+            sys.exit(f"ERROR: --test-holdout term '{term}' has no '=' (e.g. AFR=15)")
+        key, val = term.split("=", 1)
+        try:
+            n_h = int(val.strip())
+        except ValueError:
+            sys.exit(f"ERROR: --test-holdout term '{term}': '{val.strip()}' is not a whole number")
+        if n_h < 0:
+            sys.exit(f"ERROR: --test-holdout term '{term}' is negative")
+        holdout[_sp_alias.get(key.strip().upper(), key.strip().upper())] = n_h
+    if holdout:
+        if args.mode != "benchmark":
+            sys.exit("ERROR: --test-holdout applies to --mode benchmark only")
+        print("[split] test holdout (real homogeneous test genomes taken from the donors): "
+              + ", ".join(f"{k}={v}" for k, v in sorted(holdout.items())))
+        if not args.relatedness:
+            print("[split] WARNING: --test-holdout without --relatedness cannot keep a "
+                  "held-out genome's relatives out of the other roles", file=sys.stderr)
 
     # Ids that are inside a server panel under another identifier. Only used
     # in benchmark mode; in lai mode no source rule applies at all.
@@ -495,6 +567,19 @@ def main():
                     union(f[i1], f[i2]); n_rel_pairs += 1
         print(f"[split] relatedness: {n_rel_pairs} pair(s) >= "
               f"{args.role_kinship} will be kept within one role")
+
+    # For --test-holdout: a donor turned test genome must have no relative
+    # anywhere in the pool, since every pool genome ends up a donor, a
+    # reference or (outside 1KG) a test genome itself -- so no relative of a
+    # held-out genome can sit in another role. Relatives OUTSIDE the pool
+    # (admixed genomes) are test genomes too, which the intake allows.
+    pool_ids = {r["sample"] for r in rows}
+    _members = defaultdict(set)
+    for _s in list(parent):
+        _members[find(_s)].add(_s)
+    def has_pool_relative(x):
+        return x in parent and any(m != x and m in pool_ids for m in _members[find(x)])
+    held_report = []
 
     # label -> ancestry group. Labels with no row are their own group, so an
     # unlisted population is never silently merged with anything.
@@ -875,6 +960,30 @@ def main():
             if n_pulled:
                 ref_nonkg, don = sorted(r_set), sorted(d_set)
 
+        # --- real homogeneous test genomes, taken back from the donors -------
+        # (18 Nov) With every homogeneous genome outside 1KG a donor, the real
+        # test half had almost no homogeneous genome for AFR, EAS or EUR. A
+        # few are taken back here, stratified over populations; they land in
+        # neither list, so the assembler reads them as real_homogeneous.
+        held = []
+        k_hold = holdout.get(sp, 0)
+        if k_hold > 0:
+            pop_of_d = {r["sample"]: (r["pop"].strip() or "NA") for r in nonkg}
+            ndon_g, cands = defaultdict(int), defaultdict(list)
+            for x in don:
+                g = anc_group(pop_of_d.get(x, "NA"))
+                ndon_g[g] += 1
+                if not has_pool_relative(x):
+                    cands[g].append(x)
+            cap = {g: max(0, ndon_g[g] - HOLDOUT_KEEP) for g in ndon_g}
+            room = max(0, len(don) - args.donor_floor)
+            held = allocate_holdout(cands, min(k_hold, room), cap)
+            if held:
+                don = sorted(set(don) - set(held))
+            held_report.append((sp, k_hold, held, room,
+                                sum(min(len(cands[g]), cap[g]) for g in cands),
+                                {x: pop_of_d.get(x, "NA") for x in held}))
+
         # FILL ORDER: 1000 GENOMES FIRST, NON-1KG ONLY FOR WHAT IT CANNOT
         # COVER.
         #
@@ -909,6 +1018,8 @@ def main():
                 note += f"; ref-share {share:g}"
             if n_pulled:
                 note += f"; {n_pulled} pulled for sub-pop coverage"
+            if held:
+                note += f"; {len(held)} held out as real homogeneous test genomes"
             note += floor_note
             if args.ref_min > 0 and len(ref) < args.ref_min:
                 short = ("the pool cannot supply it with the donor floor kept"
@@ -1028,6 +1139,22 @@ def main():
     print(f"[split] disjoint across all super-pops: "
           f"{len(ref_all)} reference, {len(don_all)} donor, 0 shared")
 
+    if held_report:
+        print("\n[split] real homogeneous test genomes held out of the donors (--test-holdout):")
+        for sp, k_hold, held, room, n_cand, grp_of in held_report:
+            byg = defaultdict(int)
+            for x in held:
+                byg[grp_of[x]] += 1
+            why = ""
+            if len(held) < k_hold:
+                why = (f"  -- short of {k_hold}: " +
+                       (f"only {room} above the donor floor of {args.donor_floor}"
+                        if room < k_hold and room <= n_cand else
+                        f"only {n_cand} donors without a relative in the pool, in "
+                        f"populations keeping {HOLDOUT_KEEP}+ donors"))
+            print(f"  {sp}: {len(held)} of {k_hold} asked"
+                  + (f" ({', '.join(f'{g} {n}' for g, n in sorted(byg.items(), key=lambda kv: (-kv[1], kv[0])))})"
+                     if held else "") + why)
     if decided:
         print("\n[split] decided already (reported, not a failure):")
         for sp, note in decided:

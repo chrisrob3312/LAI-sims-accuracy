@@ -859,6 +859,21 @@ vocabularies don't overlap.
   benchmark for a rule of the other project. `--mode lai` keeps `included`.
   A table from before the column stops the benchmark split with an error
   rather than silently splitting the old pool.
+- **Real homogeneous test genomes (18 Nov): `--test-holdout AFR=15,EAS=15,EUR=10`.**
+  With every homogeneous genome outside 1KG a donor, the K=7 split left ~27
+  homogeneous real test genomes in all (OCE 15, SAS 10, EAS 1, EUR 1) beside
+  ~670 admixed ones. The holdout takes a few back from the donors: stratified
+  over populations by largest remainder (no population forced in), never
+  leaving a population fewer than 3 donors or the super-pop under the donor
+  floor, and only donors with **no relative anywhere in the pool** — every
+  pool genome becomes a donor, a reference or a test genome, so that is what
+  keeps a held-out genome's relatives out of the other roles. Order within a
+  population is a seeded hash of the ID (seed 20261118), so it is
+  reproducible without favouring one cohort's ID prefix. The genomes land in
+  neither list and the assembler reads them as `real_homogeneous`. Cost at
+  K=7: AFR 97 → 82 and EAS 128 → 113 donors (little), EUR 42 → 32 (LAT3's EUR
+  reuse 3.2× → ~4.2×; the two-generation models' 2.4× → ~3.1×). The Nextflow
+  planner's `--holdout` is the same idea on that side.
 
 ### Fill order: 1000 Genomes first
 

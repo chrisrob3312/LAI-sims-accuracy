@@ -372,6 +372,15 @@ OCE in the cohort was meant to close. The reference-only path uses the same
 limitation rather than smoothed over: the OCE imputation reading rests on a
 handful of genomes.
 
+**Real homogeneous test genomes (18 Nov).** Donor-first left the real half
+~96% admixed (~27 homogeneous: OCE 15, SAS 10, EAS 1, EUR 1). The split now
+takes a few homogeneous genomes back from the donors as `real_homogeneous`
+test genomes — AFR 15, EAS 15, EUR 10 (`--test-holdout`; EUR at the low end
+of 10–15 because its 42 donors are the thinnest pool most models use). The
+13 populations with 3 or fewer donors stay donors: a reference that does
+not cover every lineage is what real data look like, and their gaps are
+reported for the methods.
+
 **One pool, two projects (18 Nov).** The benchmark splits 4a's `homogeneous`
 flag, not `included`: `included` is the LAI project's panel and leaves out
 THAT project's simulation donors and their relatives (56 Native American

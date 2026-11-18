@@ -82,6 +82,14 @@ NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE,SAS}"
 # is the LAI project's panel, which leaves out ITS simulation donors and their
 # relatives -- a rule of the other project, not of this one.
 BENCH_POOL_COLUMN="${BENCH_POOL_COLUMN:-homogeneous}"
+# Real homogeneous TEST genomes taken back from the donors (18 Nov). With every
+# homogeneous genome outside 1KG a donor, the K=7 split left ~27 homogeneous
+# test genomes in all (OCE 15, SAS 10, EAS 1, EUR 1). AFR (97 donors) and EAS
+# (128) spare 15 each at little cost; EUR's 42 donors are the thinnest pool
+# most models draw on, so 10 (LAT3's EUR reuse 3.2x -> ~4.2x). Stratified over
+# populations, never leaving one under 3 donors or the super-pop under the
+# donor floor, and only genomes with no relative in the pool.
+TEST_HOLDOUT="${TEST_HOLDOUT:-AFR=15,EAS=15,EUR=10}"
 # The contract's reference share: AFR/EUR/EAS/SAS take their reference from
 # 1000 Genomes ONLY (spread over the 1KG populations, not the first IDs), NAT
 # adds half the MXB, MEN half its pool (0.33 until 18 Nov, which left MEN an
@@ -230,6 +238,7 @@ if want split; then
             --mode lai --suffix "$LAI_SUFFIX" "${REL[@]}" || FAILED=1
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
             --mode benchmark --suffix "$BENCH_SUFFIX" --pool-column "$BENCH_POOL_COLUMN" \
+            --test-holdout "$TEST_HOLDOUT" \
             --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
             --ref-share "$REF_SHARE" --ref-min "$REF_MIN" --ref-min-per-pop "$REF_MIN_PER_POP" \
             --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
