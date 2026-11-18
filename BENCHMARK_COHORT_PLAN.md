@@ -33,8 +33,8 @@ test genomes (every eligible genome outside 1000 Genomes: 1,391 of the 4,557 in
 the K=8 table are HGDP/SGDP/Almarri/MXB, less duplicates, server-panel ids,
 donors and their reference). Both halves carry every reading — imputation
 accuracy, retention, power — and the power analysis uses the donor-based
-N_eff. The original plan below: 1,800 admixed + 360 single-ancestry controls =
-**2,160** simulated, exactly 360 per
+N_eff. The original plan, in the table above: 1,800 admixed + 360
+single-ancestry controls = **2,160** simulated, exactly 360 per
 chip × build cell.
 
 **LAT3 is the Mexican-like cohort** and the primary model: half Indigenous
