@@ -822,12 +822,17 @@ vocabularies don't overlap.
 imputation servers contain it. A non-1KG sample can be either. So the
 single-use resource is spent first and the dual-use one only on what 1KG
 cannot cover. That is what `--ref-share default=0` expresses, and it explains
-the contract's share values rather than leaving them arbitrary:
+the contract's share values rather than leaving them arbitrary. The 1KG part of
+the reference is spread over the 1KG populations by the same largest-remainder
+rule as the rest (until 18 Nov it was the first IDs alphabetically: EUR got
+GBR and FIN only, AFR ACB and GWD, EAS CHS -- and with no YRI in the reference
+the coverage rule then pulled HGDP Yoruba donors to cover them). A 1KG sample
+related to a donor is left out of it.
 
 | super-pop | 1KG coverage | share |
 |---|---|---|
 | AFR, EUR, EAS, SAS | good | `0` — 1KG fills the reference |
-| **MEN** | none — 1KG has no Middle Eastern population | `0.33` |
+| **MEN** | none — 1KG has no Middle Eastern population | `0.5` (0.33 until 18 Nov: 18 reference genomes of 59), and `--ref-min 25` |
 | **NAT** | only *admixed* American (PEL/MXL/CLM/PUR), mostly below 0.93 | `NAT@MXB=0.5` |
 | **OCE** | none | all reference is non-1KG |
 
@@ -836,7 +841,14 @@ the contract's share values rather than leaving them arbitrary:
 `--ref-min-per-pop 3` guarantees three reference samples per uncovered
 population, because 1KG carries none of the deeply divergent lineages: no
 Biaka, Mbuti, San or Mandenka in AFR, no Basque, Sardinian or Orcadian in EUR,
-none of the HGDP minority populations in EAS.
+none of the HGDP minority populations in EAS. It never takes a super-pop's
+donors below the donor floor (15), and never moves a sample whose relative is
+a donor.
+
+`--ref-min 25` (18 Nov) is the smallest reference for a group whose reference
+comes from its own pool -- MEN above all -- when the pool allows it with the
+donor floor kept; never past half a pool under 50 (`plan_simset.R --ref-min`'s
+rule). OCE, reference-only, keeps its own sizing so it still has test genomes.
 
 > **Coverage is counted on ancestry groups, not raw labels.** The sources name
 > the same people differently — 1000 Genomes `YRI` and HGDP `Yoruba` are one

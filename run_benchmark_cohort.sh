@@ -65,17 +65,25 @@ DESIGN="${DESIGN:-one-cell}"
 FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.94}"
 NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE}"
 # The contract's reference share: AFR/EUR/EAS/SAS take their reference from
-# 1000 Genomes ONLY, NAT adds half the MXB, MEN a third of its pool. 1KG can
-# never BE a donor, so spending non-1KG samples on a role 1KG already fills
-# wastes the only donor-eligible material there is -- it roughly doubles the
-# SAS donor pool, the thinnest pool and so the likeliest limit on N_eff.
-REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.33}"
+# 1000 Genomes ONLY (spread over the 1KG populations, not the first IDs), NAT
+# adds half the MXB, MEN half its pool (0.33 until 18 Nov, which left MEN an
+# 18-genome reference of 59). 1KG can never BE a donor, so spending non-1KG
+# samples on a role 1KG already fills wastes the only donor-eligible material
+# there is -- the EUR and SAS donor pools are the thin ones.
+REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.5}"
+# The smallest reference panel for a group whose reference comes from its own
+# pool (MEN; NAT if 1KG cannot cover it): 25, when the pool allows it with the
+# donor floor kept -- never past half a pool under 50. Same rule and number as
+# plan_simset.R --ref-min on the Nextflow side. Not applied to OCE (reference
+# only: its remainder is the test pool).
+REF_MIN="${REF_MIN:-25}"
 # ...but 1000 Genomes carries none of the deeply divergent lineages the other
 # sources do (no Biaka/Mbuti/San/Mandenka in AFR, no Basque/Sardinian/Orcadian
 # in EUR, none of the HGDP minority populations in EAS). A donor haplotype
 # whose ancestry no reference covers measures the panel's gap, not the method.
-# 3 per population anchors each lineage and still leaves SAS donors well above
-# the even split. 0 is the strict contract reading. Coverage is counted on
+# 3 per population anchors each lineage -- but never by taking a super-pop's
+# donors below the donor floor (15), where donors are scarcer than coverage is
+# worth. 0 is the strict contract reading. Coverage is counted on
 # ANCESTRY GROUPS (reference_ids/population_aliases.tsv), not raw labels, so
 # HGDP Yoruba is not reported as a gap when 1000 Genomes YRI is in the panel.
 REF_MIN_PER_POP="${REF_MIN_PER_POP:-3}"
@@ -177,7 +185,7 @@ if want split; then
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
             --mode benchmark --suffix "$BENCH_SUFFIX" \
             --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
-            --ref-share "$REF_SHARE" --ref-min-per-pop "$REF_MIN_PER_POP" \
+            --ref-share "$REF_SHARE" --ref-min "$REF_MIN" --ref-min-per-pop "$REF_MIN_PER_POP" \
             --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
             "${REL[@]}" || FAILED=1
     fi

@@ -225,7 +225,7 @@ def main():
     ap.add_argument("--ref-share", default="",
                     help="how much of each super-pop's NON-1000G pool goes to "
                          "the reference, as comma-separated terms: "
-                         "'default=0,NAT@MXB=0.5,MEN=0.33' (the contract's "
+                         "'default=0,NAT@MXB=0.5,MEN=0.5' (the contract's "
                          "value). default=0 means the reference is 1000 "
                          "Genomes ONLY and every homogeneous non-1KG sample "
                          "is a donor -- which is the point, since 1KG can "
@@ -233,8 +233,19 @@ def main():
                          "role 1KG already fills wastes the only "
                          "donor-eligible material there is. Without this "
                          "flag the old even split applies. A term may be "
-                         "keyed on the super-pop (MEN=0.33) or on a cohort "
+                         "keyed on the super-pop (MEN=0.5) or on a cohort "
                          "within it (NAT@MXB=0.5 -> AMR's MXB samples).")
+    ap.add_argument("--ref-min", type=int, default=0,
+                    help="smallest REFERENCE panel for a split super-pop, when "
+                         "its pool allows it (the rule of plan_simset.R "
+                         "--ref-min on the Nextflow side): raised to this many "
+                         "where share x pool and the 1000 Genomes top-up fall "
+                         "short, but never past half the non-1KG pool when "
+                         "that pool is under 2 x ref-min, and never so far "
+                         "that donors drop below --donor-floor. MEN, with no "
+                         "1000 Genomes population, is the case it exists for. "
+                         "Not applied to --no-donor-superpops (OCE), whose "
+                         "remainder is the test pool. 0 = off.")
     ap.add_argument("--pop-aliases",
                     default="reference_ids/population_aliases.tsv",
                     help="labels that name the same ancestry under different "
@@ -519,6 +530,39 @@ def main():
             kg = sorted(r["sample"] for r in members if _is_kg(r))
             nonkg = [r for r in members if not _is_kg(r)]
 
+        # THE 1000 GENOMES TOP-UP IS STRATIFIED BY POPULATION.
+        #
+        # Until 18 Nov it was kg[:k] -- the first k IDs in alphabetical order --
+        # so the reference took whichever 1KG populations have the lowest IDs:
+        # EUR got GBR and FIN only (HG00xxx; no CEU, IBS or TSI), AFR got ACB
+        # and GWD (no YRI, LWK, ESN, MSL), EAS got CHS. That is not only a
+        # skewed panel; it also cost DONORS, because the coverage rule below
+        # then found HGDP Yoruba uncovered (no YRI in the reference) and pulled
+        # Yoruba donors into the reference to cover them. Now the k slots are
+        # spread over the 1KG populations by the same largest-remainder rule
+        # as everything else, and a 1KG sample related (>= --role-kinship) to a
+        # donor is skipped: the pair would sit in two roles, which the intake
+        # refuses.
+        pop_of_kg = {r["sample"]: (r["pop"].strip() or "NA") for r in members}
+        def kg_topup(k, donors):
+            if k <= 0 or not kg:
+                return []
+            dcl = {find(d) for d in donors} if args.relatedness else set()
+            by_pop_kg = defaultdict(list)
+            for x in kg:
+                if args.relatedness and find(x) in dcl:
+                    continue
+                by_pop_kg[pop_of_kg.get(x, "NA")].append(x)
+            avail = sum(len(v) for v in by_pop_kg.values())
+            k = min(k, avail)
+            if k <= 0:
+                return []
+            if k < len(by_pop_kg):
+                # Fewer slots than populations: one each from the largest.
+                big = sorted(by_pop_kg, key=lambda q: (-len(by_pop_kg[q]), q))[:k]
+                return sorted(sorted(by_pop_kg[q])[0] for q in big)
+            return allocate_stratified(by_pop_kg, k)[0]
+
         # A super-pop that no simulation model draws on needs no donors. OCE
         # is the case this exists for: Table 1 has no OCE model, so every OCE
         # sample withheld as a donor is withheld for nothing -- and in a group
@@ -614,6 +658,25 @@ def main():
             if n_nonkg - ref_from_nonkg < args.donor_floor:
                 ref_from_nonkg = max(0, n_nonkg - args.donor_floor)
 
+        # REFERENCE FLOOR (--ref-min). A share of a small pool is a small
+        # panel: MEN at 0.33 of 59 was 18 genomes. Raise the non-1KG part until
+        # the whole reference (non-1KG + what 1KG can supply) reaches ref-min,
+        # within the limits plan_simset.R uses -- at most half the non-1KG pool
+        # when that pool is under 2 x ref-min -- and never below the donor floor.
+        cohort_keyed = any(k[0] == sp for k in ref_share_cohort)
+        floor_note = ""
+        if args.ref_min > 0 and not cohort_keyed:
+            kg_room = min(len(kg), max(0, n_ref - ref_from_nonkg))
+            if ref_from_nonkg + kg_room < args.ref_min:
+                need = args.ref_min - min(len(kg), args.ref_min)
+                lim = n_nonkg // 2 if n_nonkg < 2 * args.ref_min else n_nonkg
+                lim = min(lim, max(0, n_nonkg - args.donor_floor))
+                raised = min(max(ref_from_nonkg, need), lim)
+                if raised > ref_from_nonkg:
+                    floor_note = f"; reference raised {ref_from_nonkg} -> {raised} non-1000G (--ref-min {args.ref_min})"
+                    ref_from_nonkg = raised
+                    n_ref = max(n_ref, ref_from_nonkg)
+
         # ALLOCATE PER COHORT WHEN A COHORT-KEYED SHARE APPLIES.
         #
         # NAT@MXB=0.5 means "half the MXB", not "a number equal to half the
@@ -624,7 +687,6 @@ def main():
         # samples are donor-eligible material spent on a role 1KG already
         # fills. So each cohort is allocated against its own share and the
         # results are concatenated.
-        cohort_keyed = any(k[0] == sp for k in ref_share_cohort)
         if ref_from_nonkg <= 0:
             ref_nonkg, don = [], sorted(r["sample"] for r in nonkg)
         elif share is not None and cohort_keyed:
@@ -699,12 +761,10 @@ def main():
             # donor-side labels also belong to. Counting only the non-1KG part
             # of the reference would report every HGDP population as uncovered
             # and pull donors to fill gaps 1KG already fills.
-            pop_of_kg = {r["sample"]: (r["pop"].strip() or "NA")
-                         for r in members if r["sample"] in set(kg)}
             have = defaultdict(int)
             for x in r_set:
                 have[anc_group(pop_of_nk.get(x, "NA"))] += 1
-            for x in kg[:max(0, n_ref - len(ref_nonkg))]:
+            for x in kg_topup(max(0, n_ref - len(ref_nonkg)), d_set):
                 have[anc_group(pop_of_kg.get(x, "NA"))] += 1
             by_pop_donor = defaultdict(list)
             for x in d_set:
@@ -718,6 +778,15 @@ def main():
                 # for its own component than as an under-powered reference.
                 avail = sorted(by_pop_donor[pop])
                 take = min(need, max(0, len(avail) - args.ref_min_per_pop))
+                # Coverage never takes the super-pop's donors below the donor
+                # floor: where donors are that scarce, a donor is worth more
+                # than a lineage's reference coverage (18 Nov).
+                take = min(take, max(0, len(d_set) - args.donor_floor))
+                # A sample with a relative among the donors stays a donor:
+                # moving it alone would put the pair in two roles.
+                if args.relatedness:
+                    avail = [x for x in avail
+                             if not any(y != x and find(y) == find(x) for y in d_set)]
                 for x in avail[:take]:
                     d_set.discard(x); r_set.add(x); n_pulled += 1
             if n_pulled:
@@ -735,12 +804,13 @@ def main():
         #
         # The rule degenerates correctly where 1KG cannot cover the super-pop,
         # and that is exactly where the contract gives a non-zero share:
-        #   MEN  1000 Genomes has no Middle Eastern population  -> MEN=0.33
+        #   MEN  1000 Genomes has no Middle Eastern population  -> MEN=0.5
+        #        (0.33 until 18 Nov: 18 reference genomes of 59), with --ref-min
         #   NAT  its American populations are ADMIXED, not Indigenous, and
         #        mostly will not clear the homogeneity bar       -> NAT@MXB=0.5
         #   OCE  no Oceanian population at all          -> all reference is non-1KG
         top_up = max(0, n_ref - len(ref_nonkg))
-        ref = sorted(ref_nonkg + kg[:top_up])
+        ref = sorted(ref_nonkg + kg_topup(top_up, don))
 
         if len(don) < args.donor_floor:
             note = (f"*** only {len(don)} donors available "
@@ -756,6 +826,12 @@ def main():
                 note += f"; ref-share {share:g}"
             if n_pulled:
                 note += f"; {n_pulled} pulled for sub-pop coverage"
+            note += floor_note
+            if args.ref_min > 0 and len(ref) < args.ref_min:
+                short = ("the pool cannot supply it with the donor floor kept"
+                         if ref_from_nonkg + min(len(kg), max(0, n_ref - ref_from_nonkg)) < args.ref_min
+                         else "per-population rounding, relatives kept together")
+                note += f"; reference {len(ref)} < --ref-min {args.ref_min} ({short})"
         pct = 100.0 * len(don) / (len(ref) + len(don)) if (ref or don) else 0
         print(f"{sp:>9} {n:>6} {'split':>12} {len(ref):>6} {len(don):>7} "
               f"{pct:>5.0f}%  {note}")
