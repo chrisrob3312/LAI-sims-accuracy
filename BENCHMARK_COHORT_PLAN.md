@@ -27,9 +27,14 @@ thirteen build steps), contract v2.
 | ~~SASEUR~~ | SAS, EUR | 0.50 / 0.50 | 2 | 200 | — | SAS | dropped 18 Nov (§5) |
 | NAT1, EUR1, AFR1, EAS1, MEN1 (~~SAS1~~ dropped 18 Nov) | one each | 1.0 | 0 | 60 each | 10 | that one | control |
 
-As planned: 1,800 admixed + 360 single-ancestry controls = **2,160** (since
-18 Nov `reference_ids/models.tsv` is what is built: LAT3 300 and no SAS
-models, 1,600 individuals), exactly 360 per
+**Agreed 18 Nov: about 2,350 genomes in all** — 1,600 simulated
+(`reference_ids/models.tsv`: LAT3 300, no SAS models) plus roughly 750 real
+test genomes (every eligible genome outside 1000 Genomes: 1,391 of the 4,557 in
+the K=8 table are HGDP/SGDP/Almarri/MXB, less duplicates, server-panel ids,
+donors and their reference). Both halves carry every reading — imputation
+accuracy, retention, power — and the power analysis uses the donor-based
+N_eff. The original plan below: 1,800 admixed + 360 single-ancestry controls =
+**2,160** simulated, exactly 360 per
 chip × build cell.
 
 **LAT3 is the Mexican-like cohort** and the primary model: half Indigenous
