@@ -24,10 +24,12 @@ thirteen build steps), contract v2.
 | **MENA3** | EUR, MEN, AFR | 0.30 / 0.50 / 0.20 | 30 | 200 | 33–34 | MEN | secondary |
 | **MENEUR** | MEN, EUR | 0.50 / 0.50 | 2 | 200 | 33–34 | MEN | secondary |
 | **EASEUR** | EAS, EUR | 0.50 / 0.50 | 2 | 200 | 33–34 | EAS | secondary |
-| **SASEUR** | SAS, EUR | 0.50 / 0.50 | 2 | 200 | 33–34 | SAS | secondary |
-| NAT1, EUR1, AFR1, EAS1, SAS1, MEN1 | one each | 1.0 | 0 | 60 each | 10 | that one | control |
+| ~~SASEUR~~ | SAS, EUR | 0.50 / 0.50 | 2 | 200 | — | SAS | dropped 18 Nov (§5) |
+| NAT1, EUR1, AFR1, EAS1, MEN1 (~~SAS1~~ dropped 18 Nov) | one each | 1.0 | 0 | 60 each | 10 | that one | control |
 
-1,800 admixed + 360 single-ancestry controls = **2,160**, exactly 360 per
+As planned: 1,800 admixed + 360 single-ancestry controls = **2,160** (since
+18 Nov `reference_ids/models.tsv` is what is built: LAT3 300 and no SAS
+models, 1,600 individuals), exactly 360 per
 chip × build cell.
 
 **LAT3 is the Mexican-like cohort** and the primary model: half Indigenous
@@ -337,11 +339,19 @@ effect, and the reverse.
 
 ## 5. The two decisions the real counts will force
 
-**SAS** -- if the split's real count is thin for 200 SASEUR individuals (the
-~24 once projected is stale, §2). Options, in preference order:
-reduce SASEUR's n; accept the reuse and report the kinship distribution; or
-drop SASEUR to control-only and rely on real admixed SAS for the imputation
-readings. The LAI reading is the one that suffers either way.
+**SAS.** **Decided 18 Nov: no SAS simulation; SAS is read from real
+genomes.** The K=8 counts settled it: about 10 homogeneous SAS genomes outside
+1000 Genomes (all SGDP South Indian), and loosening the cut does not help --
+11 at 0.90, because the HGDP Pakistani populations sit far below it (most
+under 0.70 SAS), not just under the line. 10 donors are 20 haplotypes for
+260 SASEUR + SAS1 individuals. So SASEUR and SAS1 are out of
+`reference_ids/models.tsv` (kept there as comments, with how to restore them),
+and SAS is reference-only like OCE (`NO_DONOR_SUPERPOPS=OCE,SAS`): its
+reference is 1000 Genomes only, so those ~10 genomes are real_homogeneous test
+genomes beside the many real_admixed SAS ones. Real genomes are never scored
+for local ancestry, so **SAS has no LAI truth set** until more homogeneous SAS
+genomes arrive (DUA-gated data are being pursued); its imputation reading is
+unaffected.
 
 **OCE.** **Decided: no OCE-containing admixture model.** Doc 19 already assumes
 it, and Table 1 has no OCE model, so every OCE sample withheld as a donor was
@@ -357,7 +367,10 @@ OCE in the cohort was meant to close. The reference-only path uses the same
 limitation rather than smoothed over: the OCE imputation reading rests on a
 handful of genomes.
 
-**SAS is not defaulted.** It is decided when stage 3 prints the counts.
+**One pool, two projects (18 Nov).** The benchmark splits 4a's `homogeneous`
+flag, not `included`: `included` is the LAI project's panel and leaves out
+THAT project's simulation donors and their relatives (56 Native American
+genomes plus relatives at K=8), which is no reason to withhold them here.
 
 ## 6. Build order
 

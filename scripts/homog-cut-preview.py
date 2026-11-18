@@ -11,12 +11,12 @@ as 4a does -- and splits them into
   donor-eligible  not 1000 Genomes and not on sgdp_server_panel_ids.txt
   reference-only  1000 Genomes or a server-panel id: the benchmark never makes
                   them donors (their haplotypes are in the imputation panels)
-  held by 4a      LAI simulation donors (reference_ids/*_simulation.txt) and
-                  their relatives: 4a writes included=0 for them in BOTH sets,
-                  and the benchmark split reads that column
 
-1e's duplicate drops and the named exclusions (panel_exclude_ids.txt) are left
-out, as 4a leaves them out.
+and counts, among them, the LAI simulation donors (reference_ids/
+*_simulation.txt) and their relatives. Those are out of the LAI project's panel
+(4a's `included`) but IN the benchmark's pool (4a's `homogeneous`, 18 Nov): the
+two projects choose from one pool, each under its own rules. 1e's duplicate
+drops and the named exclusions (panel_exclude_ids.txt) are out of both.
 
 Then, for every cut below the highest, the donor-eligible samples it ADDS, by
 population: how many, their mean share of their own super-pop's component,
@@ -24,10 +24,11 @@ and their strongest OTHER component. A donor at share q hands the simulation
 1 - q of its genome labelled with the wrong ancestry, so the mean of 1 - q
 over each cut's donor-eligible pool is printed beside its size.
 
-The `included` column is counted per super-pop beside the recomputed numbers
-as a check on this script: at the table's own cut (0.94 for every super-pop
-from 17 Nov) "donor-eligible + reference-only" must equal the table's included
-count. Writes nothing.
+The table's own pool count is printed beside the recomputed numbers as a check
+on this script: at the table's own cut (0.94 for every super-pop from 17 Nov)
+"donor-eligible + reference-only" must equal the table's `homogeneous` count
+(tables from before 18 Nov have only `included`, which also leaves out the LAI
+donors, so there it equals donor + reference - lai). Writes nothing.
 
   python3 -I scripts/homog-cut-preview.py                       # K=7 table
   python3 -I scripts/homog-cut-preview.py --k 8 --cuts 0.88,0.90,0.92,0.94,0.95
@@ -147,8 +148,6 @@ def main():
         s = r["sample"]
         if s in dup or s in named:
             return "dropped"
-        if s in held:
-            return "held"
         if r["cohort"].strip().upper() == a.kg_cohort.upper() or s in spi:
             return "refonly"
         return "donor"
@@ -158,37 +157,44 @@ def main():
         by_sp[r["super_pop"]].append(r)
     sps = [s for s in ORDER if s in by_sp] + sorted(set(by_sp) - set(ORDER))
 
-    print("\n== homogeneous at each cut (strongest component = own super-pop, share >= cut; MXB always)")
+    pool_col = "homogeneous" if "homogeneous" in cols else "included"
+    print("\n== the benchmark pool at each cut (strongest component = own super-pop, share >= cut; MXB always)")
     print("   donor = donor-eligible (not 1KG, not a server-panel id); ref = reference-only (1KG or "
-          "server-panel id);\n   held = LAI simulation donors + their relatives (4a included=0, so not "
-          "in the benchmark pool);\n   wrong = mean (1 - own-component share) over the donor-eligible "
-          "pool; table = the table's included count")
-    W = 22                                   # one cut's block: donor ref held wrong
+          "server-panel id);\n   lai = of donor + ref, LAI simulation donors and their relatives (in "
+          "the benchmark pool, out of the LAI panel);\n   wrong = mean (1 - own-component share) over "
+          f"the donor-eligible pool; table = the table's {pool_col}=1 count")
+    W = 22                                   # one cut's block: donor ref lai wrong
     print(f"  {'':<4} {'':>5} {'':>5} | " + " | ".join(f"{'at ' + fc(t):^{W}}" for t in cuts))
     print(f"  {'sp':<4} {'n':>5} {'table':>5} | " + " | ".join(
-        f"{'donor':>6} {'ref':>4} {'held':>4} {'wrong':>5}" for _ in cuts))
+        f"{'donor':>6} {'ref':>4} {'lai':>4} {'wrong':>5}" for _ in cuts))
     added = {}
     for sp in sps:
         rs = by_sp[sp]
-        n_incl = sum(r["included"].strip() in ("1", "true", "True") for r in rs)
+        n_tab = sum(r[pool_col].strip() in ("1", "true", "True") for r in rs)
         cells = []
         for t in cuts:
-            hom = [r for r in rs if homog_at(r, t)]
+            hom = [r for r in rs if homog_at(r, t) and role(r) != "dropped"]
             c = Counter(role(r) for r in hom)
+            n_lai = sum(r["sample"] in held for r in hom)
             dq = [own_q(r) for r in hom if role(r) == "donor" and r["cohort"] != "MXB"]
             wrong = f"{sum(1 - q for q in dq) / len(dq):.3f}" if dq else "-"
-            cells.append(f"{c['donor']:>6} {c['refonly']:>4} {c['held']:>4} {wrong:>5}")
-        print(f"  {sp:<4} {len(rs):>5} {n_incl:>5} | " + " | ".join(cells))
+            cells.append(f"{c['donor']:>6} {c['refonly']:>4} {n_lai:>4} {wrong:>5}")
+        print(f"  {sp:<4} {len(rs):>5} {n_tab:>5} | " + " | ".join(cells))
         # samples each lower cut adds to the donor-eligible pool
         for lo, hi in zip(cuts, cuts[1:]):
             add = [r for r in rs if r["cohort"] != "MXB" and role(r) == "donor"
                    and r["argmax_pop_sup"] == sp and lo <= float(r["max_Q_sup"]) < hi]
             if add:
                 added.setdefault(sp, []).append((lo, hi, add))
-    mxb = [r for r in rows if r["cohort"] == "MXB"]
+    mxb = [r for r in rows if r["cohort"] == "MXB" and role(r) != "dropped"]
     if mxb:
-        print(f"  (MXB: {len(mxb)} samples, every one counted homogeneous at every cut as 4a does; "
-              f"{sum(role(r) == 'held' for r in mxb)} of them held as LAI donors or their relatives)")
+        # 4a counts every MXB sample homogeneous whatever its Q (July's curated
+        # set); the contract's rule is >= the cut of one component. How many
+        # that rule would leave out, by their own AMR share:
+        print(f"  (MXB: {len(mxb)} samples, all counted homogeneous as 4a does, "
+              f"{sum(r['sample'] in held for r in mxb)} of them LAI donors or relatives; under "
+              "the cut by their own AMR share: "
+              + ", ".join(f"{fc(t)}: {sum(own_q(r) < t for r in mxb)}" for t in cuts) + ")")
 
     print("\n== what each lower cut ADDS to the donor-eligible pool, by population")
     print("   n | mean own-component share | strongest other component (mean share)")

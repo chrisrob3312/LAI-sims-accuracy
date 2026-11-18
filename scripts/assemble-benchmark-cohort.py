@@ -60,12 +60,12 @@ MODELS = [
     ("MENA3",  ("EUR", "MEN", "AFR"), (0.30, 0.50, 0.20),  30, 200, "secondary"),
     ("MENEUR", ("MEN", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
     ("EASEUR", ("EAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
-    ("SASEUR", ("SAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
+    # SASEUR and SAS1 dropped 18 Nov: too few homogeneous SAS donors; SAS is
+    # read from real genomes (reference_ids/models.tsv says how to restore).
     ("NAT1",   ("NAT",),              (1.0,),               0,  60, "control"),
     ("EUR1",   ("EUR",),              (1.0,),               0,  60, "control"),
     ("AFR1",   ("AFR",),              (1.0,),               0,  60, "control"),
     ("EAS1",   ("EAS",),              (1.0,),               0,  60, "control"),
-    ("SAS1",   ("SAS",),              (1.0,),               0,  60, "control"),
     ("MEN1",   ("MEN",),              (1.0,),               0,  60, "control"),
 ]
 
@@ -183,19 +183,24 @@ def axis_for(design):
 
 
 def deal(groups, units):
-    """Deal each group round-robin across `units`, rotating the start per group.
+    """Deal every group round-robin across `units`, each group starting where
+    the previous one stopped.
 
-    Rotating matters. A fixed start would send every group's remainder to the
-    same unit, so with 13 models and many real groups unit 0 would end up
-    systematically larger -- and a cell-size imbalance is indistinguishable
-    from a chip effect in the results. Rotating spreads the remainders, which
-    keeps each group balanced within 1 AND the unit totals balanced within 1.
+    A fixed start would send every group's remainder to the same unit, so unit
+    0 would end up systematically larger -- and a cell-size imbalance is
+    indistinguishable from a chip effect in the results. Until 18 Nov the
+    start rotated by ONE per group, which keeps each group within 1 but not the
+    totals (two groups with remainder 2 both hit unit 1; a test cohort showed a
+    spread of 2). Continuing ONE cycle through all groups gives both: each
+    group is a contiguous run of the cycle (within 1), and the whole cohort is
+    the cycle itself (totals within 1).
     """
     out = {}
-    for gi, (gname, members) in enumerate(sorted(groups.items())):
-        off = gi % len(units)
+    off = 0
+    for gname, members in sorted(groups.items()):
         for i, m in enumerate(sorted(members)):
-            out[m] = units[(i + off) % len(units)]
+            out[m] = units[(off + i) % len(units)]
+        off = (off + len(members)) % len(units)
     return out
 
 
@@ -780,11 +785,24 @@ def main():
         w(f" {c:<10}{d:>8}{2 * d:>7}{need_by_comp[c]:>18}{ratio:>12.3f}")
     w("")
     sas_d = dn.get("SAS", 0)
-    w(f" SAS: {sas_d} donors -> {2 * sas_d} haplotypes for 200 SASEUR + 60 SAS1.")
-    w("      Options, in the plan's preference order: reduce SASEUR's n;")
-    w("      accept the reuse and report the kinship distribution; or drop")
-    w("      SASEUR to control-only and rely on real admixed SAS for the")
-    w("      imputation readings. NOT DEFAULTED -- decide and record it.")
+    sas_need = need_by_comp.get("SAS", 0)
+    sas_h = by.get("SAS", {}).get("real_homogeneous", 0)
+    sas_m = by.get("SAS", {}).get("real_admixed", 0)
+    if sas_need == 0:
+        # Decided 18 Nov: ~10 homogeneous non-1KG SAS genomes are too few to
+        # simulate a truth set from, so the model table has no SAS model and
+        # SAS is read from real genomes instead.
+        w(f" SAS: no model simulates SAS (decided 18 Nov: too few homogeneous")
+        w(f"      SAS genomes outside 1000 Genomes to simulate from). {sas_d} donors.")
+        w(f"      Read from REAL genomes instead: {sas_h} real_homogeneous +")
+        w(f"      {sas_m} real_admixed SAS test genomes. No SAS local-ancestry")
+        w("      truth set until more homogeneous SAS genomes arrive (DUAs).")
+    else:
+        w(f" SAS: {sas_d} donors -> {2 * sas_d} haplotypes for {sas_need} individuals")
+        w("      carrying SAS. Options, in the plan's preference order: reduce")
+        w("      SASEUR's n; accept the reuse and report the kinship distribution;")
+        w("      or drop the SAS models and rely on real SAS genomes (what was")
+        w("      decided on 18 Nov). NOT DEFAULTED -- decide and record it.")
     w("")
     oce_h = by.get("OCE", {}).get("real_homogeneous", 0)
     oce_m = by.get("OCE", {}).get("real_admixed", 0)

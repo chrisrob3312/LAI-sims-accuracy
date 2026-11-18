@@ -8,7 +8,8 @@ simulated 2,160 have to be usable for it too -- about 2,660 together. But
 simulated individuals drawn from a finite donor pool are cryptic relatives of
 each other: two individuals built from the same donor haplotypes share long
 stretches by construction, and the thinner the donor pool the worse it gets.
-SAS is the binding case, ~24 donors for 200 SASEUR individuals.
+The thinnest donor pool is the binding case (SAS was, ~24 donors for 200
+SASEUR individuals, until SAS stopped being simulated on 18 Nov).
 
 That relatedness does NOT have to be a bias. The GWAS uses GENESIS with a GRM,
 which models relatedness rather than pruning it, and power simulations run
@@ -297,8 +298,9 @@ def main():
             w(f"   {lab}: {n} individuals behave like {ne:.0f} "
               f"({ratio:.0%}) -- donor reuse")
         w("")
-        w(" This is the SAS decision in BENCHMARK_COHORT_PLAN.md section 5")
-        w(" showing up as a number. The options there were: reduce the model's")
+        w(" This is the donor-reuse decision of BENCHMARK_COHORT_PLAN.md section 5")
+        w(" (taken for SAS on 18 Nov: not simulated) showing up as a number.")
+        w(" The options there were: reduce the model's")
         w(" n, accept the reuse and report this distribution, or drop the")
         w(" model to control-only. Reporting it is now possible, so accepting")
         w(" the reuse is defensible -- as long as the power calculation uses")

@@ -142,7 +142,13 @@
 #   anchor_selection.k${K}.tsv                         (every anchor candidate: Q, distance, ranks)
 #   reference_ids/<sp>_anchors.k${K}.txt, oth_anchors.k${K}.txt
 #   anchor_summary.k${K}.tsv
-#   lai_ref_panel_samples.k${K}.tsv
+#   lai_ref_panel_samples.k${K}.tsv                    (every sample's Q; two flags, 18 Nov:
+#        homogeneous = the shared pool both projects choose from -- the
+#                      homogeneity rule, 1e duplicates and named exclusions out,
+#                      no project's roles; the benchmark split reads it
+#        included    = homogeneous minus the LAI simulation donors and their
+#                      relatives: the LAI project's homogeneous panel; last
+#                      column, read as $NF)
 #   population_cluster_meanQ.k${K}.tsv                 (refinement evidence)
 #   homog_${K}pop_samples.txt
 #   homog_${K}pop/merged_chr${CHR}.homog_${K}pop.bcf{,.csi}
@@ -1922,13 +1928,35 @@ python3 - "${ADM_DIR}/lai_ref.fam" "${ADM_DIR}/lai_ref.${K}.Q" \
     "$SAMPLE_GROUPS" "$GNOMAD_META" "$MXB_POPINFO" "$SGDP_MANIFEST" \
     "${REFS}/sas_rfmix.txt" "$HOMOG_THRESHOLD" "$K" "$SIM_DONORS" "$SAMPLES_TSV" \
     "$HOMOG_THRESHOLD_STRICT" "$HOMOG_STRICT_SUPERPOPS" \
-    "$ALMARRI_META" "$ALMARRI_COUNTRIES" <<'PYEOF'
+    "$ALMARRI_META" "$ALMARRI_COUNTRIES" "$DUP_DROP" "$PANEL_EXCLUDE" <<'PYEOF'
 import sys
 from collections import defaultdict, Counter
 (fam, qs_f, qu_f, pop_f, groups_f, gnomad_f, mxb_pop_f, sgdp_manifest_f,
  sas_f, thresh, K, donors_f, out, thresh_strict, strict_sps,
- almarri_meta_f, almarri_countries) = sys.argv[1:18]
+ almarri_meta_f, almarri_countries, dup_f, named_f) = sys.argv[1:20]
 thresh = float(thresh); K = int(K); thresh_strict = float(thresh_strict)
+
+# TWO COLUMNS, TWO PROJECTS, ONE POOL (18 Nov).
+#   homogeneous  passes the homogeneity rule below, with 1e's duplicate drops
+#                and the named exclusions out -- and NOTHING about any
+#                project's roles. This is the pool both projects choose from;
+#                the benchmark's split reads it.
+#   included     homogeneous AND not an LAI simulation donor or a donor's
+#                relative: the LAI project's homogeneous panel (its HOMOG arms
+#                use it as reference, so its own donors must be out of it).
+# Until 18 Nov there was only `included`, so the benchmark inherited the LAI
+# project's donor hold-out -- 56 Native American genomes (31 HGDP/SGDP + 25
+# MXB) and their relatives were missing from the benchmark pool for a reason
+# that belongs to the other project.
+def _ids(path):
+    try:
+        with open(path) as fh:
+            return {l.split()[0] for l in fh if l.strip() and not l.startswith("#")}
+    except FileNotFoundError:
+        return set()
+pool_out = _ids(dup_f) | _ids(named_f)
+print(f"[homog] out of every pool: {len(pool_out)} id(s) "
+      f"(1e duplicate drops + named exclusions)", file=sys.stderr)
 
 # Tiered homogeneity cut: the strict value for the richly-sampled super-pops,
 # the floor for everyone else. See HOMOG_THRESHOLD_STRICT in the config block
@@ -2151,9 +2179,11 @@ with open(out, "w") as g:
     hdr = ["sample", "cohort", "pop", "super_pop", "assigned"] \
         + [f"Q_sup_{c}" for c in POP_ORDER] + ["max_Q_sup", "argmax_pop_sup"] \
         + [f"Q_unsup_{c}" for c in POP_ORDER] + ["max_Q_unsup", "argmax_pop_unsup",
-                                                 "sup_unsup_agree", "included"]
+                                                 "sup_unsup_agree", "homogeneous", "included"]
+    # `included` stays the LAST column: 4a's own awk below and
+    # scripts/pipeline-status.sh read it as $NF.
     g.write("\t".join(hdr) + "\n")
-    n_incl = 0
+    n_incl = 0; n_homog = 0; n_homog_by_sp = {}
     for s, qs, qu, a in zip(samples, Qs, Qu, anchors):
         co = cohort_of(s); sp = super_pop_of(s); p = pop_of(s)
         max_qs = max(qs); ap_sup   = sup_cluster_to_sp[qs.index(max_qs)]
@@ -2161,35 +2191,42 @@ with open(out, "w") as g:
         agree = 1 if ap_sup == ap_unsup else 0
         qs_ordered = [qs[sup_sp_to_cluster[c]]   if c in sup_sp_to_cluster   else 0.0 for c in POP_ORDER]
         qu_ordered = [qu[unsup_sp_to_cluster[c]] if c in unsup_sp_to_cluster else 0.0 for c in POP_ORDER]
-        if s in sim_donors:
-            included = 0   # donor exclusion outranks the MXB force-include
+        # The homogeneity rule, with no project's roles in it.
+        if s in pool_out:
+            homogeneous = 0   # 1e duplicate copy or a named exclusion: out of every pool
         elif co == "MXB":
-            included = 1
+            homogeneous = 1   # every MXB sample, as 4a has always counted them
         elif sp == "NA":
-            included = 0
-        elif s in sim_donors:
-            # Used as an admix-simu donor -> must never be a reference
-            # haplotype, for ANY ancestry, or the benchmark is circular.
-            included = 0
+            homogeneous = 0
         elif sp == "OTH" or ap_sup == "OTH":
             # Leftover cluster -> pooled panel only, never the homogeneous one.
-            included = 0
+            homogeneous = 0
         else:
-            included = 1 if (max_qs >= thresh_for(sp) and ap_sup == sp) else 0
-        n_incl += included
+            homogeneous = 1 if (max_qs >= thresh_for(sp) and ap_sup == sp) else 0
+        # The LAI panel: an admix-simu donor of THIS project (or its relative)
+        # must never be one of its reference haplotypes, for any ancestry, or
+        # its HOMOG arms score the method on haplotypes it was handed. The
+        # donor exclusion outranks the MXB force-include, as before.
+        included = 0 if s in sim_donors else homogeneous
+        n_incl += included; n_homog += homogeneous
         n_by_sp[sp] = n_by_sp.get(sp, 0) + included
+        n_homog_by_sp[sp] = n_homog_by_sp.get(sp, 0) + homogeneous
         n_seen_by_sp[sp] = n_seen_by_sp.get(sp, 0) + 1
         g.write("\t".join(
             [s, co, p, sp, a]
             + [f"{x:.4f}" for x in qs_ordered] + [f"{max_qs:.4f}", ap_sup]
             + [f"{x:.4f}" for x in qu_ordered] + [f"{max_qu:.4f}", ap_unsup,
-                                                  str(agree), str(included)]
+                                                  str(agree), str(homogeneous), str(included)]
         ) + "\n")
-    print(f"included {n_incl}/{len(samples)}", file=sys.stderr)
-    print("  per super-pop (threshold applied, kept/seen):", file=sys.stderr)
+    print(f"homogeneous {n_homog}/{len(samples)} (the shared pool; the benchmark split reads it)",
+          file=sys.stderr)
+    print(f"included {n_incl}/{len(samples)} (the LAI panel: homogeneous minus LAI donors and their relatives)",
+          file=sys.stderr)
+    print("  per super-pop (threshold applied): homogeneous / included / seen:", file=sys.stderr)
     for _sp in sorted(n_seen_by_sp):
         print(f"    {_sp:4s} Q>={thresh_for(_sp):.2f}  "
-              f"{n_by_sp.get(_sp,0):5d}/{n_seen_by_sp[_sp]:-5d}", file=sys.stderr)
+              f"{n_homog_by_sp.get(_sp,0):5d} / {n_by_sp.get(_sp,0):5d} / {n_seen_by_sp[_sp]:-5d}",
+              file=sys.stderr)
 
 # --------------------------------------------------------------------------
 # PER-POPULATION MEAN-Q TABLE (the refinement artifact).

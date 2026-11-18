@@ -570,6 +570,9 @@ run_lai_refpanel () {
 
   lai_ref_panel_samples.k${K}.tsv is the full Q table, every sample including
   included==0, and is the ancestry covariate for GWAS and power simulations.
+  Two flags (from 18 Nov): homogeneous = the shared pool (homogeneity rule,
+  duplicates and named exclusions out); included = homogeneous minus the LAI
+  simulation donors and their relatives (this panel).
 
   Do NOT use anything in here to score the benchmarking cohort: those test
   genomes were simulated from donor haplotypes present here, which would

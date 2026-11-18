@@ -43,12 +43,12 @@ DEFAULT_MODELS = [
     ("MENA3",  ("EUR", "MEN", "AFR"), (0.30, 0.50, 0.20),  30, 200, "secondary"),
     ("MENEUR", ("MEN", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
     ("EASEUR", ("EAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
-    ("SASEUR", ("SAS", "EUR"),        (0.50, 0.50),         2, 200, "secondary"),
+    # SASEUR and SAS1 dropped 18 Nov: too few homogeneous SAS donors; SAS is
+    # read from real genomes (reference_ids/models.tsv says how to restore).
     ("NAT1",   ("NAT",),              (1.0,),               0,  60, "control"),
     ("EUR1",   ("EUR",),              (1.0,),               0,  60, "control"),
     ("AFR1",   ("AFR",),              (1.0,),               0,  60, "control"),
     ("EAS1",   ("EAS",),              (1.0,),               0,  60, "control"),
-    ("SAS1",   ("SAS",),              (1.0,),               0,  60, "control"),
     ("MEN1",   ("MEN",),              (1.0,),               0,  60, "control"),
 ]
 
@@ -130,8 +130,17 @@ def main():
 
     models = DEFAULT_MODELS
     if args.models:
+        # reference_ids/models.tsv opens with a '#' comment block, so the
+        # header is the first line that is not a comment (read_tsv would take
+        # the first comment line as the header).
+        with open(args.models) as fh:
+            body = [l.rstrip("\n") for l in fh
+                    if l.strip() and not l.lstrip().startswith("#")]
+        if not body or not body[0].startswith("model\t"):
+            sys.exit(f"ERROR: {args.models}: no 'model' header row after the comments")
+        mhead = body[0].split("\t")
         models = []
-        for r in read_tsv(args.models):
+        for r in (dict(zip(mhead, l.split("\t"))) for l in body[1:]):
             models.append((
                 r["model"],
                 tuple(x.strip() for x in r["components"].split(",")),
@@ -140,7 +149,9 @@ def main():
                 r.get("priority", "")))
 
     panel = read_tsv(args.panel)
-    inc_col = "included" if "included" in panel[0] else None
+    # The benchmark's pool is 4a's `homogeneous` flag (18 Nov); `included` is
+    # the LAI project's panel, which also leaves out that project's donors.
+    inc_col = next((c for c in ("homogeneous", "included") if c in panel[0]), None)
     homog = [r for r in panel if not inc_col or r.get(inc_col) == "1"]
 
     L = []
@@ -159,7 +170,7 @@ def main():
     w("1. THE MERGED PANEL")
     w("-" * 78)
     w(f"  samples in panel      : {len(panel)}")
-    w(f"  homogeneous (included): {len(homog)}")
+    w(f"  homogeneous ({inc_col + '=1' if inc_col else 'no flag column'}): {len(homog)}")
     w(f"  NOT homogeneous       : {len(panel) - len(homog)}")
     w("")
     w("  A sample that is not homogeneous is not necessarily admixed: at a K")

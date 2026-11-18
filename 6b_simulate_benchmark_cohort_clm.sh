@@ -16,7 +16,9 @@
 # since run chunked phasing cleanly.
 #SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
 #
-# ONE TASK PER CHROMOSOME, ALL 13 MODELS INSIDE. 2b extracted donor
+# ONE TASK PER CHROMOSOME, EVERY MODEL INSIDE (11 since SAS was dropped
+# on 18 Nov; the roster is results/benchmark_cohort_simset_individuals.tsv).
+# 2b extracted donor
 # haplotypes once per simulated track, which meant re-running
 # `plink2 --export haps` over a ~3,900-sample BCF for every model. The
 # extraction dominates the runtime and the models share their component
@@ -219,8 +221,8 @@ for comp in "${COMPONENTS[@]}"; do
     n_don=$(awk 'NF && $1 !~ /^#/' "$keep" | wc -l)
     # A component with too few donors makes its simulated individuals cryptic
     # relatives of one another. That is a real finding to report, not a reason
-    # to stop -- BENCHMARK_COHORT_PLAN.md section 5 leaves the SAS decision
-    # open deliberately -- so warn loudly and continue.
+    # to stop (SAS, the case this was written for, is no longer simulated:
+    # 18 Nov, read from real genomes instead) -- so warn loudly and continue.
     if [[ "$n_don" -lt 25 ]]; then
         echo "[$(date +%T)] [${CHR}] WARNING: component ${comp} (pool ${pool}) has only ${n_don} donors -> $((2*n_don)) haplotypes. Heavy reuse; check the kinship distribution."
     fi

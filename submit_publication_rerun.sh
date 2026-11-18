@@ -498,7 +498,12 @@ if want 4 && [[ "${RUN_SPLIT:-1}" == "1" ]]; then
     echo "============ STAGE 3B: benchmark donor/reference split ============"
     if [[ -n "$J3" ]]; then
         echo "  the global 4a is queued as ${J3}; the benchmark cohort needs its output, so"
-        echo "  once it completes run (the split takes seconds; 6b-6e are arrays):"
+        echo "  once it completes: the numbers first, into a scratch folder (nothing submitted),"
+        echo
+        echo "    S=/tmp/bench_numbers_\$(date +%Y%m%d_%H%M); mkdir -p \"\$S\""
+        echo "    REFS=\"\$S\" RESULTS=\"\$S\" ./run_benchmark_cohort.sh --to preflight"
+        echo
+        echo "  then the build (the split takes seconds; 6b-6e are arrays):"
         echo
         echo "    ./run_benchmark_cohort.sh --dry-run"
         echo "    ./run_benchmark_cohort.sh"

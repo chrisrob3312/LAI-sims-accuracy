@@ -311,6 +311,14 @@ def main():
                          "no OCE model, so an OCE donor is withheld for "
                          "nothing). Their non-reference samples are left "
                          "unallocated and so stay test-eligible.")
+    ap.add_argument("--pool-column", default="included",
+                    help="the panel column (1 = in the pool) to split. 4a writes "
+                         "`homogeneous` (the shared pool: duplicates and named "
+                         "exclusions out, no project's roles) and `included` "
+                         "(the LAI panel: homogeneous minus the LAI simulation "
+                         "donors and their relatives). The benchmark split reads "
+                         "`homogeneous`; the default `included` keeps the LAI "
+                         "mode, and old tables, as they were.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -376,11 +384,32 @@ def main():
         if missing:
             sys.exit(f"ERROR: {args.panel} lacks column(s): {sorted(missing)}\n"
                      f"       found: {rd.fieldnames}")
-        has_incl = "included" in (rd.fieldnames or [])
+        # WHICH POOL. 4a writes two flags (18 Nov): `homogeneous`, the pool
+        # both projects choose from, and `included`, the LAI project's panel
+        # (homogeneous minus ITS simulation donors and their relatives). The
+        # benchmark reads `homogeneous`: the LAI project's donors are no reason
+        # to withhold a genome from the benchmark, whose own roles are decided
+        # here. A table older than the column cannot say who the LAI hold-out
+        # removed, so asking for it there is an error, not a silent fallback.
+        cols = rd.fieldnames or []
+        pool_col = args.pool_column
+        if pool_col not in cols:
+            if pool_col == "included":
+                pool_col = None          # a plain list with no flag: every row
+            else:
+                sys.exit(f"ERROR: --pool-column {pool_col}: {args.panel} has no such "
+                         f"column (it predates 4a's 18 Nov `homogeneous` flag). Rerun "
+                         f"4a, or pass --pool-column included to reproduce the old "
+                         f"pool, which leaves out the LAI simulation donors and "
+                         f"their relatives.")
+        n_seen = 0
         for r in rd:
-            if has_incl and str(r.get("included", "")).strip() not in ("1", "true", "True"):
+            n_seen += 1
+            if pool_col and str(r.get(pool_col, "")).strip() not in ("1", "true", "True"):
                 continue
             rows.append(r)
+        print(f"[split] pool: {len(rows)} of {n_seen} rows with "
+              + (f"{pool_col}=1" if pool_col else "no flag column (every row)"))
 
     # Supervised anchors, from the `assigned` column (ADMIXTURE's .pop prior).
     # Anchors are ordinary samples for role purposes: the supervised run only
@@ -404,8 +433,8 @@ def main():
                  f"       prior; without it, pinning would silently do nothing.")
 
     if not rows:
-        sys.exit(f"ERROR: no included samples in {args.panel}. If the file has "
-                 f"an 'included' column, every row was 0 -- check stage C.")
+        sys.exit(f"ERROR: no samples in the pool of {args.panel}: every "
+                 f"{pool_col or 'row'} was 0 -- check 4a's stage C.")
     print(f"[split] homogeneous samples: {len(rows)}")
 
     by_sp = defaultdict(list)
@@ -613,9 +642,6 @@ def main():
             # as a test genome. Making all of them reference instead would
             # leave this super-pop with no test samples at all, which for OCE
             # would mean no OCE reading anywhere in the benchmark.
-            by_pop_all = defaultdict(list)
-            for r in members:
-                by_pop_all[r["pop"].strip() or "NA"].append(r["sample"])
             # NOT min(n, ref_target). For a group of ~20 that takes every
             # sample as reference and leaves NO test genomes -- which for OCE
             # would mean the benchmark has no OCE imputation reading at all,
@@ -626,10 +652,29 @@ def main():
             n_ref_only, _nd, _st = plan_sizes(
                 n, args.ref_fraction, args.ref_floor, args.ref_target, 0)
             n_ref_only = min(n_ref_only, n)
-            ref, rest = allocate_stratified(by_pop_all, n_ref_only)
+            # 1000 GENOMES FIRST HERE TOO (18 Nov, for SAS). A 1KG sample can
+            # never be a test genome (it is inside the servers' panels), so it
+            # costs nothing as reference; a non-1KG genome left unallocated is
+            # a test genome. SAS has ~10 homogeneous non-1KG genomes, too few to
+            # simulate from, and the point of making it reference-only is that
+            # they are read as real_homogeneous test genomes instead -- so the
+            # reference comes from 1KG, spread over its populations, skipping a
+            # 1KG sample related to one of them (the pair would sit in two
+            # roles). Non-1KG genomes go to the reference only for what 1KG
+            # cannot cover: all of it for OCE, which has no 1KG population.
+            nonkg_ids = [r["sample"] for r in nonkg]
+            ref_kg = kg_topup(n_ref_only, nonkg_ids)
+            by_pop_nk = defaultdict(list)
+            for r in nonkg:
+                by_pop_nk[r["pop"].strip() or "NA"].append(r["sample"])
+            ref_nk, rest = (allocate_stratified(by_pop_nk, n_ref_only - len(ref_kg))
+                            if n_ref_only > len(ref_kg) and nonkg_ids
+                            else ([], sorted(nonkg_ids)))
+            ref = sorted(ref_kg + ref_nk)
             print(f"{sp:>9} {n:>6} {'ref-only':>12} {len(ref):>6} {0:>7} "
-                  f"{0:>5.0f}%  no model draws on {sp}: 0 donors, "
-                  f"{len(rest)} left for the test pool")
+                  f"{0:>5.0f}%  no model draws on {sp}: 0 donors; ref = "
+                  f"{len(ref_nk)} non-1000G + {len(ref_kg)} 1000G; "
+                  f"{len(rest)} non-1000G left for the test pool")
             written.append((sp, ref, []))
             continue
 

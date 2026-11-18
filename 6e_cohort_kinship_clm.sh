@@ -18,8 +18,9 @@
 # WHY THE COHORT NEEDS THIS AT ALL. ~500 real genomes is too few for a power
 # calculation, so the simulated 2,160 are used for power and GWAS simulations
 # too. But simulated individuals built from a shared donor pool are cryptic
-# relatives by construction -- SAS at ~24 donors for 200 SASEUR individuals is
-# the binding case -- so the roster count overstates the information in the
+# relatives by construction -- the thinnest donor pool is the binding case
+# (SAS was, until it stopped being simulated on 18 Nov) -- so the roster count
+# overstates the information in the
 # cohort. cohort-power-summary.py turns this table into an effective sample
 # size per group, which is the number a power calculation should use.
 #

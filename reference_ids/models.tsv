@@ -22,6 +22,18 @@
 # and the Indigenous American Genomic Diversity Project are both outstanding
 # requests, and either would lift NAT N_eff at every n.
 #
+# NO SAS MODEL (18 Nov). SAS has ~10 homogeneous genomes outside 1000 Genomes
+# (which can never be a donor), too few to simulate a truth set from: 200
+# SASEUR + 60 SAS1 individuals would reuse each donor haplotype ~13 times. SAS
+# is read from REAL genomes instead -- those ~10 as real_homogeneous test
+# genomes beside the many admixed SAS ones -- and run_benchmark_cohort.sh makes
+# SAS reference-only (NO_DONOR_SUPERPOPS=OCE,SAS; reference from 1000 Genomes).
+# Real genomes are not scored for local ancestry, so SAS has no LAI truth set
+# until more homogeneous SAS genomes arrive (DUAs pending). To restore, put
+# these two rows back and drop SAS from NO_DONOR_SUPERPOPS:
+#   SASEUR	SAS,EUR	0.50,0.50	2	200	SAS	secondary	POOLED
+#   SAS1	SAS	1.0	0	60	SAS	control	POOLED
+#
 model	components	proportions	generations	n_individuals	focal_ancestry	priority	cohort
 LAT3	NAT,EUR,AFR	0.50,0.45,0.05	16	300	NAT	primary	POOLED
 CAR3	NAT,EUR,AFR	0.10,0.50,0.40	16	200	AFR	secondary	POOLED
@@ -29,10 +41,8 @@ AFAM2	AFR,EUR	0.80,0.20	7	200	AFR	secondary	POOLED
 MENA3	EUR,MEN,AFR	0.30,0.50,0.20	30	200	MEN	secondary	POOLED
 MENEUR	MEN,EUR	0.50,0.50	2	200	MEN	secondary	POOLED
 EASEUR	EAS,EUR	0.50,0.50	2	200	EAS	secondary	POOLED
-SASEUR	SAS,EUR	0.50,0.50	2	200	SAS	secondary	POOLED
 NAT1	NAT	1.0	0	60	NAT	control	POOLED
 EUR1	EUR	1.0	0	60	EUR	control	POOLED
 AFR1	AFR	1.0	0	60	AFR	control	POOLED
 EAS1	EAS	1.0	0	60	EAS	control	POOLED
-SAS1	SAS	1.0	0	60	SAS	control	POOLED
 MEN1	MEN	1.0	0	60	MEN	control	POOLED

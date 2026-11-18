@@ -46,7 +46,8 @@ CELLS = [(c, b) for c in CHIPS for b in BUILDS]
 # panel. Intake 2.real_samples compares sample_type against top_fraction at
 # this one number, so the Nextflow side (plan_simset.R --threshold) must match.
 CONTRACT_THRESHOLD = 0.94
-# Components a model draws on; 5.donors requires each to have donors.
+# Components a model CAN draw on; 5.donors requires each one the set's models
+# use to have donors (read from the individuals file; this is the fallback).
 MODEL_COMPONENTS = {"NAT", "EUR", "AFR", "MEN", "EAS", "SAS"}
 COMPONENT_POOL = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR",
                   "MEN": "MEN", "EAS": "EAS", "SAS": "SAS", "OCE": "OCE"}
@@ -163,7 +164,13 @@ def main():
         fails.append(f"5.donors: {len(both)} sample(s) are BOTH simulation "
                      f"donor and LAI reference, e.g. {sorted(both)[:5]}")
     missing_comp = []
-    for comp in sorted(MODEL_COMPONENTS):
+    # The components the models of THIS set draw on -- what intake's 5.donors
+    # checks (the alphabet of models.tsv) -- read from the individuals file.
+    # A fixed list here demanded SAS donors after the SAS models were dropped
+    # (18 Nov: SAS is reference-only, read from real genomes).
+    used = ({c.strip() for r in srows for c in r[six["components"]].split(",") if c.strip()}
+            if "components" in six else set(MODEL_COMPONENTS))
+    for comp in sorted(used):
         pool = COMPONENT_POOL[comp]
         if not any(v == pool for v in donors.values()):
             missing_comp.append(comp)

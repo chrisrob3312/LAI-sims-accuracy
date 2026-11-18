@@ -26,6 +26,9 @@
 #   ./run_benchmark_cohort.sh --from simulate # skip ahead
 #   ./run_benchmark_cohort.sh --only preflight
 #   ./run_benchmark_cohort.sh --force split   # redo one stage
+#   REFS=$S RESULTS=$S ./run_benchmark_cohort.sh --to preflight
+#                       # every number into a scratch folder $S, nothing
+#                       # submitted and nothing in reference_ids/ or results/
 #
 # Stages, in order:
 #   check      4a landed, vocabulary sane, anchors present
@@ -41,6 +44,10 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The scripts it calls default to reference_ids/... relative paths (server-panel
+# ids, named exclusions, duplicate drops), so run from the repo wherever it was
+# started. Every path below is absolute.
+cd "$REPO_DIR" || exit 1
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
 K="${K:-7}"
@@ -63,7 +70,18 @@ DESIGN="${DESIGN:-one-cell}"
 # (Doc 20, donors.tsv and real_samples.tsv; plan_simset.R --threshold), so the
 # Nextflow side must read 0.94 too.
 FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.94}"
-NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE}"
+# Reference-only groups: a reference panel, NO simulation donors, and every
+# other homogeneous genome left for the test pool. OCE: no model draws on it.
+# SAS (18 Nov): ~10 homogeneous non-1KG genomes are too few to simulate a
+# truth set from, so models.tsv has no SAS model and SAS is read from REAL
+# genomes instead -- those ~10 as real_homogeneous test genomes beside the many
+# admixed SAS ones. Its reference is 1000 Genomes only. Revisit when the
+# DUA-gated SAS data arrive.
+NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE,SAS}"
+# The pool the benchmark splits: 4a's `homogeneous` flag (18 Nov). `included`
+# is the LAI project's panel, which leaves out ITS simulation donors and their
+# relatives -- a rule of the other project, not of this one.
+BENCH_POOL_COLUMN="${BENCH_POOL_COLUMN:-homogeneous}"
 # The contract's reference share: AFR/EUR/EAS/SAS take their reference from
 # 1000 Genomes ONLY (spread over the 1KG populations, not the first IDs), NAT
 # adds half the MXB, MEN half its pool (0.33 until 18 Nov, which left MEN an
@@ -100,11 +118,12 @@ REF_MIN_PER_POP="${REF_MIN_PER_POP:-default=3,EUR=0}"
 # 8 effective genomes. More donors lift the whole curve; more people do not.
 MODELS_TSV="${MODELS_TSV:-${REPO_DIR}/reference_ids/models.tsv}"
 
-DRY=0; FROM=""; ONLY=""; FORCE=""
+DRY=0; FROM=""; ONLY=""; FORCE=""; TO=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --from)    FROM="$2"; shift 2 ;;
+        --to)      TO="$2"; shift 2 ;;
         --only)    ONLY="$2"; shift 2 ;;
         --force)   FORCE="$2"; shift 2 ;;
         -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
@@ -113,6 +132,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 STAGES=(check split assemble report preflight simulate cells kinship verify)
+for _st in "$FROM" "$TO" "$ONLY"; do
+    [[ -z "$_st" || " ${STAGES[*]} " == *" ${_st} "* ]] || {
+        echo "unknown stage '${_st}' (stages: ${STAGES[*]})" >&2; exit 2; }
+done
 want () {   # should this stage run at all?
     local s="$1"
     [[ -n "$ONLY" ]] && { [[ "$ONLY" == "$s" ]] && return 0 || return 1; }
@@ -120,7 +143,17 @@ want () {   # should this stage run at all?
         local seen=0
         for x in "${STAGES[@]}"; do
             [[ "$x" == "$FROM" ]] && seen=1
-            [[ "$x" == "$s" ]] && { [[ "$seen" == 1 ]] && return 0 || return 1; }
+            [[ "$x" == "$s" ]] && { [[ "$seen" == 1 ]] || return 1; break; }
+        done
+    fi
+    # --to STAGE: stop after it. With REFS and RESULTS pointed at a scratch
+    # folder, `--to preflight` prints every number (split, real test genomes,
+    # simulated roster, intake rules) and submits nothing.
+    if [[ -n "$TO" ]]; then
+        local x
+        for x in "${STAGES[@]}"; do
+            [[ "$x" == "$s" ]] && return 0
+            [[ "$x" == "$TO" ]] && return 1
         done
     fi
     return 0
@@ -148,6 +181,14 @@ if want check; then
     fi
     N_ROWS=$(( $(wc -l < "$PANEL_TSV") - 1 ))
     N_INCL=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++) if($i=="included") c=i; next} $c==1' "$PANEL_TSV" | wc -l)
+    if head -1 "$PANEL_TSV" | tr '\t' '\n' | grep -qx "$BENCH_POOL_COLUMN"; then
+        N_POOL=$(awk -F'\t' -v col="$BENCH_POOL_COLUMN" 'NR==1{for(i=1;i<=NF;i++) if($i==col) c=i; next} $c==1' "$PANEL_TSV" | wc -l)
+        say "benchmark pool (${BENCH_POOL_COLUMN}=1): ${N_POOL}; LAI panel (included=1): ${N_INCL}"
+    else
+        say "WARNING: ${PANEL_TSV} has no '${BENCH_POOL_COLUMN}' column (a table from before"
+        say "         18 Nov). The benchmark split will stop; rerun 4a, or set"
+        say "         BENCH_POOL_COLUMN=included to split the old pool (LAI donors held out)."
+    fi
     N_ANCHOR=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++) if($i=="assigned") c=i; next}
                            c && $c!="" && $c!="-" && $c!="NA" && $c!="."' "$PANEL_TSV" | wc -l)
     N_CHMI=$(grep -c CHMI "$PANEL_TSV" || true)
@@ -188,7 +229,7 @@ if want split; then
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
             --mode lai --suffix "$LAI_SUFFIX" "${REL[@]}" || FAILED=1
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
-            --mode benchmark --suffix "$BENCH_SUFFIX" \
+            --mode benchmark --suffix "$BENCH_SUFFIX" --pool-column "$BENCH_POOL_COLUMN" \
             --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
             --ref-share "$REF_SHARE" --ref-min "$REF_MIN" --ref-min-per-pop "$REF_MIN_PER_POP" \
             --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
@@ -231,9 +272,11 @@ if want report; then
     if [[ -s "$COMP" ]] && ! forced report; then
         say "present, skipping"
     else
+        # --models: without it the report described the built-in Table 1
+        # (LAT3 600, SAS models) rather than the model table actually built.
         run python3 -I "${REPO_DIR}/scripts/cohort-composition-report.py" \
             --panel "$PANEL_TSV" --refs "$REFS" --suffix "$BENCH_SUFFIX" \
-            --out "$COMP" || FAILED=1
+            --models "$MODELS_TSV" --out "$COMP" || FAILED=1
     fi
 fi
 

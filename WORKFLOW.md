@@ -131,7 +131,8 @@ F. LAI SIMULATION + ACCURACY   publication stages 4-6, chained to 4a
 G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
   scripts/split-homog-donors-reference.py   twice, distinct suffixes
     - --mode lai (suffix lai): any sample may be donor or reference
-    - --mode benchmark (suffix bench): 1KG never a donor, OCE reference-only,
+    - --mode benchmark (suffix bench): 1KG never a donor, OCE and SAS reference-only,
+      pool = 4a's `homogeneous` (LAI donors included; `included` is the LAI panel),
       stratified by population
   scripts/assemble-benchmark-cohort.py
     - excludes donors, reference, 1KG, SGDP-resequenced 1KG, KING drops
@@ -155,7 +156,8 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
 | after 1c | `sbatch --array=1-22 scripts/cohort-site-report.sh` (or `bash scripts/cohort-site-report.sh 21 22` in the env) — per soft-union record and cohort: where the cohort's own file stood (present / absent → filled 0/0 / swapped / flipped / other allele), its missing genotypes before phasing, its allele frequency; per-1-Mb bins; → `01_merged_phased_panel/provenance/chrN.site_report.{tsv.gz,bins.tsv}` | no |
 | after 1c (again after the site report) | `bash scripts/merge-sites-collect.sh` — gathers 1c's per-chromosome site tables (per stage and cohort: records, unique, why a cohort lacks a panel record; which cohort combinations carry each record; the fill check by super-pop; soft-union and ADMIXTURE-site rules; per-chromosome totals) and, when the site report exists, per-cohort summaries of it (present / absent / allele mismatch, missingness, pairwise allele-frequency histograms, 1-Mb bins) into `results/merge_sites/*.tsv` + `MANIFEST.tsv`, to commit and plot off the cluster. It also writes `variant_accounting{,_genome,_loglines}.tsv` (scripts/variant-accounting.py): variants kept and lost at every step, per chromosome and genome-wide -- each cohort's release and prep (liftover rejects, masked sites), what each file brings to the merge, the union, plink2 site QC, the two position drops, the soft-union, the ADMIXTURE list, phased and RFMix input, 4a's candidates and LD-pruned SNPs -- every number with its source (a file's record count, a 1c table, or the stage's own log line). Seconds without the site report; `sbatch` it after the site report (~27M records) | `results/merge_sites/` only |
 | after 4a | `python3 -I scripts/homog-by-population.py` — 4a's homogeneous panel per super-pop and population: n, in the panel, how many would pass at the cut given here (`--cut SAS=0.95` on a table built at 0.93), how many have no first-degree relative, why the rest are not in (donor or donor's relative / duplicate / strongest component another super-pop / below the cut), strongest-component counts, mean supervised Q per component, anchors per population; each cluster's anchors by cohort/population; for every population with simulation donors: relative-free count, donors with a relative, relatives they keep out | no |
-| after 4a | `python3 -I scripts/homog-cut-preview.py [--k 8] [--cuts 0.90,0.92,0.94]` — per super-pop and cut: homogeneous samples split into donor-eligible / reference-only (1KG, server-panel ids) / held (LAI simulation donors and relatives, `included=0`), the mean `1 − share` of each donor pool, the samples each lower cut adds by population with their strongest other component, and how many sit under the lowest cut; the table's `included` count beside them as a check | no |
+| after 4a | `python3 -I scripts/homog-cut-preview.py [--k 8] [--cuts 0.90,0.92,0.94]` — per super-pop and cut: the benchmark pool split into donor-eligible / reference-only (1KG, server-panel ids), how many of them are LAI simulation donors or relatives (in the benchmark pool, out of the LAI panel), the mean `1 − share` of each donor pool, the samples each lower cut adds by population with their strongest other component, how many sit under the lowest cut, and how many MXB fall under each cut; the table's `homogeneous` count beside them as a check | no |
+| after 4a | `REFS=$S RESULTS=$S ./run_benchmark_cohort.sh --to preflight` with `S` a new scratch folder — the benchmark's numbers from this table: the split (reference / donors per super-pop), real test genomes (homogeneous / admixed per component), the simulated roster, donor reuse, and the intake's rules; nothing submitted, nothing written in `reference_ids/` or `results/` | scratch only |
 | after 4a | `python3 -I scripts/donor-switch-plan.py --table <lai_ref_panel_samples.k7.tsv, or .k8> --kin <king.kin0> --refs reference_ids --out-dir results/donor_plan` — per donor list and population, the same-size donor set from the same population that keeps the fewest relatives out of the reference (relative-free first, then both parents of a trio), never two related donors, never a curated-reference member or relative (a current donor who is one MUST be replaced: 2b refuses it), keeping as many current donors as possible; writes `<list>.proposed.txt`, `donor_plan_summary.tsv`, `donor_plan_changes.tsv`. Proposals only: copying one into `reference_ids/` is a separate step, and 4a must rerun before 2b | no |
 | after 4a (4a runs it) | `python3 -I scripts/build-3way-amr-homog.py --base reference_ids/lai_ref_panel_samples.tsv --table <lai_ref_panel_samples.k7.tsv> --exclude <admixture_k7/simulation_donors.all.txt> --out <list>` -- the AMR reference of the 3-way HOMOG arms: July's K=5 AMR homogeneous samples still in the panel, plus AMR samples new since July (SGDP, restored HGDP, 1KG relatives) homogeneous in this run, minus donors, their relatives, duplicates and exclusions; reports what was kept, dropped and added | writes only the list |
 | inside 4a | `bash scripts/admix-site-list.sh <chr> <out.bed>` -- one chromosome's ADMIXTURE site list under the 17 Nov rule (every super-pop <= 7%, every cohort <= 15%), from 1c's pre-phasing soft-union, groups rebuilt as 1c built them; `--groups` writes only the groups | writes only its outputs |
@@ -836,10 +838,27 @@ vocabularies don't overlap.
   imputation servers contain 1KG. Reference = 1KG + a stratified share of the
   non-1KG samples.
 - `--mode lai`: no source rule; every sample eligible for either role.
-- `--no-donor-superpops OCE`: reference only, **no donors**, remainder left
-  *unallocated* so the assembler takes it as test genomes. Table 1 has no OCE
-  model, so an OCE donor is withheld for nothing. OCE ends up **~15 reference
-  + ~5 real test, 0 donors** — never simulated.
+- `--no-donor-superpops OCE,SAS` (SAS from 18 Nov): reference only, **no
+  donors**, remainder left *unallocated* so the assembler takes it as test
+  genomes. The reference is filled from 1000 Genomes first (spread over its
+  populations, skipping a 1KG sample related to a test-bound genome) and from
+  the other sources only for what 1KG cannot cover. OCE has no 1KG population
+  and no model: **~15 reference + ~5 real test, 0 donors**. SAS has ~10
+  homogeneous genomes outside 1KG, too few to simulate a truth set from, so
+  `reference_ids/models.tsv` has no SAS model and SAS is **65 1KG reference,
+  0 donors, and its ~10 homogeneous genomes become real_homogeneous test
+  genomes** beside the many real_admixed SAS ones. No SAS local-ancestry
+  truth set until more homogeneous SAS genomes arrive (DUAs).
+- **The pool (18 Nov): `--pool-column homogeneous` for the benchmark.** 4a
+  writes two flags: `homogeneous`, the pool both projects choose from (the
+  homogeneity rule, 1e duplicates and named exclusions out, no project's
+  roles), and `included`, the LAI project's panel — `homogeneous` minus ITS
+  simulation donors and their relatives. The benchmark split reads
+  `homogeneous`: until 18 Nov it read `included`, so 56 Native American
+  genomes (31 HGDP/SGDP + 25 MXB) and their relatives were missing from the
+  benchmark for a rule of the other project. `--mode lai` keeps `included`.
+  A table from before the column stops the benchmark split with an error
+  rather than silently splitting the old pool.
 
 ### Fill order: 1000 Genomes first
 
@@ -900,14 +919,22 @@ rule). OCE, reference-only, keeps its own sizing so it still has test genomes.
 ### How the cut sizes the donor pool (`scripts/homog-cut-preview.py`, 18 Nov)
 
 Read-only. For each super-pop and each cut (default 0.90, 0.92, 0.94) it
-counts who 4a would call homogeneous and splits them into donor-eligible,
-reference-only (1KG or a server-panel id) and **held** — the LAI simulation
-donors and their relatives, which 4a writes as `included=0` in both sets and
-which the benchmark split therefore never sees. It lists the samples each
+counts who 4a would call homogeneous and splits them into donor-eligible and
+reference-only (1KG or a server-panel id), and says how many of them are LAI
+simulation donors or their relatives — out of the LAI panel (`included=0`),
+in the benchmark pool (`homogeneous=1`, 18 Nov). It lists the samples each
 lower cut adds, by population, with their strongest other component, and the
 mean `1 − share` of each pool: the part of a donor's genome the simulation
 labels with the wrong ancestry. At the table's own cut, donor + reference must
-equal the table's `included` count (the check on the script itself).
+equal the table's `homogeneous` count (the check on the script itself; on a
+table from before 18 Nov, `included` = donor + reference − LAI donors).
+
+**What the K=8 table showed (18 Nov).** SAS: 10 donor-eligible at 0.94 and only
+11 at 0.90 — most HGDP Pakistani genomes sit under 0.70 SAS, so no cut helps;
+hence SAS reference-only (§4). EUR: 19 at 0.94, 23 at 0.92, 44 at 0.90 (the
+0.90 step is 16 HGDP Russians at ~0.906 EUR with ~0.06 EAS). The cut stays 0.94.
+MXB: 4a counts every MXB sample homogeneous whatever its Q (July's curated
+set); the preview prints how many fall under each cut by their own AMR share.
 
 0.94 is one number on both sides — anchors, the homogeneous panel, the split,
 `plan_simset.R --threshold` and the contract's "donors are homogeneous: ≥ 0.94"
