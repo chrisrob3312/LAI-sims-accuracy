@@ -167,6 +167,11 @@ want () {   # should this stage run at all?
     return 0
 }
 forced () { [[ "$FORCE" == "$1" ]]; }
+# stale <out> <inputs...>: true when <out> is missing or older than any input.
+# Every skip below asks "present AND current" (19 Nov): presence alone let a
+# split made from an older 4a table, or a roster from older lists, be reused.
+stale () { local o="$1" f; shift; [[ -e "$o" ]] || return 0
+           for f in "$@"; do [[ -e "$f" && "$f" -nt "$o" ]] && return 0; done; return 1; }
 say  () { printf '[%s] %s\n' "$(date +%T)" "$*"; }
 head_ () { printf '\n==== %-12s %s\n' "$1" "$2"; }
 run  () {
@@ -225,14 +230,24 @@ fi
 if want split; then
     head_ split "donor / reference lists"
     SPLITTER="${REPO_DIR}/scripts/split-homog-donors-reference.py"
+    # The lists are current only if they were written from THIS table and
+    # KING file with THESE settings: a stamp records both, and a split is
+    # redone when it differs (a new 4a run, a changed holdout or share).
+    SPLIT_STAMP="${REFS}/.split_${LAI_SUFFIX}_${BENCH_SUFFIX}.stamp"
+    SPLIT_RECIPE="panel=${PANEL_TSV}:$(stat -c %Y "$PANEL_TSV" 2>/dev/null) king=${KING_TSV}:$(stat -c %Y "$KING_TSV" 2>/dev/null) pool=${BENCH_POOL_COLUMN} nodonor=${NO_DONOR_SUPERPOPS} share=${REF_SHARE} refmin=${REF_MIN} perpop=${REF_MIN_PER_POP} holdout=${TEST_HOLDOUT}"
     need_split=0
     for sfx in "$LAI_SUFFIX" "$BENCH_SUFFIX"; do
         ls "${REFS}"/*_reference_"${sfx}".txt >/dev/null 2>&1 || need_split=1
     done
+    if [[ "$need_split" == 0 && "$(cat "$SPLIT_STAMP" 2>/dev/null)" != "$SPLIT_RECIPE" ]]; then
+        say "lists present but not from this table / these settings (stamp ${SPLIT_STAMP}) -- redoing"
+        need_split=1
+    fi
     forced split && need_split=1
     if [[ "$need_split" == 0 ]]; then
-        say "present for suffixes '${LAI_SUFFIX}' and '${BENCH_SUFFIX}', skipping"
+        say "present and current for suffixes '${LAI_SUFFIX}' and '${BENCH_SUFFIX}', skipping"
     else
+        _split_t0="${REFS}/.split_started"; [[ "$DRY" == 1 ]] || touch "$_split_t0"
         REL=(); [[ -s "$KING_TSV" ]] && REL=(--relatedness "$KING_TSV")
         run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
             --mode lai --suffix "$LAI_SUFFIX" "${REL[@]}" || FAILED=1
@@ -243,6 +258,14 @@ if want split; then
             --ref-share "$REF_SHARE" --ref-min "$REF_MIN" --ref-min-per-pop "$REF_MIN_PER_POP" \
             --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
             "${REL[@]}" || FAILED=1
+        # Stamp only when both modes really rewrote their lists (a crash
+        # before writing leaves the old lists, which must not pass as current).
+        if [[ "$DRY" != 1 ]]; then
+            _old=$(find "$REFS" -maxdepth 1 \( -name "*_reference_${LAI_SUFFIX}.txt" -o -name "*_reference_${BENCH_SUFFIX}.txt" \) ! -newer "$_split_t0" | wc -l)
+            if [[ "$_old" -eq 0 ]]; then echo "$SPLIT_RECIPE" > "$SPLIT_STAMP"
+            else say "WARNING: ${_old} list(s) were not rewritten -- not stamping"; FAILED=1; fi
+            rm -f "$_split_t0"
+        fi
     fi
     # The two suffixes MUST differ: both modes write the same filenames, so a
     # shared suffix means the second silently overwrote the first.
@@ -261,7 +284,9 @@ MAN="${RESULTS}/benchmark_cohort_manifest.tsv"
 IND="${RESULTS}/benchmark_cohort_simset_individuals.tsv"
 if want assemble; then
     head_ assemble "cohort manifests (design=${DESIGN})"
-    if [[ -s "$MAN" && -s "$IND" ]] && ! forced assemble; then
+    ASM_IN=("$PANEL_TSV" "$MODELS_TSV" "${REFS}"/*_reference_"${BENCH_SUFFIX}".txt "${REFS}"/*_simulation_"${BENCH_SUFFIX}".txt)
+    if [[ -s "$MAN" && -s "$IND" ]] && ! forced assemble \
+       && ! stale "$MAN" "${ASM_IN[@]}" && ! stale "$IND" "${ASM_IN[@]}"; then
         say "present ($(( $(wc -l < "$MAN") - 1 )) real, $(( $(wc -l < "$IND") - 1 )) simulated), skipping"
     else
         run python3 -I "${REPO_DIR}/scripts/assemble-benchmark-cohort.py" \
@@ -278,7 +303,7 @@ fi
 if want report; then
     head_ report "composition"
     COMP="${RESULTS}/cohort_composition.txt"
-    if [[ -s "$COMP" ]] && ! forced report; then
+    if [[ -s "$COMP" ]] && ! forced report && ! stale "$COMP" "$MAN" "$IND" "$MODELS_TSV"; then
         say "present, skipping"
     else
         # --models: without it the report described the built-in Table 1
@@ -329,8 +354,21 @@ n_done () { ls "$1" 2>/dev/null | grep -c . || true; }
 if want simulate; then
     head_ simulate "6b simulate + 6c real genomes"
     N_SIM_CHR=$(ls -d "${SIMSET_DIR}"/chr* 2>/dev/null | wc -l)
+    # A simset or real set older than the roster/manifest was built for an
+    # earlier cohort: refuse rather than skip, and never write into it.
+    if [[ "$N_SIM_CHR" -gt 0 ]] && ! forced simulate && stale "${SIMSET_DIR}/chr1" "$IND"; then
+        say "6b: STALE -- ${SIMSET_DIR} predates the current roster (${IND})."
+        say "    Move it aside first (mv ${SIMSET_DIR} ${SIMSET_DIR}.old_\$(date +%Y%m%d)), then re-run."
+        exit 1
+    fi
+    N_REAL_ANY=$(n_done "${REAL_DIR}/benchmark_real.chr*.bcf")
+    if [[ "$N_REAL_ANY" -gt 0 ]] && ! forced simulate && stale "${REAL_DIR}/benchmark_real.chr1.bcf" "$MAN"; then
+        say "6c: STALE -- ${REAL_DIR} predates the current manifest (${MAN})."
+        say "    Move it aside first (mv ${REAL_DIR} ${REAL_DIR}.old_\$(date +%Y%m%d)), then re-run."
+        exit 1
+    fi
     if [[ "$N_SIM_CHR" -ge 22 ]] && ! forced simulate; then
-        say "6b: ${N_SIM_CHR} chromosome dirs present, skipping"
+        say "6b: ${N_SIM_CHR} chromosome dirs present and current, skipping"
     else
         say "6b: ${N_SIM_CHR}/22 chromosomes present -- submitting"
         JOB_6B=$(sub "${REPO_DIR}/6b_simulate_benchmark_cohort_clm.sh")

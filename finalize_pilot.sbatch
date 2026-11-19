@@ -246,32 +246,49 @@ TAGS="$TAGS" T1="$T1" Rscript -e '
 echo
 echo ">>> [4/4] git commit + push"
 cd "$REPO_DIR"
-# Sync with origin in case any hand-commits landed
-git fetch origin claude/setup-shapeit5-conda-xlcdl 2>&1 | tail -3
-git pull --rebase -X theirs origin claude/setup-shapeit5-conda-xlcdl 2>&1 | tail -5 || {
-    # rebase conflicts: prefer the pilot's fresh TSVs
-    git checkout --theirs results/accuracy_pilot*/*.tsv 2>/dev/null || true
-    git add results/
-    git rebase --continue || git rebase --abort
-}
-
+BRANCH=claude/setup-shapeit5-conda-xlcdl
+# COMMIT FIRST, THEN PULL (19 Nov). The old order pulled with --rebase while
+# this job's fresh TSVs sat uncommitted in TRACKED files (results/
+# accuracy_pilot/ and _chip_gsa/ are tracked since August), and git refuses a
+# rebase on a dirty tree; under set -e the conflict branch then failed too
+# (no rebase in progress), so a rerun's results were computed but never
+# committed. Now: commit the results, rebase that commit onto origin with
+# -X theirs (in a rebase, "theirs" is the commit being replayed: the fresh
+# TSVs win a conflict), and --autostash any OTHER uncommitted file (e.g. a
+# reference list 4a rewrote) out of the way and back.
 git add -A results/
 if git diff --cached --quiet; then
-    echo "  no result changes to commit — nothing to push"
+    echo "  no result changes to commit -- nothing to push"
 else
-    git commit -m "accuracy pilot ${ADMIX_POP} gen${GEN} (${TRACKS}): full 22-chr RFMix WGS + chip$([ "$SCORE_FLARE" = 1 ] && echo ' and FLARE WGS + chip') (finalize_pilot job $SLURM_JOB_ID)
+    git commit -q -m "accuracy pilot ${ADMIX_POP} gen${GEN} (${TRACKS}): full 22-chr RFMix WGS + chip$([ "$SCORE_FLARE" = 1 ] && echo ' and FLARE WGS + chip') (finalize_pilot job $SLURM_JOB_ID)
 
 Auto-committed by finalize_pilot.sbatch after the 3b arrays completed:
 every (track, panel, chr) combo present, no 1- or 2-class .classes file,
 22/22 chromosomes in every accuracy table ($TAGS)."
+    echo "  committed locally: $(git log --oneline -1)"
+    pushed=0
     for attempt in 1 2 3; do
-        if git push origin claude/setup-shapeit5-conda-xlcdl; then
-            echo "  push ok on attempt $attempt"
-            break
+        if git -c core.editor=true pull --rebase --autostash -X theirs origin "$BRANCH" 2>&1 | tail -5; then
+            if git push origin "$BRANCH"; then
+                echo "  push ok on attempt $attempt"
+                pushed=1
+                break
+            fi
+        else
+            # A rebase left half-done (a conflict -X theirs could not settle)
+            # is abandoned, so the repo is never left mid-rebase.
+            if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+                git rebase --abort || true
+            fi
         fi
-        echo "  push failed on attempt $attempt, sleeping..."
+        echo "  pull/push failed on attempt $attempt, sleeping..."
         sleep $((attempt * 10))
     done
+    if [ "$pushed" != 1 ]; then
+        echo "  WARNING: the results are committed on the cluster but NOT pushed:"
+        echo "    $(git log --oneline -1)"
+        echo "  Push by hand: git pull --rebase --autostash origin $BRANCH && git push origin $BRANCH"
+    fi
 fi
 
 echo

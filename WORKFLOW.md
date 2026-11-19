@@ -127,6 +127,11 @@ F. LAI SIMULATION + ACCURACY   publication stages 4-6, chained to 4a
       mapped by name from its ##ANCESTRY header), asserts 22/22 chromosomes in
       every table, commits + pushes results/accuracy_pilot{,_chip_gsa,_flare,
       _flare_chip_gsa}; slides/tables regenerate on the main-loop side
+    - git (19 Nov): COMMIT first, then pull --rebase --autostash -X theirs,
+      then push (3 tries). The old order pulled with --rebase while the fresh
+      TSVs sat uncommitted in tracked files (results/accuracy_pilot* are
+      tracked since August): git refused, the conflict branch could not run,
+      and a rerun's results were committed on a stale base and never pushed
 
 G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
   scripts/split-homog-donors-reference.py   twice, distinct suffixes
@@ -137,7 +142,11 @@ G. BENCHMARKING COHORT   after 4a, run by hand (section 13)
   scripts/assemble-benchmark-cohort.py
     - excludes donors, reference, 1KG, SGDP-resequenced 1KG, KING drops
     - sample_type from the ADMIXTURE argmax; design paired-builds
-  6b_simulate_benchmark_cohort_clm.sh   13 models, 2,160 simulated genomes + truth
+  run_benchmark_cohort.sh drives all of G; every skip is "present AND current"
+    (19 Nov): the split is stamped with the table, KING file and settings and
+    redone when any changes; assemble/report redo when their inputs are newer;
+    a simset or real set older than the roster stops the run (move it aside)
+  6b_simulate_benchmark_cohort_clm.sh   every model of models.tsv (11, 1,600 since 18 Nov) + truth
   6c_extract_real_test_genomes_clm.sh   real test genomes per chromosome
   6d_write_chip_cells_clm.sh            chip x build x chr cells (native hg19
                                         manifest; swap / flip handled)
