@@ -11,7 +11,8 @@ Create with `conda env create -f envs/shapeit5.yml`, activate with `conda activa
 1a_prep-mxb-liftover_clm.sh - one-shot SLURM job: liftover MXB hg19 -> hg38 (Picard with
 `RECOVER_SWAPPED_REF_ALT=true`), normalize, fix REF/ALT, split per chromosome.
 
-1b_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG postoutlier with the lifted MXB,
+1c_phasing-jointcall_clm.sh - SLURM array (1-22) merging HGDP+1KG (relatives kept, `OUTLIERS=none`;
+earlier panels used the post-outlier set) with the lifted MXB, SGDP and Almarri,
 applying a soft-union per-superpop MAF filter (>=0.005 in any of AFR/AMR/EUR/EAS/SAS/CSA/OCE/MEN),
 plink2 site QC, and SHAPEIT5_phase_common joint phasing. Imputation will be done with
 TOPMed/All-of-Us so rare-variant phasing is OFF by default; set `RUN_PHASE_RARE=1` at submit
@@ -59,7 +60,7 @@ Run order:
 2. `./init-project-tree.sh` (creates the dirs above + builds sample_groups.tsv,
    pel_rfmix.txt, pel_eas_rfmix.txt, and panel keep-files in one shot)
 3. `sbatch 1a_prep-mxb-liftover_clm.sh` (one-shot)
-4. `sbatch 1b_phasing-jointcall_clm.sh` (array 1-22)
+4. `sbatch 1c_phasing-jointcall_clm.sh` (array 1-22)
 5. Place `${ADMIX_POP}.dat` and `${ADMIX_POP}.sample.txt` in `02_simulations/`
 6. `ADMIX_POP=Brasa GEN=12 sbatch 2b_simulation_clm.sh` (array 1-22; per (admix-pop, gen))
 7. `ADMIX_POP=Brasa GEN=12 sbatch 3b_wgs-rfmix-jointcall_clm.sh` (array 1-22)
@@ -73,6 +74,29 @@ accuracy_error_plots.R - code used to generate the accuracy and error modes manu
 
 viterbi2msp.R - code to convert RFMix v1 .viterbi output to RFMix v2 .msp output file formats for use with Tractor.
 
+*Which sample sets serve which project (17 Nov 2026).* The projects need
+different sets, so the lists are kept apart:
+
+| project | references | donors / test genomes | rule set |
+|---|---|---|---|
+| 3-way NAT/EUR/AFR LAI accuracy simulation (rerun of Jessica Honorato-Mauer's design; RFMix + FLARE, WGS + GSA chip, 22 chromosomes; two cohorts, below) | top-level `*_rfmix.txt`: 1KG IBS (EUR), 1KG YRI (AFR), the NAT lists, and `amr_homog_rfmix.txt` (July's K=5 AMR panel together with every AMR sample homogeneous in a K=5 rerun on the expanded panel: 4a `HOMOG_SET=lai3way`, anchors found by its own unsupervised fit (central, Q >= 0.94) rather than July's by-name lists, MEN/OCE left out, Q >= 0.94) | `*_simulation.txt` (1KG IBS, 1KG YRI, HGDP NAT, MXB) | references and donors disjoint, never first-degree relatives; 1KG allowed. Originals in `rerun_jessicaH_3way_lai_sim/` |
+| genotyping-harmonization / imputation benchmark (Nextflow) and the global panel | the K=7 panel (4a `HOMOG_SET=global`: `lai_ref_panel_samples.k7.tsv`, every sample, Q >= 0.94, central high-Q anchors), split by `run_benchmark_cohort.sh` | donors and real test genomes from HGDP, Almarri, SGDP and MXB; never 1KG (1KG is in the imputation panels) | contract threshold 0.94 (`plan_simset.R` must match). The 6 Jul anchor lists (July's K=5 anchors) are in `genotype_harmonization_benchmark_testing_anchor_list_20260706/` |
+
+*The 3-way simulation's two cohorts (17 Nov).* As the August pilot paired
+them -- but August ran both off `Brasa.dat`, so its "Mexican-like" cohort had
+Brazilian proportions and 12 generations:
+
+| cohort | `ADMIX_POP` | model (`.dat`) | gen | NAT donors (track) | results |
+|---|---|---|---|---|---|
+| Brazilian-like | `Brasa` | NAT .15 / EUR .60 / AFR .25 (Jessica's, `02_simulations/Brasa.dat` on the cluster) | 12 | HGDP NAT (`NAT`) | `results/accuracy_pilot*/` |
+| Mexican-like | `MexLike` | NAT .50 / EUR .45 / AFR .05 (`simulation_models/MexLike.dat`) | 16 | HGDP NAT + 25 MXB (`NATMXB`) | `results/accuracy_pilot*_MexLike/` |
+
+Both: 60 haplotypes (30 individuals), panels NAT_HGDP, +PEL, +PEL+EAS,
++25 MXB, +50 MXB (Brazilian-like only: the Mexican-like cohort's MXB donors
+would be in the reference) and the AMR homogeneous panel. The driver's
+`COHORTS` (default `Brasa:12:NAT MexLike:16:NATMXB`) sets them; 2b checks each
+`.dat` against its `GEN` and writes the `.notref` 3b reads.
+
 *IDs of reference samples used to generate admixed haplotypes and RFMix Reference:*
 
 amr_simulation.txt - HGDP AMR population IDs used for simulation 
@@ -84,7 +108,18 @@ afr_simulation.txt - 1KG YRI population IDs used for simulation
 
 amr_rfmix.txt - HGDP AMR population IDs used as RFMix reference
 
-eur_rfmix.txt - 1KG IBS population IDs used as RFMix reference
+eur_rfmix.txt - 1KG IBS IDs (74) used as the EUR RFMix / FLARE reference in every
+3-way arm. Restored on 17 Nov 2026 to the design (Jessica's 77-ID IBS list in
+rerun_jessicaH_3way_lai_sim/, as July's panel used it: the other 3 were relatives July's
+panel did not contain). From 6 Jul to 17 Nov it held HGDP French, Orcadian,
+Sardinian and Russian anchors (genotype_harmonization_benchmark_testing_anchor_list_20260706/).
 
-afr_rfmix.txt - 1KG YRI population IDs used as RFMix reference
+afr_rfmix.txt - 1KG YRI IDs (72) used as the AFR RFMix / FLARE reference in every
+3-way arm. Restored on 17 Nov 2026 the same way (77-ID YRI list; 5 relatives not
+in July's panel). From 6 Jul to 17 Nov it held HGDP Yoruba, Mandenka and Bantu
+anchors (genotype_harmonization_benchmark_testing_anchor_list_20260706/).
+
+sas_rfmix.txt - HGDP Central/South Asian IDs (Balochi, Brahui, Makrani, Sindhi).
+HGDP00029 (Brahui) and HGDP00150 (Makrani), Koenig removals, were dropped on
+14 Nov 2026 (48 IDs). No simulation or RFMix arm reads this list.
 

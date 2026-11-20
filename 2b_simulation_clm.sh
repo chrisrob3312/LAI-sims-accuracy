@@ -3,8 +3,32 @@
 # SLURM directives
 # ----------------------------------------------------------------------------
 #SBATCH --job-name=2b_simu
-#SBATCH --partition=short
-#SBATCH --time=08:00:00
+#SBATCH --partition=atkinson,mhgcp
+# DO NOT REMOVE mhgcp-t* FROM THIS EXCLUSION TO GAIN CONCURRENCY.
+#
+# Those nodes' CPUs lack instructions the SHAPEIT5 / bcftools builds in this
+# conda env are compiled with. A task dispatched to one dies instantly with
+# SIGILL -- exit 132, ~3 seconds wall clock, ~2 MB RSS, and an EMPTY log,
+# because the binary never reaches its first write.
+#
+# Measured 2026-11-07 on a 594-task chunk array run with the exclusion lifted:
+#   270 / 270 tasks that landed on t02,t05,t06,t07,t08,t10,t11  FAILED
+#     0 / 57  tasks that landed on a01, m00                     failed
+#
+# They look attractive because sinfo shows them idle with free CPUs. They are
+# idle because nothing that needs these instruction sets can run there. An
+# earlier 1d_almarri failure on t02 -- empty logs, 4 MB RSS, never explained
+# -- was the same thing.
+#
+# mhgcp-c02 WAS on this list and has been removed deliberately. It has the
+# same specs as c00 and c01 (56 CPUs, 232 GB), both of which run this software
+# without trouble and were never excluded, and no evidence ties c02 to the
+# instruction-set problem above -- no task ever landed on it. The exclusion
+# looks like it dates from c02 simply being busy. Re-add it only if a task
+# actually fails there, and write down what happened.
+#SBATCH --exclude=mhgcp-t01,mhgcp-t02,mhgcp-t03,mhgcp-t04,mhgcp-t05,mhgcp-t06,mhgcp-t07,mhgcp-t08,mhgcp-t09,mhgcp-t10,mhgcp-t11,mhgcp-t12
+#SBATCH --time-min=00:15:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --array=1-22
@@ -19,7 +43,7 @@
 # Modernized replacement for simulation.sh. Builds admix-simu donor .phgeno
 # files for both NAT donor configurations (HGDP-NAT-only and HGDP-NAT+MXB)
 # directly from the new merged + jointly phased panel produced by
-# 1b_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
+# 1c_phasing-jointcall_clm.sh, runs admix-simu, and emits simulated admixed
 # haps + truth files per chrom.
 #
 # Differences from legacy simulation.sh:
@@ -47,14 +71,14 @@ CONDA_ENV="${CONDA_ENV:-shapeit5}"
 # lab members' work.
 PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
 
-# Phased panel from 1b_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
+# Phased panel from 1c_phasing-jointcall_clm.sh (chr-stripped, contigs 1..22)
 PANEL_DIR="${PANEL_DIR:-${PROJECT_ROOT}/01_merged_phased_panel}"
 PANEL_TPL="${PANEL_TPL:-${PANEL_DIR}/merged_chr%s.shapeit5_phased.softunion_maf005.rechr.bcf}"
 
 # Sample-ID lists (in repo)
-REFS="${REFS:-reference_ids}"
+REFS="${REFS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/reference_ids}"
 NAT_HGDP_SIMU="${NAT_HGDP_SIMU:-${REFS}/amr_simulation.txt}"
-NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simu.txt}"
+NAT_HGDPMXB_SIMU="${NAT_HGDPMXB_SIMU:-${REFS}/amr_hgdpmxb_simulation.txt}"
 EUR_SIMU="${EUR_SIMU:-${REFS}/eur_simulation.txt}"
 AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 
@@ -62,14 +86,28 @@ AFR_SIMU="${AFR_SIMU:-${REFS}/afr_simulation.txt}"
 ADMIXSIMU_DIR="${ADMIXSIMU_DIR:-/storage/atkinson/shared_resources/past_members/jessica_mauer/lai/simu-jointcall/admix-simu-master}"
 
 # RFMix-format genetic map (3 cols: pos chr cM) used by insert-map.pl
-GMAP_DIR="${GMAP_DIR:-/storage/atkinson/shared_resources/reference/genetic_maps/genetic_maps_shapeit4/genetic_maps_b38}"
-GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.b38.rfmix.gmap.txt}"
+GMAP_DIR="${GMAP_DIR:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/resources/gmap_hg38}"
+GMAP_TPL="${GMAP_TPL:-${GMAP_DIR}/chr%s.hg38.gmap.txt}"
 
-# Simulation model
+# Simulation model -- one cohort per submission (17 Nov):
+#   Brazilian-like  ADMIX_POP=Brasa   GEN=12  NAT .15 / EUR .60 / AFR .25   TRACKS_TO_RUN=NAT
+#   Mexican-like    ADMIX_POP=MexLike GEN=16  NAT .50 / EUR .45 / AFR .05   TRACKS_TO_RUN=NATMXB
+# as the August pilot paired them (Brazilian-like = HGDP-NAT donors, Mexican-like
+# = HGDP-NAT + MXB donors) -- but August ran both tracks off Brasa.dat, so its
+# "Mexican-like" cohort had Brazilian proportions and 12 generations.
+# Brasa.dat / Brasa.sample.txt are Jessica's, in ${PROJECT_ROOT}/02_simulations/.
+# A cohort with no file there takes the repo copy (simulation_models/), which is
+# how MexLike runs without a manual copy step.
 ADMIX_POP="${ADMIX_POP:-Brasa}"     # name of the simulated admixed pop (matches .dat file)
-GEN="${GEN:-12}"                    # generations (matches .dat file)
+GEN="${GEN:-12}"                    # generations (must match the .dat's last line; checked below)
+REPO_MODELS="${REPO_MODELS:-${REPO_DIR:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}/simulation_models}"
 DAT_FILE="${DAT_FILE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.dat}"
 SAMPLE_TEMPLATE="${SAMPLE_TEMPLATE:-${PROJECT_ROOT}/02_simulations/${ADMIX_POP}.sample.txt}"
+[[ ! -s "$DAT_FILE" && -s "${REPO_MODELS}/${ADMIX_POP}.dat" ]] && DAT_FILE="${REPO_MODELS}/${ADMIX_POP}.dat"
+[[ ! -s "$SAMPLE_TEMPLATE" && -s "${REPO_MODELS}/${ADMIX_POP}.sample.txt" ]] && SAMPLE_TEMPLATE="${REPO_MODELS}/${ADMIX_POP}.sample.txt"
+# Donor tracks to simulate (each one a full admix-simu run).
+TRACKS_TO_RUN="${TRACKS_TO_RUN:-NAT NATMXB}"
+TRACKS_TO_RUN="${TRACKS_TO_RUN//+/ }"    # the driver joins tracks with + (sbatch --export splits on commas)
 
 # Outputs
 OUTDIR="${OUTDIR:-${PROJECT_ROOT}/02_simulations}"
@@ -90,15 +128,176 @@ GMAP=$(printf "$GMAP_TPL" "$CHR")
 [[ -d "$ADMIXSIMU_DIR"   ]] || { echo "ERROR: missing $ADMIXSIMU_DIR"; exit 1; }
 [[ -s "$DAT_FILE"        ]] || { echo "ERROR: missing $DAT_FILE (admix-simu config)"; exit 1; }
 [[ -s "$SAMPLE_TEMPLATE" ]] || { echo "ERROR: missing $SAMPLE_TEMPLATE"; exit 1; }
+for _t in $TRACKS_TO_RUN; do
+    case "$_t" in NAT|NATMXB) ;; *) echo "ERROR: TRACKS_TO_RUN has '${_t}' (NAT or NATMXB)"; exit 1 ;; esac
+done
+
+# ---------------------------------------------------------------------------
+# THE .dat MUST DESCRIBE THE MODEL THIS RUN IS LABELLED AS. Nothing downstream
+# reads the .dat: 3b passes GEN to RFMix (-G) and FLARE, the output folders
+# are named gen${GEN}, and the scorer pairs truth and calls by those names. A
+# MexLike run submitted with GEN=12, or pointed at Brasa.dat, would simulate
+# one model and label it another, silently. admix-simu's format (README, "Dat
+# file"): line 1 = <haplotypes> <admixed label> <source labels...>; each later
+# line = <generation> <p_admixed> <p_source...>, summing to 1. The first
+# line's pulse happens at generation 1 and the population then mixes with
+# itself up to the generation on the LAST line -- so "12 0 0.15 0.60 0.25" is
+# a 12-generation pulse model, the same as "1 0 0.15 0.60 0.25" + "12 1 0 0 0".
+# ---------------------------------------------------------------------------
+echo "[$(date +%T)] admix-simu model ${ADMIX_POP}: ${DAT_FILE}"
+sed 's/^/    /' "$DAT_FILE"
+_dat_err=$(awk -v gen="$GEN" -v tpl="$SAMPLE_TEMPLATE" '
+    NF == 0 { next }
+    ++n == 1 { nhap = $1
+               if ($3 != "NAT" || $4 != "EUR" || $5 != "AFR" || NF != 5) { print "header sources must be NAT EUR AFR (2b passes -NAT -EUR -AFR), got: " $0; bad = 1 }
+               next }
+    { s = 0; for (i = 2; i <= NF; i++) s += $i
+      if (NF != 5 || s < 0.999 || s > 1.001) { print "line " n " (" $0 ") needs 4 proportions summing to 1, sums to " s; bad = 1 }
+      if (n == 2 && $2 != 0) { print "the first generation line must have p_admixed = 0 (admix-simu README)"; bad = 1 }
+      last = $1 }
+    END { while ((getline l < tpl) > 0) if (++t > 2 && l ~ /[^ \t]/) rows++
+          if (n < 2) { print "no generation line"; bad = 1 }
+          else if (last != gen) { print "last generation line is " last " but GEN=" gen; bad = 1 }
+          if (nhap != 2 * rows) { print "header simulates " nhap " haplotypes but " tpl " lists " rows " individuals (" 2 * rows " haplotypes)"; bad = 1 }
+          exit bad }' "$DAT_FILE")
+if [[ -n "$_dat_err" ]]; then
+    echo "ERROR: ${DAT_FILE} does not match ADMIX_POP=${ADMIX_POP} GEN=${GEN}:"
+    sed 's/^/       /' <<< "$_dat_err"
+    exit 1
+fi
+echo "[$(date +%T)] model OK: GEN=${GEN} = the .dat's last generation; $(awk 'NR > 2 && NF' "$SAMPLE_TEMPLATE" | wc -l) individuals; tracks: ${TRACKS_TO_RUN}"
+
+# ---------------------------------------------------------------------------
+# DONOR <-> REFERENCE DISJOINTNESS CHECK.
+# A sample used as an admix-simu DONOR must never also appear in a reference
+# panel handed to RFMix: the benchmark would then score the caller on
+# haplotypes it was given as reference, inflating accuracy in a way no
+# downstream statistic can detect. This was previously enforced only by hand-
+# curating reference_ids/*, with no assertion anywhere. Check it every run.
+#
+# Set ALLOW_DONOR_IN_REF=1 to downgrade to a warning (e.g. a deliberate
+# positive-control run that measures the size of the leak).
+# ---------------------------------------------------------------------------
+DONOR_UNION="${WORKDIR_TMP:-/tmp}/.donors.$$.txt"
+REF_UNION="${WORKDIR_TMP:-/tmp}/.refs.$$.txt"
+REF_SRC="${WORKDIR_TMP:-/tmp}/.refsrc.$$.txt"      # id <TAB> the list it came from
+trap 'rm -f "$DONOR_UNION" "$REF_UNION" "$REF_SRC"' EXIT
+: > "$DONOR_UNION"
+for f in "$NAT_HGDP_SIMU" "$NAT_HGDPMXB_SIMU" "$EUR_SIMU" "$AFR_SIMU" \
+         "${REFS}/mxb_simulation.txt"; do
+    [[ -s "$f" ]] && awk 'NF' "$f" >> "$DONOR_UNION"
+done
+sort -u -o "$DONOR_UNION" "$DONOR_UNION"
+
+# Reference sets: every reference_ids/*_rfmix.txt (the curated lists, and the
+# amr_homog_rfmix.txt 4a writes there for the HOMOG arms), plus the
+# homogeneous panel 4a built for THIS pipeline -- the 3-way simulation's own,
+# HOMOG_SET=lai3way (K=5, 04_homogeneity_panel/lai3way_k5/homog_5pop_samples.txt).
+# The K=7 global panel serves the benchmark, not these arms. Older lists stay
+# on disk and are not read: July's K=5 homog_5pop_samples.txt in
+# 04_homogeneity_panel/ was built before 4a excluded donors and holds 102 of
+# them, which stopped job 3754844 although no arm reads it.
+HOMOG_K="${HOMOG_K:-5}"
+HOMOG_LIST_DIR="${HOMOG_LIST_DIR:-${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}/lai3way_k${HOMOG_K}}"
+HOMOG_CUR="${HOMOG_LIST_DIR}/homog_${HOMOG_K}pop_samples.txt"
+: > "$REF_SRC"
+for f in "${REFS}"/*_rfmix.txt "$HOMOG_CUR"; do
+    if [[ -s "$f" ]]; then awk -v f="$(basename "$f")" 'NF {print $1 "\t" f}' "$f" >> "$REF_SRC"; fi
+done
+for f in "${HOMOG_LIST_DIR}"/homog_*pop_samples.txt; do
+    if [[ -e "$f" && "$f" != "$HOMOG_CUR" ]]; then
+        echo "[$(date +%T)] not a reference set for this run (not K=${HOMOG_K}; no arm reads it): $f"
+    fi
+done
+cut -f1 "$REF_SRC" | sort -u > "$REF_UNION"
+
+N_DONOR=$(wc -l < "$DONOR_UNION"); N_REF=$(wc -l < "$REF_UNION")
+OVERLAP=$(comm -12 "$DONOR_UNION" "$REF_UNION" | wc -l)
+echo "[$(date +%T)] donor/reference disjointness: ${N_DONOR} donors, ${N_REF} reference ids, ${OVERLAP} overlapping"
+if [[ "$OVERLAP" -gt 0 ]]; then
+    echo "ERROR: ${OVERLAP} sample(s) are BOTH simulation donors AND reference-panel members."
+    echo "       RFMix would be scored on haplotypes it was handed as reference."
+    echo "       Overlapping donors per reference list:"
+    comm -12 "$DONOR_UNION" "$REF_UNION" \
+      | awk -F'\t' 'NR == FNR {o[$1] = 1; next} ($1 in o) {c[$2]++} END {for (k in c) print "         " k ": " c[k]}' - "$REF_SRC" | sort
+    echo "       Offending IDs (first 20):"
+    comm -12 "$DONOR_UNION" "$REF_UNION" | head -20 | sed 's/^/         /'
+    echo "       Fix the reference_ids lists, or re-run 4a (which now excludes"
+    echo "       simulation donors from the homogeneous panel for every ancestry)."
+    if [[ "${ALLOW_DONOR_IN_REF:-0}" != "1" ]]; then
+        exit 1
+    fi
+    echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
+fi
+
+# ---------------------------------------------------------------------------
+# DONOR <-> REFERENCE RELATIVES. The same leak one step removed: the panel
+# keeps relatives (1e removes duplicates only), so a donor's first-degree
+# relative can sit in a reference list, handing RFMix long stretches of the
+# donor's haplotypes. The project's rule -- relatives at KING >= ROLE_KINSHIP
+# (0.177) stay on ONE side of the donor/reference/test split, as in
+# split-homog-donors-reference.py -- checked against 1e's KING table. 4a keeps
+# donors' relatives out of the homogeneous panel; the curated lists in
+# reference_ids/ are fixed by hand, and this is where a breach in them stops.
+# ---------------------------------------------------------------------------
+ROLE_KINSHIP="${ROLE_KINSHIP:-0.177}"
+KING_KIN0="${KING_KIN0:-${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}/king/king.kin0}"
+if [[ -s "$KING_KIN0" ]]; then
+    REL_HITS=$(awk -v thr="$ROLE_KINSHIP" -v OFS='\t' -v dfile="$DONOR_UNION" -v rfile="$REF_UNION" '
+        FILENAME == dfile { don[$1] = 1; next }
+        FILENAME == rfile { ref[$1] = 1; next }
+        FNR == 1 { sub(/^#/, ""); for (i = 1; i <= NF; i++) h[$i] = i
+                   if (!("IID1" in h) || !("IID2" in h) || !("KINSHIP" in h)) { print "BAD_HEADER"; exit }
+                   next }
+        ($h["KINSHIP"] + 0) >= thr {
+            a = $h["IID1"]; b = $h["IID2"]
+            if (b in don && a in ref) { t = a; a = b; b = t }
+            if (a in don && b in ref) print "donor " a, "reference " b, "kinship " $h["KINSHIP"] }' \
+        "$DONOR_UNION" "$REF_UNION" "$KING_KIN0")
+    if [[ "$REL_HITS" == BAD_HEADER* ]]; then
+        echo "ERROR: ${KING_KIN0} has no IID1/IID2/KINSHIP columns -- cannot check donor/reference relatives."
+        exit 1
+    fi
+    N_REL=$(awk 'NF' <<<"$REL_HITS" | wc -l)
+    echo "[$(date +%T)] donor/reference relatives (KING >= ${ROLE_KINSHIP}, ${KING_KIN0}): ${N_REL}"
+    if [[ "$N_REL" -gt 0 ]]; then
+        echo "ERROR: ${N_REL} donor/reference pair(s) are relatives at KING >= ${ROLE_KINSHIP}:"
+        sed 's/^/         /' <<<"$REL_HITS"
+        echo "       Put each pair on ONE side: move the reference member to the donor"
+        echo "       list (or off the reference list), then re-submit this stage."
+        if [[ "${ALLOW_DONOR_IN_REF:-0}" != "1" ]]; then
+            exit 1
+        fi
+        echo "       ALLOW_DONOR_IN_REF=1 set -- continuing anyway (results are NOT clean)."
+    fi
+else
+    echo "[$(date +%T)] NOTE: no ${KING_KIN0} (1e has not run) -- donor/reference RELATIVES not checked"
+fi
 
 WORKDIR="${OUTDIR}/${ADMIX_POP}/gen${GEN}"
 mkdir -p "$WORKDIR" "$LOGDIR"
 cd "$WORKDIR"
 
+# The simulated individuals' IDs, which every 3b arm keeps with --admixed_keep
+# (3b's NOTREF_FILE). It was a hand-made file in the legacy pipeline
+# (awk '{print $2}' Brasa.sample > Brasa.notref, then deleting the header in
+# an editor), so it lived only in this folder -- and the publication reset
+# moves this folder aside. Written here, from the template, by every task
+# (same content; temp + rename, so concurrent tasks cannot interleave).
+awk 'NR > 2 && NF {print $2}' "$SAMPLE_TEMPLATE" > "${ADMIX_POP}.notref.${CHR}.$$"
+mv "${ADMIX_POP}.notref.${CHR}.$$" "${ADMIX_POP}.notref"
+cp "$DAT_FILE" "${ADMIX_POP}.dat.${CHR}.$$" && mv "${ADMIX_POP}.dat.${CHR}.$$" "${ADMIX_POP}.dat.used"
+
 module load anaconda3/2024.06
 # shellcheck disable=SC1091
 source "$(conda info --base)/etc/profile.d/conda.sh"
+set +u
 conda activate "$CONDA_ENV"
+set -u
+
+# Prevent system anaconda3 from leaking Python into subprocesses on some nodes
+unset PYTHONHOME PYTHONPATH
+export PATH="${CONDA_PREFIX}/bin:${PATH}"
 
 # ----------------------------------------------------------------------------
 # Helper: extract a per-pop .haps/.sample (SHAPEIT format) from the merged
@@ -143,16 +342,78 @@ awk -F' ' '{ print $1":"$4"_"$5"_"$6, $1, $3, $4, $5, $6 }' "chr${CHR}.pos" \
     > "1kg_hgdp.chr${CHR}.snp"
 
 # Per NAT donor track: simu-mix.pl -> .bp -> .hanc -> .hanc2 + simulated .haps/.sample
+# ---------------------------------------------------------------------------
+# REPRODUCIBILITY.
+# admix-simu splits the randomness across two programs:
+#   * the compiled `mixer` binary draws the RECOMBINATION BREAKPOINTS and
+#     writes them to <prefix>.bp. It takes no seed argument and ships without
+#     source, so its RNG cannot be controlled.
+#   * simu-mix.pl then draws WHICH DONOR HAPLOTYPE to copy (rand() at ~line
+#     306). scripts/simu-mix-seeded.pl adds srand($ENV{SIMU_SEED}), so that
+#     half IS controllable.
+# Because the breakpoints cannot be seeded, reproducibility is achieved by
+# PRESERVATION instead: the .bp file IS the recombination realisation, and
+# simu-mix.pl's second mode replays from it --
+#     simu-mix.pl -bp <file.bp> <out_prefix> -POP <phgeno> ...
+# So archiving .bp + SIMU_SEED makes any replicate exactly regenerable, which
+# is stronger than seeding would have been since it is immune to the binary.
+SIMU_MIX="${SIMU_MIX:-${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/scripts/simu-mix-seeded.pl}"
+[[ -s "$SIMU_MIX" ]] || SIMU_MIX="${ADMIXSIMU_DIR}/simu-mix.pl"
+PROV_DIR="${PROV_DIR:-${WORKDIR}/provenance}"
+mkdir -p "$PROV_DIR"
+echo "[$(date +%T)] simu-mix: $SIMU_MIX"
+if [[ -n "${SIMU_SEED:-}" ]]; then
+    echo "[$(date +%T)] SIMU_SEED=${SIMU_SEED} (donor sampling seeded)"
+else
+    echo "[$(date +%T)] SIMU_SEED unset -- donor sampling unseeded; .bp archiving still makes this run regenerable"
+fi
+# FROM_BP=<dir> replays archived breakpoints instead of drawing new ones.
+FROM_BP="${FROM_BP:-}"
+
 run_admix_simu () {
     local track="$1"        # "NAT" or "NATMXB"
     local prefix="${track}.${ADMIX_POP}${CHR}"
+    local archived_bp="${FROM_BP}/${prefix}.bp"
 
-    echo "[$(date +%T)] [chr${CHR}] [$track] simu-mix.pl"
-    perl "${ADMIXSIMU_DIR}/simu-mix.pl" \
-        "$DAT_FILE" "1kg_hgdp.chr${CHR}.snp" "$prefix" \
-        -NAT "${track}${CHR}.phgeno" \
-        -EUR "EUR${CHR}.phgeno" \
-        -AFR "AFR${CHR}.phgeno"
+    if [[ -n "$FROM_BP" && -s "$archived_bp" ]]; then
+        echo "[$(date +%T)] [chr${CHR}] [$track] REPLAY from archived breakpoints: $archived_bp"
+        cp "$archived_bp" "${prefix}.bp"
+        perl "$SIMU_MIX" -bp "${prefix}.bp" "$prefix" \
+            -NAT "${track}${CHR}.phgeno" \
+            -EUR "EUR${CHR}.phgeno" \
+            -AFR "AFR${CHR}.phgeno"
+    else
+        if [[ -n "$FROM_BP" ]]; then
+            echo "ERROR: FROM_BP=$FROM_BP set but $archived_bp is missing."
+            echo "       Refusing to silently draw fresh breakpoints -- that would"
+            echo "       produce a DIFFERENT realisation under a name implying replay."
+            exit 4
+        fi
+        echo "[$(date +%T)] [chr${CHR}] [$track] simu-mix.pl"
+        perl "$SIMU_MIX" \
+            "$DAT_FILE" "1kg_hgdp.chr${CHR}.snp" "$prefix" \
+            -NAT "${track}${CHR}.phgeno" \
+            -EUR "EUR${CHR}.phgeno" \
+            -AFR "AFR${CHR}.phgeno"
+    fi
+
+    # Archive the realisation. The .bp is the only non-regenerable artefact
+    # here, so it is copied before anything downstream can touch it.
+    cp "${prefix}.bp" "${PROV_DIR}/${prefix}.bp"
+    {
+        echo "prefix=${prefix}"
+        echo "chr=${CHR}"
+        echo "track=${track}"
+        echo "admix_pop=${ADMIX_POP}"
+        echo "gen=${GEN}"
+        echo "simu_seed=${SIMU_SEED:-UNSET}"
+        echo "simu_mix=${SIMU_MIX}"
+        echo "replayed_from=${FROM_BP:-NONE}"
+        echo "dat_md5=$(md5sum "$DAT_FILE" | cut -d' ' -f1)"
+        echo "snp_md5=$(md5sum "1kg_hgdp.chr${CHR}.snp" | cut -d' ' -f1)"
+        echo "bp_md5=$(md5sum "${prefix}.bp" | cut -d' ' -f1)"
+    } > "${PROV_DIR}/${prefix}.provenance.txt"
+    echo "[$(date +%T)] [chr${CHR}] [$track] archived .bp + provenance -> $PROV_DIR"
 
     echo "[$(date +%T)] [chr${CHR}] [$track] bp -> hanc -> hanc2"
     perl "${ADMIXSIMU_DIR}/bp2anc.pl" "${prefix}.bp" > "${prefix}.hanc"
@@ -169,9 +430,22 @@ run_admix_simu () {
     rm "${prefix}.tmp_geno" "${prefix}.tmp_snp"
 
     cp "$SAMPLE_TEMPLATE" "${track}.${ADMIX_POP}.chr${CHR}.sample"
+
+    # The simulated .haps must hold exactly the template's individuals: the
+    # .sample is a copy of the template, not read from the simulation, so a
+    # mismatch here would pair the wrong haplotypes with every ID downstream.
+    local ncol nrow
+    ncol=$(head -1 "${track}.${ADMIX_POP}.chr${CHR}.haps" | awk '{print NF}')
+    nrow=$(awk 'NR > 2 && NF' "${track}.${ADMIX_POP}.chr${CHR}.sample" | wc -l)
+    if [[ "$ncol" -ne $((5 + 2 * nrow)) ]]; then
+        echo "ERROR: [chr${CHR}] [$track] ${track}.${ADMIX_POP}.chr${CHR}.haps has ${ncol} columns;"
+        echo "       5 + 2 x ${nrow} individuals in the .sample = $((5 + 2 * nrow))."
+        exit 1
+    fi
 }
 
-run_admix_simu NAT
-run_admix_simu NATMXB
+for _t in $TRACKS_TO_RUN; do
+    run_admix_simu "$_t"
+done
 
 echo "[$(date +%T)] [chr${CHR}] # Complete. Outputs in $WORKDIR"

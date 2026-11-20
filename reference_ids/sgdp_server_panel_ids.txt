@@ -1,0 +1,45 @@
+# SGDP ids that are 1000 Genomes individuals re-sequenced.
+# Their haplotypes are inside the TOPMed and Michigan
+# reference panels under their NA/HG identifier, so they are
+# NOT donor-eligible even though their cohort reads SGDP.
+S_Ami-1.DG
+S_Ami-2.DG
+S_Atayal-1.DG
+S_Bengali-1.DG
+S_Bengali-2.DG
+S_Czech-2.DG
+S_English-1.DG
+S_English-2.DG
+S_Esan-1.DG
+S_Esan-2.DG
+S_Finnish-1.DG
+S_Finnish-2.DG
+S_Finnish-3.DG
+S_Gambian-1.DG
+S_Gambian-2.DG
+S_Greek-1.DG
+S_Greek-2.DG
+S_Hawaiian-1.DG
+S_Hungarian-1.DG
+S_Hungarian-2.DG
+S_Icelandic-1.DG
+S_Icelandic-2.DG
+S_Japanese-3.DG
+S_Kinh-1.DG
+S_Kinh-2.DG
+S_Korean-2.DG
+S_Luhya-1.DG
+S_Luhya-2.DG
+S_Maori-1.DG
+S_Masai-1.DG
+S_Masai-2.DG
+S_Mende-1.DG
+S_Mende-2.DG
+S_Punjabi-1.DG
+S_Punjabi-2.DG
+S_Punjabi-3.DG
+S_Punjabi-4.DG
+S_Quechua-1.DG
+S_Quechua-2.DG
+S_Spanish-1.DG
+S_Spanish-2.DG

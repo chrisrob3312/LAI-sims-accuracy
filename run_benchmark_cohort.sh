@@ -1,0 +1,460 @@
+#!/usr/bin/env bash
+# ============================================================================
+# run_benchmark_cohort.sh  --  idempotent driver for the benchmark cohort
+#
+# Runs the cohort build from the K=7 Q table to a transfer-ready set. Every
+# stage checks whether its own output is already present AND current before
+# doing anything, so re-running after a failure, a timeout or a fix costs only
+# the stages that still need doing. Nothing is deleted without --force.
+#
+# WHY A DRIVER AND NOT A CHAIN OF sbatch --dependency. The fast stages (split,
+# assemble, report, preflight) take seconds and belong in the foreground where
+# their output can be read before the slow ones are submitted. The slow stages
+# are arrays whose dependencies are genuinely a DAG, not a line: 6b and 6c are
+# independent, 6d and 6e both wait on the pair. A hand-written chain gets that
+# wrong in a way that only shows up hours later.
+#
+# THE PREFLIGHT IS THE POINT. ingest_simset.sh refuses a cohort that breaks its
+# rules, and it runs at the END -- after simulation, chip files and a transfer.
+# Several of those rules are decided at the split and the cell deal, which take
+# seconds. scripts/check-simset-contract.py re-states the ones knowable from
+# the plan and runs them BEFORE anything is submitted.
+#
+# Usage:
+#   ./run_benchmark_cohort.sh                 # do whatever still needs doing
+#   ./run_benchmark_cohort.sh --dry-run       # say what it would do
+#   ./run_benchmark_cohort.sh --from simulate # skip ahead
+#   ./run_benchmark_cohort.sh --only preflight
+#   ./run_benchmark_cohort.sh --force split   # redo one stage
+#   REFS=$S RESULTS=$S ./run_benchmark_cohort.sh --to preflight
+#                       # every number into a scratch folder $S, nothing
+#                       # submitted and nothing in reference_ids/ or results/
+#
+# Stages, in order:
+#   check      4a landed, vocabulary sane, anchors present
+#   split      donor/reference lists, both modes, distinct suffixes
+#   assemble   cohort manifests + chip/build assignment
+#   report     composition + counts
+#   preflight  the intake's rules, before anything is submitted
+#   simulate   6b (22 tasks)   + 6c (22 tasks), independent
+#   cells      6d (22 tasks)   after simulate
+#   kinship    6e (1 job)      after simulate
+#   verify     contract preflight again, now with the built cohort
+# ============================================================================
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The scripts it calls default to reference_ids/... relative paths (server-panel
+# ids, named exclusions, duplicate drops), so run from the repo wherever it was
+# started. Every path below is absolute.
+cd "$REPO_DIR" || exit 1
+PROJECT_ROOT="${PROJECT_ROOT:-/storage/atkinson/home/magyar/Projects/01_REDIAL_Projects/01_LAI_Accuracy_MXBiobank}"
+HOMOG_DIR="${HOMOG_DIR:-${PROJECT_ROOT}/04_homogeneity_panel}"
+K="${K:-7}"
+PANEL_TSV="${PANEL_TSV:-${HOMOG_DIR}/lai_ref_panel_samples.k${K}.tsv}"
+KING_TSV="${KING_TSV:-${HOMOG_DIR}/king/king.kin0}"
+REFS="${REFS:-${REPO_DIR}/reference_ids}"
+RESULTS="${RESULTS:-${REPO_DIR}/results}"
+LAI_SUFFIX="${LAI_SUFFIX:-lai}"
+BENCH_SUFFIX="${BENCH_SUFFIX:-bench}"
+# THE CONTRACT'S DESIGN IS one-cell. Doc 20 rule 3: every group split equally
+# over the 3 chips and, within a chip, half hg19 and half hg38 -- six cells,
+# each person in exactly ONE. Intake check 2.chips enforces it. paired-builds
+# is statistically stronger for the liftover comparison but the intake refuses
+# it, so it is not the default here.
+DESIGN="${DESIGN:-one-cell}"
+# The contract's threshold is FLAT -- one number for every super-pop -- and
+# from 17 Nov it is 0.94, the same number 4a uses for anchors and the
+# homogeneous panel (it was 0.93 against the panel's tiered 0.95/0.93). Intake
+# 2.real_samples compares sample_type against top_fraction at this one number
+# (Doc 20, donors.tsv and real_samples.tsv; plan_simset.R --threshold), so the
+# Nextflow side must read 0.94 too.
+FLAT_THRESHOLD="${FLAT_THRESHOLD:-0.94}"
+# Reference-only groups: a reference panel, NO simulation donors, and every
+# other homogeneous genome left for the test pool. OCE: no model draws on it.
+# SAS (18 Nov): ~10 homogeneous non-1KG genomes are too few to simulate a
+# truth set from, so models.tsv has no SAS model and SAS is read from REAL
+# genomes instead -- those ~10 as real_homogeneous test genomes beside the many
+# admixed SAS ones. Its reference is 1000 Genomes only. Revisit when the
+# DUA-gated SAS data arrive.
+NO_DONOR_SUPERPOPS="${NO_DONOR_SUPERPOPS:-OCE,SAS}"
+# The pool the benchmark splits: 4a's `homogeneous` flag (18 Nov). `included`
+# is the LAI project's panel, which leaves out ITS simulation donors and their
+# relatives -- a rule of the other project, not of this one.
+BENCH_POOL_COLUMN="${BENCH_POOL_COLUMN:-homogeneous}"
+# Real homogeneous TEST genomes taken back from the donors (18 Nov). With every
+# homogeneous genome outside 1KG a donor, the K=7 split left ~27 homogeneous
+# test genomes in all (OCE 15, SAS 10, EAS 1, EUR 1). AFR (97 donors) and EAS
+# (128) spare 15 each at little cost; EUR's 42 donors are the thinnest pool
+# most models draw on, so 10 (LAT3's EUR reuse 3.2x -> ~4.2x). Stratified over
+# populations, never leaving one under 3 donors or the super-pop under the
+# donor floor, and only genomes with no relative in the pool.
+TEST_HOLDOUT="${TEST_HOLDOUT:-AFR=15,EAS=15,EUR=10}"
+# The contract's reference share: AFR/EUR/EAS/SAS take their reference from
+# 1000 Genomes ONLY (spread over the 1KG populations, not the first IDs), NAT
+# adds half the MXB, MEN half its pool (0.33 until 18 Nov, which left MEN an
+# 18-genome reference of 59). 1KG can never BE a donor, so spending non-1KG
+# samples on a role 1KG already fills wastes the only donor-eligible material
+# there is -- the EUR and SAS donor pools are the thin ones.
+REF_SHARE="${REF_SHARE:-default=0,NAT@MXB=0.5,MEN=0.5}"
+# The smallest reference panel for a group whose reference comes from its own
+# pool (MEN; NAT if 1KG cannot cover it): 25, when the pool allows it with the
+# donor floor kept -- never past half a pool under 50. Same rule and number as
+# plan_simset.R --ref-min on the Nextflow side. Not applied to OCE (reference
+# only: its remainder is the test pool).
+REF_MIN="${REF_MIN:-25}"
+# ...but 1000 Genomes carries none of the deeply divergent lineages the other
+# sources do (no Biaka/Mbuti/San/Mandenka in AFR, no Basque/Sardinian/Orcadian
+# in EUR, none of the HGDP minority populations in EAS). A donor haplotype
+# whose ancestry no reference covers measures the panel's gap, not the method.
+# 3 per population anchors each lineage -- but never by taking a super-pop's
+# donors below the donor floor (15), where donors are scarcer than coverage is
+# worth. 0 is the strict contract reading. Coverage is counted on
+# ANCESTRY GROUPS (reference_ids/population_aliases.tsv), not raw labels, so
+# HGDP Yoruba is not reported as a gap when 1000 Genomes YRI is in the panel.
+# Per super-pop since 18 Nov: EUR=0 keeps EUR's few non-1KG genomes as donors
+# (with 3 the K=8 preview moved 3 of 18 to the reference, leaving exactly 15).
+# The split still prints which EUR lineages the reference then lacks, under
+# "decided already", for the methods. A super-pop named here is a decision,
+# so its gaps do not fail the step; 'default' ones still do.
+REF_MIN_PER_POP="${REF_MIN_PER_POP:-default=3,EUR=0}"
+# The model table. Sizes are an experimental-design decision that gets
+# revisited, so they live in a file rather than in the assembler's code.
+# LAT3 is 300 there, not the contract table's 600: NAT N_eff saturates on the
+# DONOR pool (about 31.6 at n=200, 35.3 at 300, 39.9 at 600 with 46 donors),
+# so the extra 400 individuals spend 19% of the imputation budget for roughly
+# 8 effective genomes. More donors lift the whole curve; more people do not.
+MODELS_TSV="${MODELS_TSV:-${REPO_DIR}/reference_ids/models.tsv}"
+
+DRY=0; FROM=""; ONLY=""; FORCE=""; TO=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) DRY=1; shift ;;
+        --from)    FROM="$2"; shift 2 ;;
+        --to)      TO="$2"; shift 2 ;;
+        --only)    ONLY="$2"; shift 2 ;;
+        --force)   FORCE="$2"; shift 2 ;;
+        -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+STAGES=(check split assemble report preflight simulate cells kinship verify)
+for _st in "$FROM" "$TO" "$ONLY"; do
+    [[ -z "$_st" || " ${STAGES[*]} " == *" ${_st} "* ]] || {
+        echo "unknown stage '${_st}' (stages: ${STAGES[*]})" >&2; exit 2; }
+done
+want () {   # should this stage run at all?
+    local s="$1"
+    [[ -n "$ONLY" ]] && { [[ "$ONLY" == "$s" ]] && return 0 || return 1; }
+    if [[ -n "$FROM" ]]; then
+        local seen=0
+        for x in "${STAGES[@]}"; do
+            [[ "$x" == "$FROM" ]] && seen=1
+            [[ "$x" == "$s" ]] && { [[ "$seen" == 1 ]] || return 1; break; }
+        done
+    fi
+    # --to STAGE: stop after it. With REFS and RESULTS pointed at a scratch
+    # folder, `--to preflight` prints every number (split, real test genomes,
+    # simulated roster, intake rules) and submits nothing.
+    if [[ -n "$TO" ]]; then
+        local x
+        for x in "${STAGES[@]}"; do
+            [[ "$x" == "$s" ]] && return 0
+            [[ "$x" == "$TO" ]] && return 1
+        done
+    fi
+    return 0
+}
+forced () { [[ "$FORCE" == "$1" ]]; }
+# stale <out> <inputs...>: true when <out> is missing or older than any input.
+# Every skip below asks "present AND current" (19 Nov): presence alone let a
+# split made from an older 4a table, or a roster from older lists, be reused.
+stale () { local o="$1" f; shift; [[ -e "$o" ]] || return 0
+           for f in "$@"; do [[ -e "$f" && "$f" -nt "$o" ]] && return 0; done; return 1; }
+say  () { printf '[%s] %s\n' "$(date +%T)" "$*"; }
+head_ () { printf '\n==== %-12s %s\n' "$1" "$2"; }
+run  () {
+    if [[ "$DRY" == 1 ]]; then printf '      WOULD RUN: %s\n' "$*"; return 0; fi
+    "$@"
+}
+
+mkdir -p "$RESULTS"
+FAILED=0
+
+# ---------------------------------------------------------------------------
+# check -- is 4a actually done, and is its output usable
+# ---------------------------------------------------------------------------
+if want check; then
+    head_ check "4a output"
+    if [[ ! -s "$PANEL_TSV" ]]; then
+        say "MISSING: $PANEL_TSV"
+        say "4a has not finished. Nothing downstream can run."
+        exit 1
+    fi
+    N_ROWS=$(( $(wc -l < "$PANEL_TSV") - 1 ))
+    N_INCL=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++) if($i=="included") c=i; next} $c==1' "$PANEL_TSV" | wc -l)
+    if head -1 "$PANEL_TSV" | tr '\t' '\n' | grep -qx "$BENCH_POOL_COLUMN"; then
+        N_POOL=$(awk -F'\t' -v col="$BENCH_POOL_COLUMN" 'NR==1{for(i=1;i<=NF;i++) if($i==col) c=i; next} $c==1' "$PANEL_TSV" | wc -l)
+        say "benchmark pool (${BENCH_POOL_COLUMN}=1): ${N_POOL}; LAI panel (included=1): ${N_INCL}"
+    else
+        say "WARNING: ${PANEL_TSV} has no '${BENCH_POOL_COLUMN}' column (a table from before"
+        say "         18 Nov). The benchmark split will stop; rerun 4a, or set"
+        say "         BENCH_POOL_COLUMN=included to split the old pool (LAI donors held out)."
+    fi
+    N_ANCHOR=$(awk -F'\t' 'NR==1{for(i=1;i<=NF;i++) if($i=="assigned") c=i; next}
+                           c && $c!="" && $c!="-" && $c!="NA" && $c!="."' "$PANEL_TSV" | wc -l)
+    N_CHMI=$(grep -c CHMI "$PANEL_TSV" || true)
+    say "panel table: ${N_ROWS} rows, ${N_INCL} included, ${N_ANCHOR} anchors"
+    [[ "$N_CHMI" -eq 0 ]] || { say "WARNING: ${N_CHMI} CHMI row(s) still present"; }
+    if [[ "$N_ANCHOR" -eq 0 ]]; then
+        say "WARNING: the 'assigned' column is empty -- 4a's .pop prior was not"
+        say "         written, so no Q in this table is a supervised estimate."
+    fi
+    if [[ -s "${HOMOG_DIR}/anchor_summary.k${K}.tsv" ]]; then
+        THIN=$(awk -F'\t' 'NR>1 && $5==1 {printf " %s(%d)", $1, $2}' \
+               "${HOMOG_DIR}/anchor_summary.k${K}.tsv")
+        [[ -n "$THIN" ]] && say "THIN ANCHOR SETS:${THIN} -- see anchor_summary"
+    fi
+    if [[ ! -s "$KING_TSV" ]]; then
+        say "WARNING: no KING table at ${KING_TSV}."
+        say "         The split cannot group relatives, and the intake's"
+        say "         cross-role rule (kinship >= 0.177 in two roles) fails"
+        say "         only AFTER the whole build. Run 1e first."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# split -- both modes, DISTINCT suffixes
+# ---------------------------------------------------------------------------
+if want split; then
+    head_ split "donor / reference lists"
+    SPLITTER="${REPO_DIR}/scripts/split-homog-donors-reference.py"
+    # The lists are current only if they were written from THIS table and
+    # KING file with THESE settings: a stamp records both, and a split is
+    # redone when it differs (a new 4a run, a changed holdout or share).
+    SPLIT_STAMP="${REFS}/.split_${LAI_SUFFIX}_${BENCH_SUFFIX}.stamp"
+    SPLIT_RECIPE="panel=${PANEL_TSV}:$(stat -c %Y "$PANEL_TSV" 2>/dev/null) king=${KING_TSV}:$(stat -c %Y "$KING_TSV" 2>/dev/null) pool=${BENCH_POOL_COLUMN} nodonor=${NO_DONOR_SUPERPOPS} share=${REF_SHARE} refmin=${REF_MIN} perpop=${REF_MIN_PER_POP} holdout=${TEST_HOLDOUT}"
+    need_split=0
+    for sfx in "$LAI_SUFFIX" "$BENCH_SUFFIX"; do
+        ls "${REFS}"/*_reference_"${sfx}".txt >/dev/null 2>&1 || need_split=1
+    done
+    if [[ "$need_split" == 0 && "$(cat "$SPLIT_STAMP" 2>/dev/null)" != "$SPLIT_RECIPE" ]]; then
+        say "lists present but not from this table / these settings (stamp ${SPLIT_STAMP}) -- redoing"
+        need_split=1
+    fi
+    forced split && need_split=1
+    if [[ "$need_split" == 0 ]]; then
+        say "present and current for suffixes '${LAI_SUFFIX}' and '${BENCH_SUFFIX}', skipping"
+    else
+        _split_t0="${REFS}/.split_started"; [[ "$DRY" == 1 ]] || touch "$_split_t0"
+        REL=(); [[ -s "$KING_TSV" ]] && REL=(--relatedness "$KING_TSV")
+        run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
+            --mode lai --suffix "$LAI_SUFFIX" "${REL[@]}" || FAILED=1
+        run python3 -I "$SPLITTER" --panel "$PANEL_TSV" --out "$REFS" \
+            --mode benchmark --suffix "$BENCH_SUFFIX" --pool-column "$BENCH_POOL_COLUMN" \
+            --test-holdout "$TEST_HOLDOUT" \
+            --no-donor-superpops "$NO_DONOR_SUPERPOPS" \
+            --ref-share "$REF_SHARE" --ref-min "$REF_MIN" --ref-min-per-pop "$REF_MIN_PER_POP" \
+            --pop-aliases "${REPO_DIR}/reference_ids/population_aliases.tsv" \
+            "${REL[@]}" || FAILED=1
+        # Stamp only when both modes really rewrote their lists (a crash
+        # before writing leaves the old lists, which must not pass as current).
+        if [[ "$DRY" != 1 ]]; then
+            _old=$(find "$REFS" -maxdepth 1 \( -name "*_reference_${LAI_SUFFIX}.txt" -o -name "*_reference_${BENCH_SUFFIX}.txt" \) ! -newer "$_split_t0" | wc -l)
+            if [[ "$_old" -eq 0 ]]; then echo "$SPLIT_RECIPE" > "$SPLIT_STAMP"
+            else say "WARNING: ${_old} list(s) were not rewritten -- not stamping"; FAILED=1; fi
+            rm -f "$_split_t0"
+        fi
+    fi
+    # The two suffixes MUST differ: both modes write the same filenames, so a
+    # shared suffix means the second silently overwrote the first.
+    if [[ "$LAI_SUFFIX" == "$BENCH_SUFFIX" ]]; then
+        say "FATAL: LAI_SUFFIX and BENCH_SUFFIX are both '${LAI_SUFFIX}'."
+        say "       The second split would overwrite the first with nothing"
+        say "       in the filename to say which policy produced it."
+        exit 1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# assemble -- cohort manifests
+# ---------------------------------------------------------------------------
+MAN="${RESULTS}/benchmark_cohort_manifest.tsv"
+IND="${RESULTS}/benchmark_cohort_simset_individuals.tsv"
+if want assemble; then
+    head_ assemble "cohort manifests (design=${DESIGN})"
+    ASM_IN=("$PANEL_TSV" "$MODELS_TSV" "${REFS}"/*_reference_"${BENCH_SUFFIX}".txt "${REFS}"/*_simulation_"${BENCH_SUFFIX}".txt)
+    if [[ -s "$MAN" && -s "$IND" ]] && ! forced assemble \
+       && ! stale "$MAN" "${ASM_IN[@]}" && ! stale "$IND" "${ASM_IN[@]}"; then
+        say "present ($(( $(wc -l < "$MAN") - 1 )) real, $(( $(wc -l < "$IND") - 1 )) simulated), skipping"
+    else
+        run python3 -I "${REPO_DIR}/scripts/assemble-benchmark-cohort.py" \
+            --panel "$PANEL_TSV" --refs "$REFS" --suffix "$BENCH_SUFFIX" \
+            --design "$DESIGN" --flat-threshold "$FLAT_THRESHOLD" \
+            --models "$MODELS_TSV" \
+            --out "${RESULTS}/benchmark_cohort" || FAILED=1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# report -- composition
+# ---------------------------------------------------------------------------
+if want report; then
+    head_ report "composition"
+    COMP="${RESULTS}/cohort_composition.txt"
+    if [[ -s "$COMP" ]] && ! forced report && ! stale "$COMP" "$MAN" "$IND" "$MODELS_TSV"; then
+        say "present, skipping"
+    else
+        # --models: without it the report described the built-in Table 1
+        # (LAT3 600, SAS models) rather than the model table actually built.
+        run python3 -I "${REPO_DIR}/scripts/cohort-composition-report.py" \
+            --panel "$PANEL_TSV" --refs "$REFS" --suffix "$BENCH_SUFFIX" \
+            --models "$MODELS_TSV" --out "$COMP" || FAILED=1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# preflight -- the intake's rules, BEFORE anything is submitted
+# ---------------------------------------------------------------------------
+if want preflight; then
+    head_ preflight "ingest_simset.sh rules"
+    PF=("${REPO_DIR}/scripts/check-simset-contract.py"
+        --manifest "$MAN" --individuals "$IND"
+        --refs "$REFS" --suffix "$BENCH_SUFFIX"
+        --threshold "$FLAT_THRESHOLD" --panel "$PANEL_TSV")
+    [[ -s "$KING_TSV" ]] && PF+=(--king "$KING_TSV")
+    if [[ "$DRY" == 1 ]]; then
+        printf '      WOULD RUN: python3 -I %s ...\n' "${PF[0]}"
+    else
+        if ! python3 -I "${PF[@]}"; then
+            say ""
+            say "PREFLIGHT FAILED -- not submitting anything."
+            say "Every rule above is decided at the split or the cell deal,"
+            say "which take seconds. The intake runs after simulation, chip"
+            say "files and a transfer, so fixing it now is the cheap moment."
+            exit 1
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# simulate -- 6b and 6c, independent of each other
+# ---------------------------------------------------------------------------
+SIMSET_DIR="${SIMSET_DIR:-${PROJECT_ROOT}/06_benchmark_simset}"
+REAL_DIR="${REAL_DIR:-${PROJECT_ROOT}/07_benchmark_real}"
+JOB_6B=""; JOB_6C=""
+sub () {   # sub <script> [extra sbatch args...] -> prints the job id
+    local script="$1"; shift
+    if [[ "$DRY" == 1 ]]; then printf 'DRYRUN'; return 0; fi
+    sbatch --parsable "$@" "$script" 2>/dev/null
+}
+n_done () { ls "$1" 2>/dev/null | grep -c . || true; }
+
+if want simulate; then
+    head_ simulate "6b simulate + 6c real genomes"
+    N_SIM_CHR=$(ls -d "${SIMSET_DIR}"/chr* 2>/dev/null | wc -l)
+    # A simset or real set older than the roster/manifest was built for an
+    # earlier cohort: refuse rather than skip, and never write into it.
+    if [[ "$N_SIM_CHR" -gt 0 ]] && ! forced simulate && stale "${SIMSET_DIR}/chr1" "$IND"; then
+        say "6b: STALE -- ${SIMSET_DIR} predates the current roster (${IND})."
+        say "    Move it aside first (mv ${SIMSET_DIR} ${SIMSET_DIR}.old_\$(date +%Y%m%d)), then re-run."
+        exit 1
+    fi
+    N_REAL_ANY=$(n_done "${REAL_DIR}/benchmark_real.chr*.bcf")
+    if [[ "$N_REAL_ANY" -gt 0 ]] && ! forced simulate && stale "${REAL_DIR}/benchmark_real.chr1.bcf" "$MAN"; then
+        say "6c: STALE -- ${REAL_DIR} predates the current manifest (${MAN})."
+        say "    Move it aside first (mv ${REAL_DIR} ${REAL_DIR}.old_\$(date +%Y%m%d)), then re-run."
+        exit 1
+    fi
+    if [[ "$N_SIM_CHR" -ge 22 ]] && ! forced simulate; then
+        say "6b: ${N_SIM_CHR} chromosome dirs present and current, skipping"
+    else
+        say "6b: ${N_SIM_CHR}/22 chromosomes present -- submitting"
+        JOB_6B=$(sub "${REPO_DIR}/6b_simulate_benchmark_cohort_clm.sh")
+        say "6b: job ${JOB_6B}"
+    fi
+    N_REAL=$(n_done "${REAL_DIR}/benchmark_real.chr*.bcf")
+    if [[ "$N_REAL" -ge 22 ]] && ! forced simulate; then
+        say "6c: ${N_REAL} BCFs present, skipping"
+    else
+        say "6c: ${N_REAL}/22 BCFs present -- submitting"
+        JOB_6C=$(sub "${REPO_DIR}/6c_extract_real_test_genomes_clm.sh")
+        say "6c: job ${JOB_6C}"
+    fi
+fi
+
+# dependency string for the stages that need BOTH
+DEP=""
+for j in $JOB_6B $JOB_6C; do
+    [[ "$j" == "DRYRUN" || -z "$j" ]] && continue
+    DEP="${DEP}${DEP:+:}${j}"
+done
+DEPARG=(); [[ -n "$DEP" ]] && DEPARG=(--dependency="afterok:${DEP}")
+
+# ---------------------------------------------------------------------------
+# cells -- 6d, after both halves exist
+# ---------------------------------------------------------------------------
+if want cells; then
+    head_ cells "6d chip x build x chr"
+    CELLS_DIR="${CELLS_DIR:-${PROJECT_ROOT}/08_chip_cells}"
+    N_CELLS=$(n_done "${CELLS_DIR}/benchmark.*.bcf")
+    if [[ "$N_CELLS" -gt 0 ]] && ! forced cells; then
+        say "${N_CELLS} cell file(s) present, skipping"
+    else
+        JOB_6D=$(sub "${REPO_DIR}/6d_write_chip_cells_clm.sh" "${DEPARG[@]}")
+        say "6d: job ${JOB_6D}${DEP:+ (after ${DEP})}"
+        say "    only chips with a site list produce output; the rest skip"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# kinship -- 6e, parallel to 6d
+# ---------------------------------------------------------------------------
+if want kinship; then
+    head_ kinship "6e genome-wide kinship"
+    KOUT="${PROJECT_ROOT}/09_cohort_kinship/cohort_king.kin0"
+    if [[ -s "$KOUT" ]] && ! forced kinship; then
+        say "present, skipping"
+    else
+        JOB_6E=$(sub "${REPO_DIR}/6e_cohort_kinship_clm.sh" "${DEPARG[@]}")
+        say "6e: job ${JOB_6E}${DEP:+ (after ${DEP})}"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# verify -- the preflight again, now against the built cohort
+# ---------------------------------------------------------------------------
+if want verify; then
+    head_ verify "post-build checks"
+    KOUT="${PROJECT_ROOT}/09_cohort_kinship/cohort_king.kin0"
+    if [[ ! -s "$KOUT" ]]; then
+        say "6e has not produced a kinship table yet -- re-run this stage"
+        say "once it has: ./run_benchmark_cohort.sh --only verify"
+    else
+        run python3 -I "${REPO_DIR}/scripts/check-simset-contract.py" \
+            --manifest "$MAN" --individuals "$IND" --refs "$REFS" \
+            --suffix "$BENCH_SUFFIX" --threshold "$FLAT_THRESHOLD" \
+            --king "$KOUT" --panel "$PANEL_TSV" || FAILED=1
+        run python3 -I "${REPO_DIR}/scripts/cohort-power-summary.py" \
+            --kinship "$KOUT" --manifest "$MAN" --individuals "$IND" \
+            --out "${RESULTS}/cohort_power_summary.txt" || true
+    fi
+fi
+
+echo ""
+echo "===================================================================="
+if [[ "$DRY" == 1 ]]; then
+    echo " dry run -- nothing was submitted or written"
+elif [[ "$FAILED" == 1 ]]; then
+    echo " FINISHED WITH ERRORS -- read the stages above"
+else
+    echo " ok"
+fi
+echo " re-run this script at any point; finished stages are skipped."
+echo " transfer when the cohort is built:"
+echo "   ./6a_transfer_to_mab_clm.sh verify"
+echo "   ./6a_transfer_to_mab_clm.sh benchmark"
+echo "===================================================================="
+[[ "$FAILED" == 1 ]] && exit 1
+exit 0
