@@ -285,6 +285,27 @@ That also makes §5's SAS options decidable: accepting the reuse is defensible
 *provided* the reuse is reported and the power calculation uses
 $N_{\text{eff}}$. It is now reportable.
 
+**How related, at the 18 Nov donor counts (20 Nov).** Reuse is not kinship:
+simu-mix gives every breakpoint a fresh donor haplotype and never lets two
+haplotypes of one run copy the same donor at a marker, so two simulated
+individuals from different runs have expected kinship
+$\sum_P p_P^2 / (2 \times \text{donors}_P)$ and two from one run share
+nothing. A Monte Carlo of the two programs' code found **no MENEUR or EASEUR
+pair at 3rd degree** (closest 0.042 and 0.029; KING's 3rd-degree bin starts at
+0.0442), so the two-generation models stay. The gen-0 controls are the
+related ones, because each chromosome comes whole from a small pool: EUR1
+(32 donors) put 59 of 1,770 pairs at 3rd degree, MEN1 (39) 33, none at 2nd.
+The GRM models that; it is reported, not pruned.
+
+**Batch size (20 Nov).** simu-mix dies when every donor haplotype of a
+component is in use at a marker. 6b used to size each run so the AVERAGE use
+was 80% of the pool; the use at a marker is binomial and varies along the
+chromosome, so it crossed 100% on most chromosomes (the same Monte Carlo: a
+chromosome task died ~90% of the time for LAT3, ~78% CAR3, ~67% MENA3, ~15%
+MENEUR/EASEUR). Each run is now sized so the mean sits 5 SD below the pool
+(`FEAS_Z=5`): LAT3 44 per run, CAR3/MENEUR/EASEUR 40, MENA3 51, AFAM2 85 —
+0 deaths in 4,400 chromosome runs per model.
+
 The real half still contributes what simulation cannot — real LD structure,
 real allele-frequency spectrum, real rare variation — so it is not
 interchangeable with more simulated individuals even though both are used.
@@ -370,7 +391,9 @@ OCE in the cohort was meant to close. The reference-only path uses the same
 `plan_sizes` policy as a split group with no donor floor, so ~20 OCE gives
 15 reference / 5 test. That is thin either way and should be reported as a
 limitation rather than smoothed over: the OCE imputation reading rests on a
-handful of genomes.
+handful of genomes. (K=7, 18 Nov: 30 homogeneous OCE, about 15 / 15. The
+reference takes whole relative clusters since 20 Nov, so it can land a
+genome or two under 15.)
 
 **Real homogeneous test genomes (18 Nov).** Donor-first left the real half
 ~96% admixed (~27 homogeneous: OCE 15, SAS 10, EAS 1, EUR 1). The split now

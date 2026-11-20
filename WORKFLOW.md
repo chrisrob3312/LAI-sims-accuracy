@@ -851,7 +851,11 @@ vocabularies don't overlap.
   donors**, remainder left *unallocated* so the assembler takes it as test
   genomes. The reference is filled from 1000 Genomes first (spread over its
   populations, skipping a 1KG sample related to a test-bound genome) and from
-  the other sources only for what 1KG cannot cover. OCE has no 1KG population
+  the other sources only for what 1KG cannot cover — by whole relative
+  clusters (20 Nov: the stratified pick had put HGDP00490 in the OCE
+  reference and its first-degree relative HGDP00662, KING 0.251, in the test
+  pool, and the preflight refused it), and never a genome whose relative is
+  outside the pool (an admixed relative is a test genome). OCE has no 1KG population
   and no model: **~15 reference + ~5 real test, 0 donors**. SAS has ~10
   homogeneous genomes outside 1KG, too few to simulate a truth set from, so
   `reference_ids/models.tsv` has no SAS model and SAS is **65 1KG reference,
@@ -883,6 +887,20 @@ vocabularies don't overlap.
   K=7: AFR 97 → 82 and EAS 128 → 113 donors (little), EUR 42 → 32 (LAT3's EUR
   reuse 3.2× → ~4.2×; the two-generation models' 2.4× → ~3.1×). The Nextflow
   planner's `--holdout` is the same idea on that side.
+
+  **What that reuse costs in relatedness (20 Nov).** Reuse is not kinship.
+  simu-mix gives every breakpoint a fresh donor haplotype and never lets two
+  haplotypes of one run copy the same donor at a marker; the gen-0 controls
+  take each chromosome's pair independently. So two simulated individuals
+  from different runs have expected kinship Σ p²/(2 × donors) and two in one
+  run share nothing. A Monte Carlo of mixer + simu-mix's own code at these
+  donor counts: MENEUR (gen 2) mean 0.005, closest pair 0.042, **no pair at
+  3rd degree** (KING 0.0442); EASEUR mean 0.004, closest 0.029; the gen-0
+  controls are the related ones — EUR1 (32 donors) 59 of 1,770 pairs and
+  MEN1 (39) 33 at 3rd degree, none at 2nd. The two-generation models stay;
+  `cohort-composition-report.py` §3 prints the expected kinship per model
+  (it used to tag gen-2 models HIGH from reuse × generations). 6e measures
+  the realised values.
 
 ### Fill order: 1000 Genomes first
 

@@ -829,7 +829,8 @@ def main():
         w("      to return them to the test pool.")
         w("")
     w("=" * 72)
-    w(" NEXT: step 6  6b_simulate_benchmark_cohort_clm.sh  (the 2,160)")
+    w(f" NEXT: step 6  6b_simulate_benchmark_cohort_clm.sh  "
+      f"(the {sum(m[4] for m in MODELS):,} simulated)")
     w("       step 7  6c_extract_real_test_genomes_clm.sh (the real half)")
     w("       transfer 6a_transfer_to_mab_clm.sh benchmark")
     w("       step 10 6d_write_chip_cells_clm.sh           (chip x build cells)")

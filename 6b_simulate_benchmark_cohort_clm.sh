@@ -275,9 +275,25 @@ echo "[$(date +%T)] [${CHR}] ${N_SITES} sites"
 # its ~30-donor pools, while Table 1's sizes (LAT3 600, the rest 200) were set
 # from the experimental design without reference to donor-pool size.
 #
+# HOW MUCH HEADROOM (20 Nov). Until then a batch filled 80% of the pool ON
+# AVERAGE (FEAS_MARGIN=0.80). The count at a marker is binomial -- `mixer`
+# samples the output haplotypes from a population of max(10000, 20N), so
+# they are independent -- and along a chromosome it takes many independent
+# values, so an average at 80% crosses 100% somewhere on most chromosomes. A
+# Monte Carlo of the two programs' code (mixer's pulse + random mating;
+# simu-mix's draw without reuse within a run) at the 18 Nov donor counts had
+# a chromosome task DIE on ~90% of chromosomes for LAT3, ~78% CAR3, ~67%
+# MENA3 and ~15% MENEUR/EASEUR. Now the mean sits FEAS_Z standard deviations
+# below the pool, minus the one haplotype a same-pop breakpoint may not
+# re-take:  2np + z*sqrt(2np(1-p)) <= 2*donors - 1  for every component.
+# At z=5: 0 deaths in 4,400 chromosome runs per model, for one or two more
+# batches per model. More batches cost no extra relatedness per pair:
+# two individuals in different batches share donor segments at the same
+# rate however many batches there are.
+#
 # Checked HERE, before any extraction, because the alternative is discovering
 # it hours in, on the primary model, after the haplotypes are built.
-FEAS_MARGIN="${FEAS_MARGIN:-0.80}"
+FEAS_Z="${FEAS_Z:-5}"
 feasible_batch () {   # <components csv> <proportions csv> -> max n per batch
     local comps="$1" props="$2" c p i=0 best=0 n_hap
     local -a ca pa
@@ -290,9 +306,14 @@ feasible_batch () {   # <components csv> <proportions csv> -> max n per batch
         local keep="${REFS}/${pool}_simulation_${BENCH_SUFFIX}.txt"
         local n_don; n_don=$(awk 'NF && $1 !~ /^#/' "$keep" 2>/dev/null | wc -l)
         n_hap=$(( n_don * 2 ))
-        # n such that 2*n*p <= margin * n_hap
-        local cap; cap=$(awk -v h="$n_hap" -v p="$p" -v m="$FEAS_MARGIN" \
-                         'BEGIN{v=int(m*h/(2*p)); print (v<1)?1:v}')
+        # largest n with 2np + z*sqrt(2np(1-p)) <= n_hap - 1, solved for
+        # x = sqrt(n):  2p x^2 + z*sqrt(2p(1-p)) x - (n_hap - 1) <= 0
+        local cap; cap=$(awk -v h="$n_hap" -v p="$p" -v z="$FEAS_Z" 'BEGIN{
+            if (p >= 1) { v = int((h - 1) / 2) }
+            else { b = z * sqrt(2 * p * (1 - p))
+                   x = (-b + sqrt(b * b + 8 * p * (h - 1))) / (4 * p)
+                   v = int(x * x) }
+            print (v < 1) ? 1 : v }')
         if [[ "$best" -eq 0 || "$cap" -lt "$best" ]]; then best="$cap"; fi
     done
     echo "$best"

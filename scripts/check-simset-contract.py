@@ -291,8 +291,10 @@ def main():
                     + "; ".join(f"{x}({r1})/{y}({r2}) {k:.3f}"
                                 for x, y, k, r1, r2 in cross[:3])
                     + ". The split must keep a first-degree relative CLUSTER "
-                      "inside one role: re-run the splitter with "
-                      "--relatedness <king.kin0>.")
+                      "inside one role: it does so with --relatedness "
+                      "<king.kin0>, which run_benchmark_cohort.sh passes when "
+                      "1e's KING table exists. If the split had it, the split "
+                      "missed this pair -- report it.")
     else:
         warns.append("7.identity / 7.roles: no --king given. These are the "
                      "rules that fail after the whole build, so check them.")

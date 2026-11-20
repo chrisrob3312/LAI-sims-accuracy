@@ -579,6 +579,12 @@ def main():
         _members[find(_s)].add(_s)
     def has_pool_relative(x):
         return x in parent and any(m != x and m in pool_ids for m in _members[find(x)])
+    # A relative OUTSIDE the pool is a genome this split never places: an
+    # admixed relative, which the assembler makes a test genome when it is
+    # outside 1KG. Used by the reference-only branch, where not-reference
+    # means test.
+    def has_outside_relative(x):
+        return x in parent and any(m not in pool_ids for m in _members[find(x)])
     held_report = []
 
     # label -> ancestry group. Labels with no row are their own group, so an
@@ -752,14 +758,41 @@ def main():
             by_pop_nk = defaultdict(list)
             for r in nonkg:
                 by_pop_nk[r["pop"].strip() or "NA"].append(r["sample"])
-            ref_nk, rest = (allocate_stratified(by_pop_nk, n_ref_only - len(ref_kg))
-                            if n_ref_only > len(ref_kg) and nonkg_ids
-                            else ([], sorted(nonkg_ids)))
+            k_nk = n_ref_only - len(ref_kg)
+            n_kept_out = 0
+            if k_nk <= 0 or not nonkg_ids:
+                ref_nk, rest = [], sorted(nonkg_ids)
+            elif args.relatedness:
+                # RELATIVES STAY ON ONE SIDE HERE TOO. What the reference does
+                # not take is the TEST pool, so a relative cluster split in two
+                # is a reference/test pair -- the cross-role rule the intake
+                # refuses. Until 20 Nov this branch used allocate_stratified,
+                # which knows nothing of relatives: it put HGDP00490 in the OCE
+                # reference and its first-degree relative HGDP00662 (KING 0.251)
+                # in the test pool, and the preflight stopped the build. Whole
+                # clusters now go one way, as in the split branch; a cluster
+                # with a member outside the pool (an admixed relative, itself a
+                # test genome) is not offered to the reference at all.
+                inside, kept_out = defaultdict(list), []
+                for pop, ids in by_pop_nk.items():
+                    for x in ids:
+                        if has_outside_relative(x):
+                            kept_out.append(x)
+                        else:
+                            inside[pop].append(x)
+                n_kept_out = len(kept_out)
+                ref_nk, rest = (allocate_clustered(inside, k_nk, find)
+                                if inside else ([], []))
+                rest = sorted(rest + kept_out)
+            else:
+                ref_nk, rest = allocate_stratified(by_pop_nk, k_nk)
             ref = sorted(ref_kg + ref_nk)
             print(f"{sp:>9} {n:>6} {'ref-only':>12} {len(ref):>6} {0:>7} "
                   f"{0:>5.0f}%  no model draws on {sp}: 0 donors; ref = "
                   f"{len(ref_nk)} non-1000G + {len(ref_kg)} 1000G; "
-                  f"{len(rest)} non-1000G left for the test pool")
+                  f"{len(rest)} non-1000G left for the test pool"
+                  + (f" ({n_kept_out} with a relative outside the pool, kept "
+                     f"with it)" if n_kept_out else ""))
             written.append((sp, ref, []))
             continue
 

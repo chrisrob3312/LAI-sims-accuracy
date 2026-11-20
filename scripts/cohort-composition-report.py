@@ -12,15 +12,20 @@ record the methods section is written from, and most of what it holds cannot
 be reconstructed later (the drop lists get overwritten, the counts move every
 time a threshold changes).
 
-WHY DONOR REUSE IS COMPUTED HERE AND NOT GUESSED. The number of distinct donor
-haplotypes bounds how many independent individuals can be simulated before
-they become cryptic relatives of each other. Reuse alone does not say how bad
-that is: it interacts with GENERATIONS. At gen 2 a haplotype carries ~70 long
-segments, so two individuals drawing on the same donor share long tracts; at
-gen 16 it carries ~560 short ones and the same reuse fragments into near
-independence. So the report prints reuse AND generations AND a severity that
-accounts for both, rather than a ratio that looks alarming for LAT3 and
-harmless for SASEUR when the truth is the reverse.
+WHY RELATEDNESS IS COMPUTED HERE AND NOT GUESSED. A finite donor pool makes
+simulated individuals cryptic relatives of each other, and reuse (draws per
+donor haplotype) does not say how much. What does is how 6b draws: simu-mix
+gives every breakpoint a fresh donor haplotype and never lets two haplotypes
+of one run copy the same donor at a marker, and the gen-0 controls take each
+chromosome's two haplotypes independently from the pool. So two individuals
+in DIFFERENT runs copy the same donor haplotype at a marker with probability
+sum_P p_P^2 / (2 x donors_P), which IS their expected kinship, and two in the
+same run share nothing. Until 20 Nov this report tagged gen-2 models HIGH
+from reuse x generations; a Monte Carlo of the two programs' code (mixer's
+pulse and random mating, simu-mix's draw rule) at the 18 Nov donor counts
+found no MENEUR or EASEUR pair at 3rd degree (closest 0.04), while EUR1 and
+MEN1 -- the gen-0 controls on 32 and 39 donors -- put 2-3% of pairs there,
+and none anywhere reached 2nd degree. The tag is calibrated on that run.
 
 Usage:
   python3 -I scripts/cohort-composition-report.py \\
@@ -56,41 +61,33 @@ DEFAULT_MODELS = [
 COMPONENT_POOL = {"NAT": "AMR", "EUR": "EUR", "AFR": "AFR",
                   "MEN": "MEN", "EAS": "EAS", "SAS": "SAS", "OCE": "OCE"}
 
-# Rough genetic length of the autosomes, Morgans. Used only to turn
-# generations into an expected segment count, which is what decides whether a
-# given reuse level matters.
-GENOME_MORGANS = 35.0
+def expected_kinship(comps, props, n_donors):
+    """Mean kinship of two simulated individuals of one model that are not
+    in the same simu-mix run (any two gen-0 controls): at a marker, two
+    haplotypes copy the same donor haplotype with probability
+    sum_P p_P^2 / (2 x donors_P). Pairs inside one run share nothing."""
+    return sum(p * p / (2.0 * n_donors[c])
+               for c, p in zip(comps, props) if p > 0 and n_donors.get(c))
 
 
-def severity(reuse, gen):
-    """How much a reuse level matters AT THIS NUMBER OF GENERATIONS."""
-    if reuse <= 1.0:
-        return "ok", "every individual can have its own donor haplotype"
-    if gen == 0:
-        # A zero-generation control is one donor's haplotypes with no
-        # recombination at all, so there is no mosaic to fragment and the
-        # segment argument below does not apply. Reuse above 1 means two
-        # controls share a WHOLE haplotype -- kinship ~0.25, the
-        # half-sib/avuncular range, not subtle at all.
-        #
-        # The fix is not fewer donors' worth of controls: each control is
-        # DIPLOID, so n donors give C(n,2) distinct haplotype PAIRS (46 donors
-        # -> 1,035). Drawing each control's two haplotypes from two different
-        # donors, and no pair twice, removes the problem without reducing n.
-        return "HIGH", (f"gen 0: controls would share whole haplotypes "
-                        f"(kinship ~0.25). Draw each control's 2 haplotypes "
-                        f"from 2 DIFFERENT donors, no pair reused")
-    # Expected independent segments per simulated haplotype.
-    seg = max(1.0, gen * GENOME_MORGANS)
-    # Reuse is tolerable when the mosaic is fine enough that two individuals
-    # sharing a donor share only short, scattered pieces of it.
-    ratio = seg / reuse
-    if ratio >= 100:
-        return "ok", f"~{seg:.0f} segments/hap fragments the reuse"
-    if ratio >= 30:
-        return "watch", f"~{seg:.0f} segments/hap; check sim-kinship"
-    return "HIGH", (f"~{seg:.0f} segments/hap against {reuse:.1f}x reuse -- "
-                    f"expect cryptic relatedness")
+def kinship_tag(phi, gen):
+    """Calibrated on the 20 Nov Monte Carlo (one full run of each model at
+    the 18 Nov donor counts; pairs at >= 0.0442, KING's 3rd degree):
+      MENEUR gen 2  expected 0.0071   0 of 19,900   (closest 0.042)
+      EASEUR gen 2  expected 0.0050   0 of 19,900   (closest 0.029)
+      EUR1   gen 0  expected 0.0156  59 of 1,770    (closest 0.072)
+      MEN1   gen 0  expected 0.0125  33 of 1,770
+      NAT1 / AFR1 / EAS1  0.0066 / 0.0061 / 0.0044   2 / 4 / 3 of 1,770
+    No pair at 2nd degree (0.0884) anywhere. Gen-0 controls take whole
+    chromosomes, so their tail is wider at the same mean."""
+    if phi >= 0.0221:
+        return "HIGH", "the average pair is 4th-degree; expect 2nd-degree pairs"
+    if gen == 0 and phi >= 0.004:
+        return "watch", ("whole chromosomes are shared, so some pairs reach "
+                         "3rd degree; none closer")
+    if phi >= 0.008:
+        return "watch", "some pairs may reach 3rd degree; none closer"
+    return "ok", "no pair expected at 3rd degree"
 
 
 def read_tsv(path):
@@ -247,10 +244,12 @@ def main():
     w("        = (n_individuals x 2 x proportion) / (2 x n_donors)")
     w("")
     w(f"  {'model':<8}{'gen':>5}{'n':>6}  {'component':<10}{'prop':>6}"
-      f"{'donors':>8}{'reuse':>8}  severity")
+      f"{'donors':>8}{'reuse':>8}")
     tot = 0
+    kin_rows = []
     for name, comps, props, gen, n, _prio in models:
         tot += n
+        nd_of = {}
         for comp, p in zip(comps, props):
             pool = COMPONENT_POOL.get(comp, comp)
             nd = len(donors.get(pool, []))
@@ -258,34 +257,55 @@ def main():
                 w(f"  {name:<8}{gen:>5}{n:>6}  {comp:<10}{p:>6.2f}"
                   f"{'--':>8}{'--':>8}  no donor list for {pool}")
                 continue
+            nd_of[comp] = nd
             reuse = (n * 2 * p) / (2 * nd)
-            tag, why = severity(reuse, gen)
             w(f"  {name:<8}{gen:>5}{n:>6}  {comp:<10}{p:>6.2f}"
-              f"{nd:>8}{reuse:>7.1f}x  {tag} ({why})")
+              f"{nd:>8}{reuse:>7.1f}x")
+        if len(nd_of) == len(comps):
+            kin_rows.append((name, gen, n, expected_kinship(comps, props, nd_of)))
     w("")
     w(f"  total simulated individuals: {tot}")
     w("")
-    w("  Severity accounts for GENERATIONS, not reuse alone. A haplotype after")
-    w("  g generations carries roughly g x 35 independent segments, so the")
-    w("  same reuse that produces cryptic relatives at gen 2 fragments into")
-    w("  near-independence at gen 16. A high reuse on a low-generation model")
-    w("  is the one to act on; the simulated-individual kinship check is what")
-    w("  confirms it.")
+    w("  Reuse alone does not say how related the simulated individuals")
+    w("  are. Expected kinship does, given how 6b draws (see the header):")
+    w("  two individuals from different simu-mix runs (any two gen-0")
+    w("  controls) copy the same donor haplotype at a marker with")
+    w("  probability sum_P p_P^2 / (2 x donors_P); inside one run, never.")
+    w("")
+    w(f"  {'model':<8}{'gen':>5}{'n':>6}{'kinship':>10}  tag")
+    for name, gen, n, phi in kin_rows:
+        tag, why = kinship_tag(phi, gen)
+        w(f"  {name:<8}{gen:>5}{n:>6}{phi:>10.4f}  {tag} ({why})")
+    w("")
+    w("  KING bins: 0.0442 3rd degree, 0.0884 2nd, 0.177 1st. Tags are")
+    w("  calibrated on a Monte Carlo of mixer + simu-mix (20 Nov); 6e")
+    w("  measures the realised distribution once the cohort is built.")
     w("")
 
     # ---- 4. what was removed --------------------------------------------
     w("-" * 78)
     w("4. REMOVED, AND WHY")
     w("-" * 78)
+    # These three live in the repo's reference_ids/ whatever --refs says: a
+    # scratch run (REFS=$S) put the split lists elsewhere, and the report then
+    # printed "step not run" for steps that had run.
+    repo_refs = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "reference_ids")
+    def fixed_list(name):
+        for d in (args.refs, repo_refs):
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                return p
+        return os.path.join(args.refs, name)
     for label, path, note in [
         ("duplicates dropped (KING)",
-         os.path.join(args.refs, "panel_duplicate_drop_ids.txt"),
+         fixed_list("panel_duplicate_drop_ids.txt"),
          "same person twice under two ids; one copy kept"),
         ("excluded by name",
-         os.path.join(args.refs, "panel_exclude_ids.txt"),
+         fixed_list("panel_exclude_ids.txt"),
          "e.g. CHMI_CHMI3_WGS2, a hydatidiform-mole cell line"),
         ("1000G-via-SGDP (donor-ineligible)",
-         os.path.join(args.refs, "sgdp_server_panel_ids.txt"),
+         fixed_list("sgdp_server_panel_ids.txt"),
          "inside TOPMed/Michigan panels under an NA/HG id"),
     ]:
         ids = read_list(path)
